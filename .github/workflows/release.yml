@@ -6,23 +6,52 @@ on:
       - "v[0-9]+.[0-9]+.[0-9]+"
       - "v[0-9]+.[0-9]+.[0-9]+-*"
 
-permissions:
-  contents: write   # create GitHub Release
-  id-token: write   # npm provenance attestation
+# Default to no permissions; elevate per-job (least privilege).
+permissions: {}
+
+# Never run two publishes for the same ref concurrently.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   release:
     name: Publish to npm + create GitHub Release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub Release
+      id-token: write # npm provenance attestation
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Set up Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: "22.x"
           registry-url: "https://registry.npmjs.org"
           cache: npm
+
+      # Hard gate: the git tag must match the version we are about to publish.
+      # npm publishes package.json's version regardless of the tag, so without
+      # this a v0.2.0 tag on a 0.1.0 package.json would ship 0.1.0 silently.
+      - name: Verify tag matches package.json version
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "$PKG_VERSION" != "$TAG_VERSION" ]]; then
+            echo "::error::git tag $GITHUB_REF_NAME (=$TAG_VERSION) does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+
+      # Guard against a contributor's global/scoped registry leaking non-npmjs
+      # "resolved" URLs into the lockfile (which break `npm ci` in CI with E401).
+      - name: Verify lockfile uses only the public npm registry
+        run: |
+          if grep -E '"resolved":[[:space:]]*"https?://' package-lock.json | grep -vq 'https://registry.npmjs.org/'; then
+            echo "::error::package-lock.json contains non-npmjs resolved URLs:"
+            grep -nE '"resolved":[[:space:]]*"https?://' package-lock.json | grep -v 'https://registry.npmjs.org/' || true
+            exit 1
+          fi
 
       - name: Install dependencies
         run: npm ci
@@ -30,11 +59,10 @@ jobs:
       - name: Typecheck, test, and build
         run: npm run prepublishOnly
 
-      # Run the full integration test (no CURSOR_API_KEY → fallback path).
-      # Skip with SKIP_INTEGRATION=true for patch releases that don't touch
-      # the plugin/provider entry-points.
+      # Full integration test: install the opencode CLI, load the plugin, and
+      # assert it lists the Cursor provider (fallback path without a key; live
+      # discovery additionally exercised when CURSOR_API_KEY is set).
       - name: Integration smoke test
-        if: env.SKIP_INTEGRATION != 'true'
         run: bash scripts/integration-test.sh
         env:
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
@@ -55,13 +83,22 @@ jobs:
             echo "PRERELEASE=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Idempotent: re-running the job after a partial failure won't hard-fail
+      # on npm's 409 for an already-published version.
       - name: Publish to npm
-        run: npm publish --provenance --access public --tag "${{ steps.version.outputs.NPM_TAG }}"
+        run: |
+          PKG="$(node -p "require('./package.json').name")"
+          VER="$(node -p "require('./package.json').version")"
+          if npm view "$PKG@$VER" version >/dev/null 2>&1; then
+            echo "::notice::$PKG@$VER is already published; skipping publish."
+          else
+            npm publish --provenance --access public --tag "${{ steps.version.outputs.NPM_TAG }}"
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           name: "v${{ steps.version.outputs.VERSION }}"
           generate_release_notes: true
