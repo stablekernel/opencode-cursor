@@ -1,0 +1,68 @@
+{
+  "name": "@stablekernel/opencode-cursor",
+  "version": "0.1.0",
+  "description": "opencode provider plugin backed by the official Cursor SDK (@cursor/sdk) — adds a Cursor provider and lists its models",
+  "type": "module",
+  "license": "MIT",
+  "author": "justin-carper (https://github.com/justin-carper)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/stablekernel/opencode-cursor.git"
+  },
+  "homepage": "https://github.com/stablekernel/opencode-cursor#readme",
+  "bugs": {
+    "url": "https://github.com/stablekernel/opencode-cursor/issues"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "cursor",
+    "cursor-sdk",
+    "ai-sdk",
+    "provider"
+  ],
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/provider/index.d.ts",
+      "import": "./dist/provider/index.js"
+    },
+    "./plugin": {
+      "types": "./dist/plugin/index.d.ts",
+      "import": "./dist/plugin/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "@cursor/sdk": "^1.0.18",
+    "@opencode-ai/plugin": "^1.16.2"
+  },
+  "peerDependencies": {
+    "@ai-sdk/provider": "^3.0.0"
+  },
+  "devDependencies": {
+    "@ai-sdk/provider": "^3.0.10",
+    "@opencode-ai/sdk": "^1.16.2",
+    "@types/node": "^25.9.2",
+    "tsup": "^8.5.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
+  }
+}

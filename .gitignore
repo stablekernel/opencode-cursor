@@ -1,0 +1,16 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+coverage/
+
+# Packaging artifacts
+*.tgz
+
+# Local editor / agent tooling
+.serena/
+.opencode/
+.claude/
+
+# Local-only dev config (never commit)
+opencode.json
