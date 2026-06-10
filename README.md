@@ -156,10 +156,19 @@ opencode delivers per-request, provider-specific settings to the model under
 - `params` → `{ <paramId>: value }` mapped to Cursor `ModelSelection.params`
 - `thinking` → convenience, mapped to the `thinking` param
 
-These are most naturally driven by opencode's **model variant picker**: the plugin auto-generates a
-`plan` variant plus one variant per reasoning/thinking value the model advertises
-(`Cursor.models.list()` parameters). Selecting a variant sends its settings through
-`providerOptions.cursor`. You can also set them statically per model:
+These are most naturally driven by opencode's **model variant picker**: the plugin auto-generates
+one variant per reasoning/effort level a model advertises (`Cursor.models.list()` parameters). A
+boolean parameter (e.g. `thinking: ["false","true"]`) collapses to a single variant named after the
+parameter that switches it on (the off state is the default — no variant selected); enum parameters
+(e.g. `effort`, `reasoning`) produce one variant per value. Selecting a variant sends its settings
+through `providerOptions.cursor`.
+
+> **Plan mode is not a variant.** opencode's **plan agent** (toggled with `Tab`) is mapped to
+> Cursor's plan mode automatically by the plugin's `chat.params` hook, so switching opencode into
+> plan mode puts the Cursor agent into plan mode too. An explicit `mode` from a selected variant or
+> model option still wins.
+
+You can also set controls statically per model:
 
 ```json
 { "provider": { "cursor": { "models": {
@@ -336,6 +345,17 @@ Enable blocks mode in your opencode config:
   with `OPENCODE_CURSOR_SIDECAR=1`.
 - **"Running under Bun without a usable Node sidecar" warning.** Install Node.js 22+, or set
   `OPENCODE_CURSOR_SIDECAR=0` to accept in-process behavior and silence the warning.
+- **"Could not locate the bindings file" / `node_sqlite3.node` not found.** `@cursor/sdk` depends on
+  the native `sqlite3` addon, and opencode installs plugins with Bun, which skips sqlite3's install
+  script — so the prebuilt binary may be missing. The plugin detects this and self-heals on first SDK
+  load by running sqlite3's own `prebuild-install -r napi` under your system Node (requires Node on
+  `PATH`). If it can't (no Node, offline), it logs a one-line manual fix: `cd` into the printed
+  sqlite3 directory and run `npx prebuild-install -r napi` (or `npm rebuild sqlite3`). Set
+  `OPENCODE_CURSOR_DEBUG=1` to see the repair output.
+- **Plugin looks enabled but no `cursor` provider/models appear.** opencode caches a plugin by its
+  install spec under `~/.cache/opencode/packages/`; a stale cache from an older version can persist.
+  Pin an exact version (`@stablekernel/opencode-cursor@<version>`) or delete the cached dir and
+  restart so opencode reinstalls.
 - **Only the four fallback models appear in the picker.** The live catalog loads after the first
   authenticated use — restart opencode once after logging in, or run `cursor_refresh_models` to
   force a refresh.
