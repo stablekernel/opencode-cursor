@@ -4,47 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-- **Native diff viewer for Cursor edits (blocks mode).** A Cursor `edit` tool
-  call is now surfaced under opencode's registered `edit` tool with its real
-  unified diff in `metadata.diff`, so opencode renders its built-in diff viewer
-  instead of a generic block. The required `oldString`/`newString` (which Cursor
-  does not expose) are reconstructed from the diff; the call is provider-executed
-  so they are never applied to disk. Any edit without a usable diff (errors,
-  unexpected shapes, or a host without a registered `edit` tool) falls back to a
-  safe `cursor_edit` block. Other Cursor tools (shell/read/mcp/…) remain
-  prefixed `cursor_*` blocks.
-- **`toolDisplay` now defaults to `"blocks"`.** Cursor's internal tool activity
-  renders as structured, provider-executed tool blocks out of the box (was
-  `"reasoning"`). `"reasoning"` remains available as the fallback for
-  older/non-V3 opencode hosts via `provider.cursor.options.toolDisplay:
-  "reasoning"`; `"blocks"` requires a V3-native host (opencode 1.16+).
-- `0.1.0-rc.2` — pre-release on the npm `next` dist-tag. Fixes found while
-  validating rc.1 against opencode 1.16.2:
-  - **Plugin now loads when installed by package name.** Added the
-    `exports["./server"]` entry opencode uses to resolve a plugin's entrypoint;
-    rc.1 exposed the plugin only at `./plugin`, which opencode does not read, so
-    the package installed but registered no hooks (no provider, no models).
-  - **Self-heal the `sqlite3` native binding.** opencode installs plugins with
-    Bun, which skips sqlite3's install script, so `@cursor/sdk`'s
-    `require("sqlite3")` failed with "Could not locate the bindings file". The
-    plugin now runs sqlite3's `prebuild-install -r napi` under the system Node
-    before loading the SDK (once per process, never throws).
-  - **Stream ordering.** The final answer no longer renders above the reasoning
-    blocks that preceded it — the open text part is closed when reasoning
-    resumes and each resume opens a fresh text part.
-  - **Model variants reach the picker.** Variants are seeded on the
-    config-injected models (opencode discards the `provider.models()` hook for
-    providers outside its models.dev catalog). Variant naming reworked against
-    the real catalog: boolean params (e.g. `thinking`) collapse to one
-    param-named variant instead of literal `true`/`false`; enum params key by
-    value. The synthetic `plan` variant was removed.
-  - **Plan agent → Cursor plan mode.** opencode's plan agent (`Tab`) is mapped
-    to Cursor's plan mode via the `chat.params` hook; an explicit variant/option
-    mode still wins.
-- `0.1.0-rc.1` — first pre-release of the 0.1.0 surface below, published to the
-  npm `next` dist-tag for validation ahead of the stable `0.1.0`.
+## [0.1.0] — 2026-06-10
 
-## [0.1.0] — unreleased
+> Pre-releases: `0.1.0-rc.1` and `0.1.0-rc.2` were published to the npm `next`
+> dist-tag for validation ahead of this stable release.
 
 Initial public release. A complete opencode integration for Cursor built on the
 official `@cursor/sdk`: a streaming chat provider, an auth/config/model plugin,
@@ -65,11 +28,16 @@ and a permission-gated delegation tool surface.
   session via `Agent.resume()` across turns, with automatic fallback to a fresh
   agent. A run wedged by a crashed/duplicate process is recovered by retrying
   the send once with the SDK's `local.force` escape hatch.
+- **Native diff viewer for Cursor edits (blocks mode).** A Cursor `edit` tool
+  call is now surfaced under opencode's registered `edit` tool with its real
+  unified diff in `metadata.diff`, so opencode renders its built-in diff viewer
+  instead of a generic block. The required `oldString`/`newString` (which Cursor
+  does not expose) are reconstructed from the diff; the call is provider-executed
+  so they are never applied to disk. Any edit without a usable diff (errors,
+  unexpected shapes, or a host without a registered `edit` tool) falls back to a
+  safe `cursor_edit` block. Other Cursor tools (shell/read/mcp/…) remain
+  prefixed `cursor_*` blocks.
 - **`toolDisplay` provider option** (`"blocks"` default | `"reasoning"`):
-  - `"reasoning"` renders Cursor's internal tool activity (including the real
-    MCP tool name) as concise `[tool] …` reasoning lines. Always safe — tool
-    calls never cross opencode's tool-execution boundary; the fallback for
-    older/non-V3 hosts.
   - `"blocks"` (default) emits structured, provider-executed **dynamic** `tool-call` /
     `tool-result` parts so opencode renders native tool blocks. Names are
     `cursor_`-prefixed and sanitized (`shell` → `cursor_shell`,
@@ -81,6 +49,10 @@ and a permission-gated delegation tool surface.
     errored/cancelled mid-tool) is closed with a synthetic error result so the
     block never dangles as "Tool execution aborted", and a run that ends with
     status `error` surfaces the failure instead of finishing silently.
+  - `"reasoning"` renders Cursor's internal tool activity (including the real
+    MCP tool name) as concise `[tool] …` reasoning lines. Always safe — tool
+    calls never cross opencode's tool-execution boundary; the fallback for
+    older/non-V3 hosts (`provider.cursor.options.toolDisplay: "reasoning"`).
 
 ### Node sidecar (Bun compatibility)
 
