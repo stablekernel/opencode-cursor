@@ -12,7 +12,8 @@ It uses your Cursor API key to:
 - register a `cursor` provider in opencode,
 - **list the models available to your account** (live, via `Cursor.models.list()`), and
 - run chats through Cursor's local agent runtime (`Agent.create` / `agent.send`), streaming
-  text and reasoning back into opencode (Cursor's own tool activity is surfaced as reasoning).
+  text and reasoning back into opencode (Cursor's own tool activity is surfaced as structured tool
+  blocks by default; see [Tool display](#tool-display)).
 
 This plugin registers Cursor as a **native opencode provider**: its models appear in
 `opencode models` and the model picker, and you talk to a Cursor model *directly* — with live model
@@ -135,7 +136,7 @@ This plugin also registers two **delegation tools** that complement the provider
 | `session` | `false` | Reuse one Cursor agent per opencode session (resume across turns; see below) |
 | `forwardMcp` | `true` | Forward opencode's configured MCP servers to the Cursor agent |
 | `mcpServers` | — | Extra MCP servers (Cursor `McpServerConfig` shape); merged with forwarded ones |
-| `toolDisplay` | `"reasoning"` | How Cursor's internal tool activity is shown: `"reasoning"` (compact lines, works everywhere) or `"blocks"` (structured provider-executed tool blocks; opt-in, see [Tool display](#tool-display)) |
+| `toolDisplay` | `"blocks"` | How Cursor's internal tool activity is shown: `"blocks"` (structured provider-executed tool blocks; default, requires opencode 1.16+) or `"reasoning"` (compact lines, the fallback for older/non-V3 hosts). See [Tool display](#tool-display) |
 
 ### Session reuse (`session`)
 
@@ -311,31 +312,32 @@ no sidecar is spawned.
 Cursor runs its own agent loop and executes its own tools. The `toolDisplay` option controls how
 that activity appears in opencode:
 
-- **`"reasoning"` (default)** — each tool call is shown as a compact reasoning line
-  (`[tool] write {"path":…}`; failures as `[tool] x failed`). Robust on every host: no tool-call
-  parts cross into opencode, so there's no dependency on how the host treats provider-executed
-  tools.
-- **`"blocks"` (opt-in)** — tool activity is emitted as structured, **provider-executed**
+- **`"blocks"` (default)** — tool activity is emitted as structured, **provider-executed**
   `tool-call`/`tool-result` parts so opencode renders proper, collapsible tool blocks with inputs
   and outputs. opencode skips execution for provider-executed calls (they're display-only), so
-  Cursor's tools (`shell`, `mcp`, …) don't trigger an "unavailable tool" error. This requires a
+  Cursor's tools (`shell`, `mcp`, …) don't trigger an "unavailable tool" error. Requires a
   V3-native opencode host (1.16+).
+- **`"reasoning"` (fallback)** — each tool call is shown as a compact reasoning line
+  (`[tool] write {"path":…}`; failures as `[tool] x failed`). Robust on every host: no tool-call
+  parts cross into opencode, so there's no dependency on how the host treats provider-executed
+  tools. Use this on older/non-V3 opencode hosts.
 
-Enable blocks mode in your opencode config:
+The default needs no configuration. To force the reasoning fallback (e.g. on a pre-1.16 host):
 
 ```jsonc
 {
   "provider": {
     "cursor": {
-      "options": { "toolDisplay": "blocks" }
+      "options": { "toolDisplay": "reasoning" }
     }
   }
 }
 ```
 
-> Why opt-in: `"blocks"` depends on V3-native, provider-executed dynamic tool parts and has been
-> verified against opencode 1.16+. `"reasoning"` requires nothing from the host and remains the
-> always-safe default. If `"blocks"` renders cleanly for you, it's the nicer experience.
+> Why blocks by default: structured tool blocks are the nicer experience and have been verified
+> against opencode 1.16+. `"blocks"` depends on V3-native, provider-executed dynamic tool parts; if
+> your host predates that (or renders them poorly), set `"toolDisplay": "reasoning"` — it requires
+> nothing from the host and works everywhere.
 
 ## Troubleshooting
 
