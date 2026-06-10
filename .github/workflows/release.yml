@@ -15,7 +15,7 @@ jobs:
     name: Publish to npm + create GitHub Release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Set up Node
         uses: actions/setup-node@v5
