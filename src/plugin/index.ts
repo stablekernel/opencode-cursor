@@ -93,9 +93,17 @@ export const CursorPlugin: Plugin = async (input) => {
     // Bridge opencode's session id to the provider: it lands in
     // providerOptions.cursor.sessionID, which the provider reads to pool/resume a
     // Cursor agent per session (when the `session` option is enabled).
+    //
+    // Also map opencode's plan AGENT to Cursor's plan mode. This hook fires
+    // after opencode merges the selected variant into `output.options`, so an
+    // explicit mode from the `plan` variant (or model options) wins — the
+    // agent-based default only applies when no mode was set.
     "chat.params": async (input, output) => {
       if (input.model?.providerID !== PROVIDER_ID) return;
       output.options = { ...(output.options ?? {}), sessionID: input.sessionID };
+      if (input.agent === "plan" && output.options["mode"] === undefined) {
+        output.options["mode"] = "plan";
+      }
     },
 
     tool: {
