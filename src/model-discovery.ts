@@ -3,6 +3,7 @@ import { fingerprintApiKey, resolveCursorApiKey } from "./api-key.js";
 import { readLatestModelCache, readModelCache, writeModelCache } from "./model-cache.js";
 import { FALLBACK_MODELS } from "./fallback-models.js";
 import { loadCursorSdk } from "./cursor-runtime.js";
+import { buildModelVariants, type CursorVariant } from "./model-variants.js";
 
 export type ModelSource = "live" | "cache" | "fallback";
 
@@ -90,6 +91,13 @@ export interface OpencodeModelConfigEntry {
   reasoning: boolean;
   temperature: boolean;
   tool_call: boolean;
+  /**
+   * opencode model variants (thinking levels + plan mode). They MUST be seeded
+   * here: opencode discards the plugin `provider.models()` hook for providers
+   * absent from its models.dev catalog, so this config map is the only channel
+   * through which cursor model variants reach the picker.
+   */
+  variants: Record<string, CursorVariant>;
 }
 
 /**
@@ -107,6 +115,7 @@ export function toOpencodeModels(items: ModelListItem[]): Record<string, Opencod
       reasoning: modelSupportsReasoning(item),
       temperature: false,
       tool_call: true,
+      variants: buildModelVariants(item),
     };
   }
   return out;

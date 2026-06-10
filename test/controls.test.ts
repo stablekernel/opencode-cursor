@@ -41,38 +41,4 @@ describe("resolveControls", () => {
   });
 });
 
-describe("buildModelVariants", () => {
-  it("creates thinking variants from a reasoning parameter plus a plan variant", () => {
-    const item: ModelListItem = {
-      id: "composer-2.5",
-      displayName: "Composer 2.5",
-      parameters: [
-        { id: "thinking", values: [{ value: "off" }, { value: "high" }] },
-      ],
-    };
-    expect(buildModelVariants(item)).toEqual({
-      off: { params: { thinking: "off" } },
-      high: { params: { thinking: "high" } },
-      plan: { mode: "plan" },
-    });
-  });
-
-  it("prefixes non-thinking reasoning params and ignores unrelated params", () => {
-    const item: ModelListItem = {
-      id: "m",
-      displayName: "M",
-      parameters: [
-        { id: "reasoningEffort", values: [{ value: "low" }] },
-        { id: "verbosity", values: [{ value: "high" }] },
-      ],
-    };
-    expect(buildModelVariants(item)).toEqual({
-      "reasoningEffort-low": { params: { reasoningEffort: "low" } },
-      plan: { mode: "plan" },
-    });
-  });
-
-  it("offers at least a plan variant when there are no reasoning params", () => {
-    expect(buildModelVariants({ id: "m", displayName: "M" })).toEqual({ plan: { mode: "plan" } });
-  });
-});
+// buildModelVariants behavior is covered in test/model-variants.test.ts.
