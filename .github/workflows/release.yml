@@ -39,18 +39,31 @@ jobs:
         env:
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
 
+      # A tag with a pre-release suffix (e.g. v0.1.0-rc.1) publishes to the
+      # `next` dist-tag and is flagged as a GitHub pre-release, so `npm install`
+      # and the repo's "Latest" release keep pointing at the last stable.
+      - name: Classify release from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+          if [[ "$VERSION" == *-* ]]; then
+            echo "NPM_TAG=next" >> "$GITHUB_OUTPUT"
+            echo "PRERELEASE=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "NPM_TAG=latest" >> "$GITHUB_OUTPUT"
+            echo "PRERELEASE=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish to npm
-        run: npm publish --provenance --access public
+        run: npm publish --provenance --access public --tag "${{ steps.version.outputs.NPM_TAG }}"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           name: "v${{ steps.version.outputs.VERSION }}"
           generate_release_notes: true
-          make_latest: true
+          prerelease: ${{ steps.version.outputs.PRERELEASE }}
+          make_latest: ${{ steps.version.outputs.PRERELEASE == 'false' }}

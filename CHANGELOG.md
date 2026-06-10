@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+- `0.1.0-rc.1` — first pre-release of the 0.1.0 surface below, published to the
+  npm `next` dist-tag for validation ahead of the stable `0.1.0`.
+
 ## [0.1.0] — 2026-06-10
 
 Initial public release. A complete opencode integration for Cursor built on the
