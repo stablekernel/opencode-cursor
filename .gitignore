@@ -14,3 +14,6 @@ coverage/
 
 # Local-only dev config (never commit)
 opencode.json
+
+# Git worktrees
+.worktrees/
