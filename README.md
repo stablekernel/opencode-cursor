@@ -63,6 +63,25 @@ login. The `provider.models()` hook refreshes the catalog live once you're authe
 
 ## Install
 
+### Quick install (one line)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/stablekernel/opencode-cursor/main/install.sh | bash
+```
+
+The script registers the plugin in your **global** `opencode.json`
+(`~/.config/opencode/opencode.json`), checks for Node.js 22+ on your `PATH`, and offers to set
+`CURSOR_API_KEY`. Flags:
+
+- `--project` — write `./opencode.json` in the current directory instead of the global config.
+- `--yes` / `-y` — non-interactive; skip all prompts.
+
+It backs up an existing config before editing, is safe to re-run (idempotent), and uses `jq` when
+available (falling back to Node). You can review it first:
+[`install.sh`](./install.sh).
+
+### Manual install
+
 ```bash
 npm install @stablekernel/opencode-cursor
 ```
