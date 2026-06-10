@@ -37,6 +37,10 @@
       "types": "./dist/provider/index.d.ts",
       "import": "./dist/provider/index.js"
     },
+    "./server": {
+      "types": "./dist/plugin/index.d.ts",
+      "import": "./dist/plugin/index.js"
+    },
     "./plugin": {
       "types": "./dist/plugin/index.d.ts",
       "import": "./dist/plugin/index.js"

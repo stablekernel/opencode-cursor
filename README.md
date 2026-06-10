@@ -52,7 +52,7 @@ opencode loads two things from this one package:
 
 | opencode concept | What it loads | Export |
 | --- | --- | --- |
-| Plugin (`plugin` config) | auth + provider registration + dynamic model listing + a refresh tool | `@stablekernel/opencode-cursor/plugin` |
+| Plugin (`plugin` config) | auth + provider registration + dynamic model listing + a refresh tool | `@stablekernel/opencode-cursor` (resolved via the package's `./server` export) |
 | Provider (`provider.cursor.npm`) | a Vercel AI SDK `LanguageModelV3` that drives a local Cursor agent | `@stablekernel/opencode-cursor` (`createCursor`) |
 
 The plugin's `config` hook registers `provider.cursor` (pointing `npm` at this package) and seeds
@@ -71,7 +71,7 @@ Add the plugin to your `opencode.json` (project or global):
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["@stablekernel/opencode-cursor/plugin"]
+  "plugin": ["@stablekernel/opencode-cursor"]
 }
 ```
 
