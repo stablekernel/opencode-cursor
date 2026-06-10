@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- `0.1.0-rc.2` — pre-release on the npm `next` dist-tag. Fixes found while
+  validating rc.1 against opencode 1.16.2:
+  - **Plugin now loads when installed by package name.** Added the
+    `exports["./server"]` entry opencode uses to resolve a plugin's entrypoint;
+    rc.1 exposed the plugin only at `./plugin`, which opencode does not read, so
+    the package installed but registered no hooks (no provider, no models).
+  - **Self-heal the `sqlite3` native binding.** opencode installs plugins with
+    Bun, which skips sqlite3's install script, so `@cursor/sdk`'s
+    `require("sqlite3")` failed with "Could not locate the bindings file". The
+    plugin now runs sqlite3's `prebuild-install -r napi` under the system Node
+    before loading the SDK (once per process, never throws).
+  - **Stream ordering.** The final answer no longer renders above the reasoning
+    blocks that preceded it — the open text part is closed when reasoning
+    resumes and each resume opens a fresh text part.
+  - **Model variants reach the picker.** Variants are seeded on the
+    config-injected models (opencode discards the `provider.models()` hook for
+    providers outside its models.dev catalog). Variant naming reworked against
+    the real catalog: boolean params (e.g. `thinking`) collapse to one
+    param-named variant instead of literal `true`/`false`; enum params key by
+    value. The synthetic `plan` variant was removed.
+  - **Plan agent → Cursor plan mode.** opencode's plan agent (`Tab`) is mapped
+    to Cursor's plan mode via the `chat.params` hook; an explicit variant/option
+    mode still wins.
 - `0.1.0-rc.1` — first pre-release of the 0.1.0 surface below, published to the
   npm `next` dist-tag for validation ahead of the stable `0.1.0`.
 
@@ -21,8 +44,9 @@ and a permission-gated delegation tool surface.
   tool activity, usage). Implements both `doStream()` and `doGenerate()`.
 - **Per-request controls** via `providerOptions.cursor` — `mode` (agent/plan),
   `params`, and `thinking` level; works with opencode's model variant picker.
-- **Model variants** auto-generated from `Cursor.models.list` parameters: a
-  `plan` variant plus one per reasoning level a model advertises.
+- **Model variants** auto-generated from `Cursor.models.list` parameters: one
+  per reasoning/effort level a model advertises (boolean params collapse to a
+  single on-variant). opencode's plan agent maps to Cursor plan mode.
 - **Session reuse** (`session: true`) — keeps one Cursor agent per opencode
   session via `Agent.resume()` across turns, with automatic fallback to a fresh
   agent. A run wedged by a crashed/duplicate process is recovered by retrying
@@ -56,7 +80,8 @@ and a permission-gated delegation tool surface.
 
 ### Plugin
 
-- **opencode plugin** (`@stablekernel/opencode-cursor/plugin`): auth hook (API-key login;
+- **opencode plugin** (`@stablekernel/opencode-cursor`, resolved via the package's
+  `./server` export): auth hook (API-key login;
   the key is validated on first use rather than at login), config hook
   (auto-injects `provider.cursor`),
   `provider.models()` (live catalog via `Cursor.models.list`), and the
