@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- **Native diff viewer for Cursor edits (blocks mode).** A Cursor `edit` tool
+  call is now surfaced under opencode's registered `edit` tool with its real
+  unified diff in `metadata.diff`, so opencode renders its built-in diff viewer
+  instead of a generic block. The required `oldString`/`newString` (which Cursor
+  does not expose) are reconstructed from the diff; the call is provider-executed
+  so they are never applied to disk. Any edit without a usable diff (errors,
+  unexpected shapes, or a host without a registered `edit` tool) falls back to a
+  safe `cursor_edit` block. Other Cursor tools (shell/read/mcp/…) remain
+  prefixed `cursor_*` blocks.
+- **`toolDisplay` now defaults to `"blocks"`.** Cursor's internal tool activity
+  renders as structured, provider-executed tool blocks out of the box (was
+  `"reasoning"`). `"reasoning"` remains available as the fallback for
+  older/non-V3 opencode hosts via `provider.cursor.options.toolDisplay:
+  "reasoning"`; `"blocks"` requires a V3-native host (opencode 1.16+).
 - `0.1.0-rc.2` — pre-release on the npm `next` dist-tag. Fixes found while
   validating rc.1 against opencode 1.16.2:
   - **Plugin now loads when installed by package name.** Added the
@@ -51,11 +65,12 @@ and a permission-gated delegation tool surface.
   session via `Agent.resume()` across turns, with automatic fallback to a fresh
   agent. A run wedged by a crashed/duplicate process is recovered by retrying
   the send once with the SDK's `local.force` escape hatch.
-- **`toolDisplay` provider option** (`"reasoning"` default | `"blocks"`):
+- **`toolDisplay` provider option** (`"blocks"` default | `"reasoning"`):
   - `"reasoning"` renders Cursor's internal tool activity (including the real
     MCP tool name) as concise `[tool] …` reasoning lines. Always safe — tool
-    calls never cross opencode's tool-execution boundary.
-  - `"blocks"` emits structured, provider-executed **dynamic** `tool-call` /
+    calls never cross opencode's tool-execution boundary; the fallback for
+    older/non-V3 hosts.
+  - `"blocks"` (default) emits structured, provider-executed **dynamic** `tool-call` /
     `tool-result` parts so opencode renders native tool blocks. Names are
     `cursor_`-prefixed and sanitized (`shell` → `cursor_shell`,
     `serena/find_symbol` → `cursor_serena_find_symbol`) so they can't collide
