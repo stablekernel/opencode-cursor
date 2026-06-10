@@ -52,14 +52,14 @@
   },
   "dependencies": {
     "@cursor/sdk": "^1.0.18",
-    "@opencode-ai/plugin": "^1.16.2"
+    "@opencode-ai/plugin": "^1.17.1"
   },
   "peerDependencies": {
     "@ai-sdk/provider": "^3.0.0"
   },
   "devDependencies": {
     "@ai-sdk/provider": "^3.0.10",
-    "@opencode-ai/sdk": "^1.16.2",
+    "@opencode-ai/sdk": "^1.17.1",
     "@types/node": "^25.9.2",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
