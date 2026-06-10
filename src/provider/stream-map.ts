@@ -181,6 +181,7 @@ export function cursorEventsToStream(
       controller.enqueue({ type: "stream-start", warnings: [] });
 
       let textId: string | undefined;
+      let textCount = 0;
       let reasoningId: string | undefined;
       let reasoningCount = 0;
       let usage: LanguageModelV3Usage | undefined;
@@ -200,15 +201,25 @@ export function cursorEventsToStream(
           reasoningId = undefined;
         }
       };
+      // Close the open text part when reasoning resumes: hosts position a part
+      // where it STARTED, so appending later text to an earlier part would
+      // render the final answer above the reasoning that preceded it.
+      const closeText = () => {
+        if (textId) {
+          controller.enqueue({ type: "text-end", id: textId });
+          textId = undefined;
+        }
+      };
       const ensureText = () => {
         closeReasoning();
         if (!textId) {
-          textId = "text-0";
+          textId = `text-${textCount++}`;
           controller.enqueue({ type: "text-start", id: textId });
         }
         return textId;
       };
       const ensureReasoning = () => {
+        closeText();
         if (!reasoningId) {
           reasoningId = `reasoning-${reasoningCount++}`;
           controller.enqueue({ type: "reasoning-start", id: reasoningId });
@@ -260,14 +271,14 @@ export function cursorEventsToStream(
 
         closeDanglingToolCalls();
         closeReasoning();
-        if (textId) controller.enqueue({ type: "text-end", id: textId });
+        closeText();
         controller.enqueue({ type: "finish", usage: usage ?? EMPTY_USAGE, finishReason: FINISH_STOP });
         controller.close();
       } catch (err) {
         controller.enqueue({ type: "error", error: err });
         closeDanglingToolCalls();
         closeReasoning();
-        if (textId) controller.enqueue({ type: "text-end", id: textId });
+        closeText();
         controller.enqueue({ type: "finish", usage: usage ?? EMPTY_USAGE, finishReason: FINISH_ERROR });
         controller.close();
       }

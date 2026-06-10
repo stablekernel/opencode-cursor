@@ -78,6 +78,45 @@ describe("cursorEventsToStream", () => {
     });
   });
 
+  it("closes the open text part when reasoning resumes so parts render in true order", async () => {
+    // Interleaved turn: intro text → tool/reasoning activity → final text. The
+    // final text must land in a NEW part (text-1) that starts after the
+    // reasoning block — appending it to text-0 makes the final answer render
+    // ABOVE the thinking blocks in opencode's UI.
+    const events: CursorEvent[] = [
+      { type: "text-delta", text: "intro" },
+      { type: "reasoning-delta", text: "thinking" },
+      { type: "text-delta", text: "final" },
+      { type: "finish" },
+    ];
+    const parts = await collect(cursorEventsToStream(gen(events)));
+    expect(types(parts)).toEqual([
+      "stream-start",
+      "text-start",
+      "text-delta",
+      "text-end", // closed before reasoning starts
+      "reasoning-start",
+      "reasoning-delta",
+      "reasoning-end",
+      "text-start", // fresh part for the final answer
+      "text-delta",
+      "text-end",
+      "finish",
+    ]);
+
+    const textStartIds = parts
+      .filter((p): p is Extract<LanguageModelV3StreamPart, { type: "text-start" }> => p.type === "text-start")
+      .map((p) => p.id);
+    expect(new Set(textStartIds).size).toBe(2);
+
+    // Each delta belongs to the part that was open at the time.
+    const deltas = parts.filter(
+      (p): p is Extract<LanguageModelV3StreamPart, { type: "text-delta" }> => p.type === "text-delta",
+    );
+    expect(deltas[0]!.id).toBe(textStartIds[0]);
+    expect(deltas[1]!.id).toBe(textStartIds[1]);
+  });
+
   it("renders Cursor's own tool activity as reasoning, not tool-call parts", async () => {
     const events: CursorEvent[] = [
       { type: "tool-call", id: "c1", name: "write", input: { path: "a.txt" } },

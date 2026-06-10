@@ -49,6 +49,19 @@ describe("toOpencodeModels", () => {
     const map = toOpencodeModels([{ id: "x", displayName: "" }]);
     expect(map["x"]!.name).toBe("x");
   });
+
+  it("seeds variants so opencode's picker exposes thinking levels and plan mode", () => {
+    // opencode discards the provider.models() hook for providers outside the
+    // models.dev catalog, so the config-seeded models map is the ONLY place
+    // variants can come from — they must be present here.
+    const map = toOpencodeModels(items);
+    expect(map["composer-2.5"]!.variants).toEqual({
+      off: { params: { thinking: "off" } },
+      on: { params: { thinking: "on" } },
+    });
+    // No reasoning params → no variants (plan is an opencode agent, not a variant).
+    expect(map["plain"]!.variants).toEqual({});
+  });
 });
 
 describe("discoverModels without a key", () => {

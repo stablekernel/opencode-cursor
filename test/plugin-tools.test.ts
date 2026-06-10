@@ -102,3 +102,38 @@ describe("CursorPlugin tool hook", () => {
     expect(runCloudAgent.mock.calls[0]![0].apiKey).toBe("env-key");
   });
 });
+
+describe("CursorPlugin chat.params hook", () => {
+  const model = { providerID: "cursor", modelID: "composer-2.5" } as never;
+
+  async function runHook(agent: string, options?: Record<string, unknown>, m: unknown = model) {
+    const hooks = await plugin({ directory: "/work" } as never);
+    const output = { options: { ...(options ?? {}) } } as never;
+    await hooks["chat.params"]!(
+      { sessionID: "s1", agent, model: m, provider: {}, message: {} } as never,
+      output,
+    );
+    return (output as { options: Record<string, unknown> }).options;
+  }
+
+  it("maps opencode's plan agent to Cursor plan mode", async () => {
+    const options = await runHook("plan");
+    expect(options["mode"]).toBe("plan");
+    expect(options["sessionID"]).toBe("s1");
+  });
+
+  it("does not force a mode for non-plan agents", async () => {
+    const options = await runHook("build");
+    expect(options["mode"]).toBeUndefined();
+  });
+
+  it("never clobbers a mode already set by a selected variant", async () => {
+    const options = await runHook("plan", { mode: "agent" });
+    expect(options["mode"]).toBe("agent");
+  });
+
+  it("leaves other providers' params untouched", async () => {
+    const options = await runHook("plan", {}, { providerID: "anthropic", modelID: "x" });
+    expect(options).toEqual({});
+  });
+});
