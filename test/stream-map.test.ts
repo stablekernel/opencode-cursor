@@ -92,6 +92,128 @@ describe("cursorEventsToStream", () => {
 		});
 	});
 
+	it("closes the open text part before tool blocks so post-tool text renders below them", async () => {
+		// Interleaved turn: narration → tool activity → conclusion. The conclusion
+		// must land in a NEW part that starts after the tool block — appending it
+		// to the pre-tool part makes it render ABOVE the tool block in the UI.
+		const events: CursorEvent[] = [
+			{ type: "text-delta", text: "Let me check. " },
+			{
+				type: "tool-call",
+				id: "c1",
+				name: "shell",
+				input: { command: "ls" },
+			},
+			{
+				type: "tool-result",
+				id: "c1",
+				name: "shell",
+				result: {
+					status: "success",
+					value: { stdout: "a.ts", stderr: "", exitCode: 0 },
+				},
+				isError: false,
+			},
+			{ type: "text-delta", text: "Found it." },
+			{ type: "finish" },
+		];
+		const parts = await collect(cursorEventsToStream(gen(events)));
+		expect(types(parts)).toEqual([
+			"stream-start",
+			"text-start", // text-0: narration
+			"text-delta",
+			"text-end", // closed BEFORE the tool block
+			"tool-call",
+			"tool-result",
+			"text-start", // text-1: conclusion, positioned after the tool block
+			"text-delta",
+			"text-end",
+			"finish",
+		]);
+		const starts = parts.filter((p) => p.type === "text-start");
+		expect(starts.map((p) => (p as { id: string }).id)).toEqual([
+			"text-0",
+			"text-1",
+		]);
+	});
+
+	it("closes the open reasoning part before tool blocks", async () => {
+		const events: CursorEvent[] = [
+			{ type: "reasoning-delta", text: "hmm " },
+			{
+				type: "tool-call",
+				id: "c1",
+				name: "shell",
+				input: { command: "ls" },
+			},
+			{
+				type: "tool-result",
+				id: "c1",
+				name: "shell",
+				result: {
+					status: "success",
+					value: { stdout: "", stderr: "", exitCode: 0 },
+				},
+				isError: false,
+			},
+			{ type: "reasoning-delta", text: "now I see" },
+			{ type: "finish", text: "done" },
+		];
+		const parts = await collect(cursorEventsToStream(gen(events)));
+		expect(types(parts)).toEqual([
+			"stream-start",
+			"reasoning-start", // reasoning-0
+			"reasoning-delta",
+			"reasoning-end", // closed BEFORE the tool block
+			"tool-call",
+			"tool-result",
+			"reasoning-start", // reasoning-1, after the tool block
+			"reasoning-delta",
+			"reasoning-end",
+			"text-start",
+			"text-delta",
+			"text-end",
+			"finish",
+		]);
+	});
+
+	it("does not split the text part for a buffered edit call (parts emit at result time)", async () => {
+		// Edit calls emit NO parts at call time (the diff arrives with the
+		// result), so the open text part must NOT be closed until the result
+		// actually emits the edit block.
+		const events: CursorEvent[] = [
+			{ type: "text-delta", text: "editing " },
+			{ type: "tool-call", id: "e1", name: "edit", input: { path: "/a.ts" } },
+			{ type: "text-delta", text: "still narrating " },
+			{
+				type: "tool-result",
+				id: "e1",
+				name: "edit",
+				result: {
+					status: "success",
+					value: { diffString: "@@\n-x\n+y", linesAdded: 1, linesRemoved: 1 },
+				},
+				isError: false,
+			},
+			{ type: "text-delta", text: "done" },
+			{ type: "finish" },
+		];
+		const parts = await collect(cursorEventsToStream(gen(events)));
+		expect(types(parts)).toEqual([
+			"stream-start",
+			"text-start", // text-0 spans the buffered call (nothing emitted yet)
+			"text-delta",
+			"text-delta",
+			"text-end", // closed when the edit parts actually emit
+			"tool-call",
+			"tool-result",
+			"text-start", // text-1
+			"text-delta",
+			"text-end",
+			"finish",
+		]);
+	});
+
 	it("closes the open text part when reasoning resumes so parts render in true order", async () => {
 		// Interleaved turn: intro text → tool/reasoning activity → final text. The
 		// final text must land in a NEW part (text-1) that starts after the

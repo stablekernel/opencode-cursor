@@ -1,9 +1,14 @@
-import type { Plugin } from "@opencode-ai/plugin";
+import type { Config, Plugin } from "@opencode-ai/plugin";
 import type { Auth } from "@opencode-ai/sdk/v2";
+import type { McpServerConfig } from "@cursor/sdk";
 import { resolveCursorApiKey } from "../api-key.js";
 import { discoverModels, toOpencodeModels } from "../model-discovery.js";
 import { buildModelV2Map, PROVIDER_ID, providerNpm } from "./model-v2.js";
-import { translateMcpServers } from "./mcp-config.js";
+import {
+	findUnshareableOAuthServers,
+	type McpStatusMap,
+	translateMcpServers,
+} from "./mcp-config.js";
 import { buildCursorTools } from "./cursor-tools.js";
 
 function apiKeyFromAuth(auth: Auth | undefined): string | undefined {
@@ -27,6 +32,17 @@ export const CursorPlugin: Plugin = async (input) => {
 	// delegation tools (which don't receive auth directly) can reuse it. Falls
 	// back to the CURSOR_API_KEY env var when the loader hasn't run.
 	let capturedApiKey: string | undefined;
+
+	// opencode client + MCP-forwarding settings captured at config time so the
+	// per-turn chat.params hook can re-forward the *live* MCP server set
+	// (reflecting mid-session enable/disable) rather than the startup snapshot.
+	const client = input?.client;
+	const directory = input?.directory;
+	let forwardMcp = true;
+	let userMcp: Record<string, McpServerConfig> = {};
+	// OAuth servers we've already warned about, so the toast fires once per
+	// server rather than on every turn.
+	const warnedOAuth = new Set<string>();
 
 	return {
 		auth: {
@@ -68,10 +84,10 @@ export const CursorPlugin: Plugin = async (input) => {
 			// Forward opencode's configured MCP servers to the Cursor
 			// agent so it can use the same servers. Opt out via
 			// `provider.cursor.options.forwardMcp: false`.
-			const forwardMcp = existingOptions["forwardMcp"] !== false;
-			const userMcp = (existingOptions["mcpServers"] ?? {}) as Record<
+			forwardMcp = existingOptions["forwardMcp"] !== false;
+			userMcp = (existingOptions["mcpServers"] ?? {}) as Record<
 				string,
-				unknown
+				McpServerConfig
 			>;
 			const mcpServers = forwardMcp
 				? { ...userMcp, ...translateMcpServers(config.mcp) }
@@ -114,6 +130,54 @@ export const CursorPlugin: Plugin = async (input) => {
 			};
 			if (input.agent === "plan" && output.options["mode"] === undefined) {
 				output.options["mode"] = "plan";
+			}
+
+			// Dynamically re-forward MCP servers from opencode's *live* state so
+			// mid-session enable/disable reaches the Cursor agent (the config hook
+			// only snapshots the set once, at startup). `client.mcp.status()` is the
+			// runtime truth (connected/disabled/...) and `client.config.get()`
+			// supplies the launch specs. On any failure we leave the static snapshot
+			// (already baked into the provider options) in place.
+			if (forwardMcp && client) {
+				try {
+					const query = directory ? { query: { directory } } : undefined;
+					const [cfgRes, statusRes] = await Promise.all([
+						client.config.get(),
+						client.mcp.status(query),
+					]);
+					const liveMcp = (cfgRes?.data as Config | undefined)?.mcp;
+					const status = statusRes?.data as McpStatusMap | undefined;
+					if (status) {
+						output.options["mcpServers"] = {
+							...userMcp,
+							...translateMcpServers(liveMcp, status),
+						};
+						// Notify (once) about OAuth servers we can't forward: opencode
+						// holds their token and it never reaches config.mcp, so the
+						// Cursor agent can't connect. Only those without a shareable
+						// client registration are skipped; ones with a clientId are
+						// forwarded with an `auth` block for the agent's own OAuth flow.
+						const unshareable = findUnshareableOAuthServers(
+							liveMcp,
+							status,
+						).filter((name) => !warnedOAuth.has(name));
+						if (unshareable.length > 0) {
+							for (const name of unshareable) warnedOAuth.add(name);
+							const plural = unshareable.length > 1;
+							void client.tui
+								.showToast({
+									body: {
+										title: "Cursor MCP",
+										message: `Skipped OAuth MCP server${plural ? "s" : ""}: ${unshareable.join(", ")}. opencode's token can't be shared with the Cursor agent; configure an OAuth clientId to forward ${plural ? "them" : "it"}.`,
+										variant: "warning",
+									},
+								})
+								.catch(() => {});
+						}
+					}
+				} catch {
+					// Keep the static snapshot; live forwarding is best-effort.
+				}
 			}
 		},
 

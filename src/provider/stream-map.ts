@@ -967,12 +967,22 @@ export function cursorEventsToStream(
 							break;
 						case "tool-call":
 							if (toolDisplay === "blocks") {
-								for (const part of blockToolCallParts(
+								const parts = blockToolCallParts(
 									event.id,
 									event.name,
 									event.input,
 									toolState,
-								)) {
+								);
+								// Edit calls buffer until their result (no parts yet) — keep
+								// the open narration part alive across the gap. Every other
+								// tool emits immediately, so close open text/reasoning first
+								// so post-tool narration lands in a later part (hosts position
+								// parts where they START).
+								if (parts.length > 0) {
+									closeText();
+									closeReasoning();
+								}
+								for (const part of parts) {
 									controller.enqueue(part);
 								}
 							} else {
@@ -981,13 +991,18 @@ export function cursorEventsToStream(
 							break;
 						case "tool-result":
 							if (toolDisplay === "blocks") {
-								for (const part of blockToolResultParts(
+								const parts = blockToolResultParts(
 									event.id,
 									event.name,
 									event.result,
 									event.isError,
 									toolState,
-								)) {
+								);
+								if (parts.length > 0) {
+									closeText();
+									closeReasoning();
+								}
+								for (const part of parts) {
 									controller.enqueue(part);
 								}
 							} else if (event.isError) {

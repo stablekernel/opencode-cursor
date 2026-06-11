@@ -41,6 +41,55 @@ describe("promptToCursorMessage", () => {
 		expect(msg.text).toContain("[image attached]");
 	});
 
+	it("includes tool outputs (truncated) instead of dropping them", () => {
+		const bigOutput = "x".repeat(5000);
+		const prompt: LanguageModelV3Prompt = [
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "tool-call",
+						toolCallId: "c1",
+						toolName: "read",
+						input: { path: "/a.ts" },
+					} as never,
+					{
+						type: "tool-result",
+						toolCallId: "c1",
+						toolName: "read",
+						output: { type: "text", value: bigOutput },
+					} as never,
+				],
+			},
+		];
+		const msg = promptToCursorMessage(prompt);
+		expect(msg.text).toContain('[called read({"path":"/a.ts"})]');
+		expect(msg.text).toContain("[result of read:");
+		// Output is present but capped well under its 5000-char size.
+		expect(msg.text).toContain("chars]");
+		expect(msg.text.length).toBeLessThan(3000);
+	});
+
+	it("caps tool-role result JSON", () => {
+		const prompt: LanguageModelV3Prompt = [
+			{
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: "c1",
+						toolName: "grep",
+						output: { type: "text", value: "y".repeat(5000) },
+					} as never,
+				],
+			},
+		];
+		const msg = promptToCursorMessage(prompt);
+		expect(msg.text).toContain("# Tool result (grep)");
+		expect(msg.text).toContain("chars]");
+		expect(msg.text.length).toBeLessThan(3000);
+	});
+
 	it("passes through image URLs", () => {
 		const prompt: LanguageModelV3Prompt = [
 			{

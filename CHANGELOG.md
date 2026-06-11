@@ -4,6 +4,52 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- **Fingerprint-guarded session reuse, now the default (`session: "auto"`).**
+  Previously the provider created a fresh Cursor agent every turn and re-sent
+  the whole transcript (robust but cache-hostile and increasingly costly as a
+  conversation grows), while opt-in `session: true` resumed one agent per
+  session but could drift from opencode's history (edits/reverts/compaction) and
+  was disturbed by non-chat side calls. `session: "auto"` (the new default)
+  hashes only the parts opencode replays verbatim — the system prompt and the
+  user-message sequence — and classifies each turn: a clean **continuation**
+  resumes the pooled agent and sends only the new message (maximizing prefix
+  cache hits); a **side-call** (system prompt differs, e.g. title generation)
+  runs a fresh ephemeral agent without touching the pool; a **divergence**
+  (edit/revert/compaction/queued messages) or a failed resume falls back to a
+  fresh agent + full transcript and re-pools. Worst case is one self-healing
+  full replay — never worse than the old default. `session: true` is now an
+  alias for `"auto"`; `session: false` keeps the always-fresh behavior.
+  Set `OPENCODE_CURSOR_DEBUG=1` to log per-turn classification and cache usage.
+- **Session reuse survives opencode restarts.** The pool's fingerprint records
+  persist (best-effort) to `~/.cache/opencode-cursor/session-pool.json` (7-day
+  TTL, 200-entry LRU cap), so the first turn after a restart resumes the
+  session's Cursor agent — whose conversation lives in Cursor's own checkpoint
+  store — instead of paying a cache-cold full-transcript replay.
+- **MCP servers are re-forwarded live, per turn, with OAuth mapping.** The
+  `config` hook's startup snapshot meant mid-session MCP enable/disable never
+  reached the Cursor agent. The `chat.params` hook now forwards the live set
+  each turn (`client.mcp.status()` for runtime truth, `client.config.get()` for
+  launch specs). Because a resumed agent keeps its original servers, a changed
+  set forces a fresh agent (full-transcript replay, re-pooled) so the new
+  servers take effect — the session fingerprint carries an `mcpHash` for this.
+  Remote servers with a registered OAuth client are forwarded with a Cursor
+  `auth` block so the agent runs its own OAuth flow; servers needing OAuth
+  without a shareable `clientId` (dynamic registration) are skipped with a
+  one-time toast instead of forwarding a spec that would 401.
+- **Fixed: text/reasoning streamed after a tool call rendered above the tool
+  block.** The earlier ordering fix closed parts on text↔reasoning transitions,
+  but blocks-mode tool parts were emitted while the narration part stayed open
+  — and hosts position a part where it started. Open text/reasoning parts are
+  now closed before tool parts are emitted (except for buffered edit calls,
+  which emit nothing until their result arrives, so narration isn't split
+  needlessly).
+- **Tool outputs are included (truncated) in flattened transcripts.** The
+  fresh/divergence/`session: false` replay paths previously dropped Cursor tool
+  results to bare `[result of X]` placeholders, so a fresh agent re-read a
+  transcript with prior tool outputs missing. Outputs are now inlined and capped
+  (2,000 chars per result, 500 per tool-call args) so context stays faithful
+  without unbounded bloat.
+
 ## [0.2.0] — 2026-06-11
 
 - **More Cursor tools map onto opencode's native tool renderers (blocks mode).**
@@ -47,7 +93,8 @@ and a permission-gated delegation tool surface.
 - **Session reuse** (`session: true`) — keeps one Cursor agent per opencode
   session via `Agent.resume()` across turns, with automatic fallback to a fresh
   agent. A run wedged by a crashed/duplicate process is recovered by retrying
-  the send once with the SDK's `local.force` escape hatch.
+  the send once with the SDK's `local.force` escape hatch. (Superseded by the
+  fingerprint-guarded `session: "auto"` default; see Unreleased.)
 - **Native diff viewer for Cursor edits (blocks mode).** A Cursor `edit` tool
   call is now surfaced under opencode's registered `edit` tool with its real
   unified diff in `metadata.diff`, so opencode renders its built-in diff viewer
