@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- **More Cursor tools map onto opencode's native tool renderers (blocks mode).**
+  Following the `edit` → diff-viewer mapping, Cursor's `shell`, `read`, `write`,
+  `glob`, `grep`, `ls`, `updateTodos`, and `task` tool activity is now surfaced
+  under opencode's registered `bash`, `read`, `write`, `glob`, `grep`, `list`,
+  `todowrite`, and `task` tools, and Cursor's web search (which runs as an MCP
+  tool) maps onto opencode's `websearch` renderer — so opencode renders its
+  native UI (shell console, file viewer, todo checklist, subagent card, search
+  results, …) instead of generic `cursor_*` blocks. Cursor's arg shape is
+  translated to opencode's (e.g. `path` → `filePath`, `globPattern` → `pattern`,
+  `fileText` → `content`); calls stay provider-executed (display-only, never
+  re-run on disk).
+- **Cleaner fallback blocks for tools without an opencode counterpart.**
+  `readLints` and `delete` now render as formatted `cursor_*` blocks (a
+  diagnostics list / a one-line confirmation) instead of raw JSON, and every MCP
+  tool's `content` array is flattened to readable text. Anything else — or a
+  result with an unexpected shape — still falls back to a safe `cursor_*` block
+  with the raw payload.
+
 ## [0.1.0] — 2026-06-10
 
 > Pre-releases: `0.1.0-rc.1` and `0.1.0-rc.2` were published to the npm `next`

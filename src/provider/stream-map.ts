@@ -58,15 +58,21 @@ function blockToolName(name: string): string {
 type BlockToolPart = LanguageModelV3StreamPart;
 
 /**
- * Build a provider-executed dynamic `tool-call`. The name is `cursor_`-prefixed
- * so it can't collide with a tool opencode has registered; `input` is a
- * stringified JSON object per the V3 spec.
+ * Build a provider-executed dynamic `tool-call` under an EXACT (already-final)
+ * tool name. `input` is a stringified JSON object per the V3 spec. Both
+ * `providerExecuted` and `dynamic` are set so ai's `parseToolCall` accepts the
+ * part without registered-tool validation, and a host that hasn't registered
+ * the named tool degrades to a generic dynamic block instead of erroring.
  */
-function toolCallObj(id: string, name: string, input: unknown): BlockToolPart {
+function nativeToolCall(
+	id: string,
+	toolName: string,
+	input: unknown,
+): BlockToolPart {
 	return {
 		type: "tool-call",
 		toolCallId: id,
-		toolName: blockToolName(name),
+		toolName,
 		input: safeJsonString(input),
 		providerExecuted: true,
 		dynamic: true,
@@ -74,26 +80,45 @@ function toolCallObj(id: string, name: string, input: unknown): BlockToolPart {
 }
 
 /**
- * Build a provider-executed dynamic `tool-result`. Per the V3 spec (and ai v6's
- * `runToolsTransformation`, which reads `chunk.result` / `chunk.isError`) the
- * payload goes in `result`; `result` is typed `NonNullable<JSONValue>` so a
- * missing Cursor result is coalesced to `null` and cast.
+ * Build a provider-executed dynamic `tool-result` under an EXACT tool name. Per
+ * the V3 spec (and ai v6's `runToolsTransformation`, which reads
+ * `chunk.result` / `chunk.isError`) the payload goes in `result`; `result` is
+ * typed `NonNullable<JSONValue>` so a missing payload is coalesced to `null`.
  */
-function toolResultObj(
+function nativeToolResult(
 	id: string,
-	name: string,
+	toolName: string,
 	result: unknown,
 	isError: boolean,
 ): BlockToolPart {
 	return {
 		type: "tool-result",
 		toolCallId: id,
-		toolName: blockToolName(name),
+		toolName,
 		result: (result ?? null) as never,
 		isError,
 		providerExecuted: true,
 		dynamic: true,
 	} as BlockToolPart;
+}
+
+/**
+ * Build a generic `tool-call` for a Cursor tool with no native opencode
+ * counterpart. The name is `cursor_`-prefixed so it can't collide with a tool
+ * opencode has registered.
+ */
+function toolCallObj(id: string, name: string, input: unknown): BlockToolPart {
+	return nativeToolCall(id, blockToolName(name), input);
+}
+
+/** Build a generic (`cursor_`-prefixed) `tool-result`. */
+function toolResultObj(
+	id: string,
+	name: string,
+	result: unknown,
+	isError: boolean,
+): BlockToolPart {
+	return nativeToolResult(id, blockToolName(name), result, isError);
 }
 
 /** Cursor's file-edit tool surfaces with this name (its `toolCall.type`). */
@@ -102,6 +127,465 @@ const EDIT_TOOL_NAME = "edit";
 function isRecord(v: unknown): v is Record<string, unknown> {
 	return typeof v === "object" && v !== null;
 }
+
+function strField(v: unknown, key: string): string | undefined {
+	return isRecord(v) && typeof v[key] === "string"
+		? (v[key] as string)
+		: undefined;
+}
+
+function numField(v: unknown, key: string): number | undefined {
+	return isRecord(v) && typeof v[key] === "number"
+		? (v[key] as number)
+		: undefined;
+}
+
+/** Unwrap a Cursor `{ status:"success", value }` result to its `value`. */
+function successValue(result: unknown): unknown {
+	return isRecord(result) && result["status"] === "success"
+		? result["value"]
+		: undefined;
+}
+
+/** The `{title, metadata, output}` shape opencode folds into a tool part's state. */
+interface FoldedResult {
+	title: string;
+	metadata: Record<string, unknown>;
+	output: string;
+}
+
+/**
+ * Maps a Cursor tool's call/result onto an opencode tool so opencode renders
+ * something nicer than a raw-JSON block. Mirrors the `edit` mapping: parts are
+ * emitted `providerExecuted` + `dynamic`, so the call is never executed on disk
+ * and a host that hasn't registered the tool degrades to a generic dynamic
+ * block.
+ *
+ *  - `tool` is opencode's REGISTERED tool name when there's a native renderer to
+ *    reuse (`bash`, `read`, `websearch`, …). Omit it for "format-only" adapters
+ *    (`readLints`, `delete`): the part stays a `cursor_*` block, but `result`
+ *    still folds the payload into a clean `output` string so opencode's generic
+ *    renderer shows formatted text instead of dumped JSON.
+ *  - `input` translates Cursor's arg keys to the names opencode's renderer reads
+ *    (e.g. Cursor `path` → opencode `filePath`).
+ *  - `result` folds a SUCCESSFUL Cursor result `value` into `{title, metadata,
+ *    output}`; returning `null` falls back to a generic block (unexpected shape).
+ */
+interface NativeToolAdapter {
+	tool?: string;
+	input(args: unknown): Record<string, unknown>;
+	result(value: unknown, args: unknown): FoldedResult | null;
+}
+
+/**
+ * Flatten a Cursor MCP result `value` (`{ content: [{ text: { text } }, …] }`)
+ * into plain text. Returns `null` when `value` isn't MCP-shaped, so callers can
+ * fall back to the raw payload. An MCP `content` array that holds no text
+ * (e.g. only images) yields a `"[image]"`-style placeholder rather than `null`.
+ */
+function flattenMcpContent(value: unknown): string | null {
+	if (!isRecord(value) || !Array.isArray(value["content"])) return null;
+	const parts = (value["content"] as unknown[]).flatMap((item) => {
+		const text = isRecord(item) ? strField(item["text"], "text") : undefined;
+		if (text !== undefined) return [text];
+		if (isRecord(item) && isRecord(item["image"])) return ["[image]"];
+		return [];
+	});
+	return parts.join("\n");
+}
+
+/**
+ * Fold a generic (non-adapter) Cursor result into a clean `output` string IF
+ * it's an MCP result; otherwise `null` so the raw payload is passed through.
+ * This stops every MCP tool (web search, custom servers, …) from dumping the
+ * nested `{content:[{text:{text}}]}` JSON into the block.
+ */
+function mcpFold(result: unknown): FoldedResult | null {
+	const text = flattenMcpContent(successValue(result));
+	if (text === null) return null;
+	return { title: "", metadata: {}, output: text };
+}
+
+/** Cursor MCP call args nest the real tool input under `args.args`. */
+function mcpInputArgs(args: unknown): unknown {
+	return isRecord(args) ? args["args"] : undefined;
+}
+
+/** Map a Cursor MCP `providerIdentifier` to a websearch provider label key. */
+function webSearchProvider(args: unknown): string | undefined {
+	const id = (strField(args, "providerIdentifier") ?? "").toLowerCase();
+	if (id.includes("exa")) return "exa";
+	if (id.includes("parallel")) return "parallel";
+	return undefined;
+}
+
+/** A Cursor MCP tool whose name looks like a web search (`web_search`, …). */
+function isWebSearchName(name: string): boolean {
+	return /web[_-]?search/i.test(name);
+}
+
+/**
+ * Cursor web search arrives as an MCP tool; map it onto opencode's native
+ * `websearch` renderer (query subtitle + result body). The query lives in the
+ * nested MCP input (`args.args.query`); the result is MCP `content`.
+ */
+const WEBSEARCH_ADAPTER: NativeToolAdapter = {
+	tool: "websearch",
+	input: (args) => {
+		const query = strField(mcpInputArgs(args), "query");
+		return query !== undefined ? { query } : {};
+	},
+	result: (value, args) => {
+		const provider = webSearchProvider(args);
+		return {
+			title: "",
+			metadata: provider ? { provider } : {},
+			output: flattenMcpContent(value) ?? "",
+		};
+	},
+};
+
+/**
+ * Resolve a Cursor tool name (+ call args) to an adapter, or `undefined` for a
+ * plain `cursor_*` block. `edit` is handled separately (its native call input
+ * depends on the diff in the result).
+ */
+function resolveAdapter(
+	name: string,
+	_input: unknown,
+): NativeToolAdapter | undefined {
+	const exact = NATIVE_ADAPTERS[name];
+	if (exact) return exact;
+	if (isWebSearchName(name)) return WEBSEARCH_ADAPTER;
+	return undefined;
+}
+
+/** Cursor todo status (`inProgress`) → opencode todo status (`in_progress`). */
+function mapTodoStatus(status: unknown): string {
+	if (status === "inProgress") return "in_progress";
+	return typeof status === "string" ? status : "pending";
+}
+
+/** Normalize Cursor `updateTodos` args into opencode `todowrite` todos. */
+function mapTodos(args: unknown): Array<{ content: string; status: string }> {
+	const todos =
+		isRecord(args) && Array.isArray(args["todos"]) ? args["todos"] : [];
+	return (todos as unknown[]).flatMap((t) =>
+		isRecord(t) && typeof t["content"] === "string"
+			? [
+					{
+						content: t["content"] as string,
+						status: mapTodoStatus(t["status"]),
+					},
+				]
+			: [],
+	);
+}
+
+/**
+ * Cursor tool name → opencode native tool adapter. Cursor tools without a
+ * natural opencode counterpart (`delete`, `mcp`, `semSearch`, `readLints`,
+ * `generateImage`, `createPlan`, `recordScreen`, `task`) are intentionally
+ * absent and fall through to generic `cursor_*` blocks. `edit` is handled
+ * separately (its native call input depends on the diff in the result).
+ */
+const NATIVE_ADAPTERS: Record<string, NativeToolAdapter> = {
+	// Cursor `shell` → opencode `bash` (console renderer).
+	shell: {
+		tool: "bash",
+		input: (args) => ({ command: strField(args, "command") ?? "" }),
+		result: (value, args) => {
+			if (!isRecord(value)) return null;
+			const command = strField(args, "command") ?? "";
+			const stdout = strField(value, "stdout") ?? "";
+			const stderr = strField(value, "stderr") ?? "";
+			const exit = numField(value, "exitCode");
+			const body = [stdout, stderr].filter((s) => s.length > 0).join("\n");
+			const output =
+				exit !== undefined && exit !== 0
+					? `${body}${body ? "\n" : ""}(exit ${exit})`
+					: body;
+			return {
+				title: command,
+				metadata: { command, output, exit: exit ?? 0 },
+				output,
+			};
+		},
+	},
+	// Cursor `read` → opencode `read`.
+	read: {
+		tool: "read",
+		input: (args) => ({ filePath: strField(args, "path") ?? "" }),
+		result: (value, args) => {
+			const content = strField(value, "content");
+			if (content === undefined) return null;
+			const filePath = strField(args, "path") ?? "";
+			const totalLines = numField(value, "totalLines");
+			return {
+				title: filePath,
+				metadata: {
+					preview: content.split("\n").slice(0, 20).join("\n"),
+					loaded: [] as string[],
+					...(totalLines !== undefined ? { totalLines } : {}),
+				},
+				output: content,
+			};
+		},
+	},
+	// Cursor `write` → opencode `write` (renders input.content as the new file).
+	write: {
+		tool: "write",
+		input: (args) => ({
+			filePath: strField(args, "path") ?? "",
+			content: strField(args, "fileText") ?? "",
+		}),
+		result: (value, args) => {
+			const filePath = strField(args, "path") ?? "";
+			const lines = numField(value, "linesCreated");
+			const output =
+				lines !== undefined
+					? `Wrote ${lines} line${lines === 1 ? "" : "s"}.`
+					: "Wrote file successfully.";
+			return {
+				title: filePath,
+				metadata: { diagnostics: {}, filepath: filePath, exists: false },
+				output,
+			};
+		},
+	},
+	// Cursor `glob` → opencode `glob`.
+	glob: {
+		tool: "glob",
+		input: (args) => {
+			const pattern = strField(args, "globPattern") ?? "";
+			const dir = strField(args, "targetDirectory");
+			return dir ? { pattern, path: dir } : { pattern };
+		},
+		result: (value) => {
+			if (!isRecord(value) || !Array.isArray(value["files"])) return null;
+			const files = (value["files"] as unknown[]).filter(
+				(f): f is string => typeof f === "string",
+			);
+			const truncated =
+				value["clientTruncated"] === true || value["ripgrepTruncated"] === true;
+			return {
+				title: "",
+				metadata: { count: files.length, truncated },
+				output: files.length > 0 ? files.join("\n") : "No files found",
+			};
+		},
+	},
+	// Cursor `grep` → opencode `grep` (flatten matches into ripgrep-style text).
+	grep: {
+		tool: "grep",
+		input: (args) => {
+			const out: Record<string, unknown> = {
+				pattern: strField(args, "pattern") ?? "",
+			};
+			const p = strField(args, "path");
+			if (p) out["path"] = p;
+			const g = strField(args, "glob");
+			if (g) out["include"] = g;
+			return out;
+		},
+		result: (value) => {
+			if (!isRecord(value)) return null;
+			const unions: unknown[] = [];
+			const ws = value["workspaceResults"];
+			if (isRecord(ws)) unions.push(...Object.values(ws));
+			if (value["activeEditorResult"] !== undefined)
+				unions.push(value["activeEditorResult"]);
+			const lines: string[] = [];
+			let total = 0;
+			let current = "";
+			for (const u of unions) {
+				if (!isRecord(u)) continue;
+				const output = u["output"];
+				if (
+					u["type"] === "content" &&
+					isRecord(output) &&
+					Array.isArray(output["matches"])
+				) {
+					for (const m of output["matches"] as unknown[]) {
+						if (!isRecord(m)) continue;
+						const file = strField(m, "file") ?? "";
+						const line = numField(m, "lineNumber");
+						const text = strField(m, "line") ?? "";
+						if (current !== file) {
+							if (current) lines.push("");
+							current = file;
+							lines.push(`${file}:`);
+						}
+						lines.push(
+							line !== undefined ? `  Line ${line}: ${text}` : `  ${text}`,
+						);
+						total++;
+					}
+				} else if (
+					u["type"] === "files" &&
+					isRecord(output) &&
+					Array.isArray(output["files"])
+				) {
+					for (const f of output["files"] as unknown[]) {
+						if (typeof f === "string") {
+							lines.push(f);
+							total++;
+						}
+					}
+				}
+			}
+			return {
+				title: "",
+				metadata: { matches: total, truncated: false },
+				output:
+					total > 0
+						? [
+								`Found ${total} match${total === 1 ? "" : "es"}`,
+								"",
+								...lines,
+							].join("\n")
+						: "No matches found",
+			};
+		},
+	},
+	// Cursor `ls` → opencode `list` (flatten the directory tree into paths).
+	ls: {
+		tool: "list",
+		input: (args) => ({ path: strField(args, "path") ?? "" }),
+		result: (value) => {
+			if (!isRecord(value)) return null;
+			const root = value["directoryTreeRoot"];
+			if (!isRecord(root)) return null;
+			const out: string[] = [];
+			const walk = (node: Record<string, unknown>) => {
+				const base = strField(node, "absPath") ?? "";
+				const files = Array.isArray(node["childrenFiles"])
+					? node["childrenFiles"]
+					: [];
+				for (const f of files) {
+					const name = strField(f, "name");
+					if (name) out.push(`${base}/${name}`);
+				}
+				const dirs = Array.isArray(node["childrenDirs"])
+					? node["childrenDirs"]
+					: [];
+				for (const d of dirs) {
+					if (!isRecord(d)) continue;
+					out.push(`${strField(d, "absPath") ?? ""}/`);
+					walk(d);
+				}
+			};
+			walk(root);
+			return {
+				title: strField(root, "absPath") ?? "",
+				metadata: {},
+				output: out.length > 0 ? out.join("\n") : "(empty)",
+			};
+		},
+	},
+	// Cursor `updateTodos` → opencode `todowrite` (todo checklist renderer).
+	updateTodos: {
+		tool: "todowrite",
+		input: (args) => ({ todos: mapTodos(args) }),
+		result: (_value, args) => {
+			const todos = mapTodos(args);
+			const done = todos.filter((t) => t.status === "completed").length;
+			return {
+				title: `${done}/${todos.length}`,
+				metadata: { todos },
+				output: `Updated ${todos.length} todo${todos.length === 1 ? "" : "s"}.`,
+			};
+		},
+	},
+	// Cursor `task` (subagent) → opencode `task` (agent card: name + description).
+	// Non-clickable here — the subagent ran inside Cursor, not as an opencode
+	// child session — but the native card reads far better than raw JSON.
+	task: {
+		tool: "task",
+		input: (args) => {
+			const description = strField(args, "description") ?? "";
+			const sub = isRecord(args) ? args["subagentType"] : undefined;
+			const subagent =
+				strField(sub, "name") ?? strField(sub, "kind") ?? undefined;
+			return subagent
+				? { description, subagent_type: subagent }
+				: { description };
+		},
+		result: (value, args) => {
+			const description = strField(args, "description") ?? "";
+			const suffix = strField(value, "resultSuffix");
+			const background = isRecord(value) && value["isBackground"] === true;
+			return {
+				title: description,
+				metadata: background ? { background: true } : {},
+				output: suffix ?? "Subagent task completed.",
+			};
+		},
+	},
+	// Cursor `readLints` has no opencode counterpart — format-only: render the
+	// diagnostics as a readable list instead of dumping the nested JSON.
+	readLints: {
+		input: (args) => {
+			const paths =
+				isRecord(args) && Array.isArray(args["paths"]) ? args["paths"] : [];
+			return { paths };
+		},
+		result: (value) => {
+			const files =
+				isRecord(value) && Array.isArray(value["fileDiagnostics"])
+					? (value["fileDiagnostics"] as unknown[])
+					: [];
+			const lines: string[] = [];
+			let total = 0;
+			for (const file of files) {
+				if (!isRecord(file)) continue;
+				const diags = Array.isArray(file["diagnostics"])
+					? (file["diagnostics"] as unknown[])
+					: [];
+				if (diags.length === 0) continue;
+				lines.push(`${strField(file, "path") ?? ""}`);
+				for (const d of diags) {
+					if (!isRecord(d)) continue;
+					const severity = strField(d, "severity") ?? "info";
+					const start = isRecord(d["range"]) ? d["range"]["start"] : undefined;
+					const line = numField(start, "line");
+					const char = numField(start, "character");
+					const loc =
+						line !== undefined
+							? ` L${line + 1}${char !== undefined ? `:${char + 1}` : ""}`
+							: "";
+					lines.push(`  ${severity}${loc}: ${strField(d, "message") ?? ""}`);
+					total++;
+				}
+			}
+			return {
+				title:
+					total > 0
+						? `${total} problem${total === 1 ? "" : "s"}`
+						: "No problems",
+				metadata: { count: total },
+				output: total > 0 ? lines.join("\n") : "No problems found.",
+			};
+		},
+	},
+	// Cursor `delete` has no opencode counterpart — format-only: a one-line
+	// confirmation instead of `{"fileSize":N}`.
+	delete: {
+		input: (args) => ({ path: strField(args, "path") ?? "" }),
+		result: (value, args) => {
+			const path = strField(args, "path") ?? "";
+			const size = numField(value, "fileSize");
+			return {
+				title: path,
+				metadata: {},
+				output:
+					size !== undefined
+						? `Deleted ${path} (${size} bytes).`
+						: `Deleted ${path}.`,
+			};
+		},
+	},
+};
 
 /** Extract the edit target path from Cursor's edit tool-call args (`{ path }`). */
 function editFilePath(input: unknown): string {
@@ -218,17 +702,26 @@ function editResultFields(
 /**
  * Per-turn blocks-mode tool bookkeeping, shared by the streaming and
  * `doGenerate` paths:
- *  - `openToolCalls`: non-edit calls awaiting their result (id → original name).
+ *  - `open`: non-edit calls awaiting their result. Stores the FINAL emitted tool
+ *    name (native, e.g. `bash`, or generic `cursor_*`), the native adapter (if
+ *    any) used to fold the result, and the original Cursor args (some adapters
+ *    build their result from the call args, e.g. `write`/`updateTodos`).
  *  - `pendingEdits`: edit calls held until their result, which carries the diff
  *    needed to emit a schema-valid native `edit` call (id → filePath).
  */
+interface OpenToolCall {
+	toolName: string;
+	adapter?: NativeToolAdapter;
+	args: unknown;
+}
+
 interface BlockToolState {
-	openToolCalls: Map<string, string>;
+	open: Map<string, OpenToolCall>;
 	pendingEdits: Map<string, string>;
 }
 
 function newBlockToolState(): BlockToolState {
-	return { openToolCalls: new Map(), pendingEdits: new Map() };
+	return { open: new Map(), pendingEdits: new Map() };
 }
 
 /** Parts to emit for a blocks-mode `tool-call` event (edits are buffered). */
@@ -243,8 +736,19 @@ function blockToolCallParts(
 		state.pendingEdits.set(id, editFilePath(input));
 		return [];
 	}
-	state.openToolCalls.set(id, name);
-	return [toolCallObj(id, name, input)];
+	const adapter = resolveAdapter(name, input);
+	if (adapter) {
+		// Adapter mapping: native registered tool (`adapter.tool`) when there's a
+		// renderer to reuse, else a `cursor_*` block whose result is still folded
+		// into clean output (format-only adapters).
+		const toolName = adapter.tool ?? blockToolName(name);
+		state.open.set(id, { toolName, adapter, args: input });
+		return [nativeToolCall(id, toolName, adapter.input(input))];
+	}
+	// No adapter: generic prefixed block.
+	const toolName = blockToolName(name);
+	state.open.set(id, { toolName, args: input });
+	return [nativeToolCall(id, toolName, input)];
 }
 
 /** Parts to emit for a blocks-mode `tool-result` event. */
@@ -272,8 +776,25 @@ function blockToolResultParts(
 			toolResultObj(id, EDIT_TOOL_NAME, result, isError),
 		];
 	}
-	state.openToolCalls.delete(id);
-	return [toolResultObj(id, name, result, isError)];
+	const open = state.open.get(id);
+	state.open.delete(id);
+	const toolName = open?.toolName ?? blockToolName(name);
+	if (open?.adapter && !isError) {
+		const value = successValue(result);
+		if (value !== undefined) {
+			const folded = open.adapter.result(value, open.args);
+			if (folded) return [nativeToolResult(id, toolName, folded, false)];
+		}
+	}
+	if (!isError) {
+		// No adapter (or it declined): if this is an MCP result, fold its `content`
+		// into readable text so the block isn't a raw JSON dump.
+		const folded = mcpFold(result);
+		if (folded) return [nativeToolResult(id, toolName, folded, false)];
+	}
+	// Generic block / error / unexpected shape: emit the raw Cursor result under
+	// the (already-resolved) tool name.
+	return [nativeToolResult(id, toolName, result, isError)];
 }
 
 /**
@@ -283,10 +804,10 @@ function blockToolResultParts(
  */
 function blockDanglingParts(state: BlockToolState): BlockToolPart[] {
 	const parts: BlockToolPart[] = [];
-	for (const [id, name] of state.openToolCalls) {
-		parts.push(toolResultObj(id, name, DANGLING_TOOL_RESULT, true));
+	for (const [id, open] of state.open) {
+		parts.push(nativeToolResult(id, open.toolName, DANGLING_TOOL_RESULT, true));
 	}
-	state.openToolCalls.clear();
+	state.open.clear();
 	// Edits whose result never arrived: safe generic block + synthetic error
 	// (no diff available to build a native edit).
 	for (const [id, filePath] of state.pendingEdits) {

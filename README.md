@@ -336,6 +336,20 @@ that activity appears in opencode:
   and outputs. opencode skips execution for provider-executed calls (they're display-only), so
   Cursor's tools (`shell`, `mcp`, …) don't trigger an "unavailable tool" error. Requires a
   V3-native opencode host (1.16+).
+
+  Where a Cursor tool has a natural opencode counterpart, it's surfaced under opencode's
+  **registered** tool name so its native renderer is used instead of a generic block: `edit` →
+  opencode's diff viewer (via `metadata.diff`), `shell` → `bash` console, `task` → the subagent
+  card, web search (which Cursor runs as an MCP tool) → the `websearch` renderer, and
+  `read`/`write`/`glob`/`grep`/`ls`/`updateTodos` → opencode's
+  `read`/`write`/`glob`/`grep`/`list`/`todowrite` renderers. Cursor's arg shape is translated to
+  opencode's (e.g. `path` → `filePath`); the call stays provider-executed, so it's display-only and
+  never re-run on disk.
+
+  Tools with no opencode counterpart still get cleaned up: `readLints` and `delete` render as
+  formatted `cursor_*` blocks (a diagnostics list / a one-line confirmation) rather than raw JSON,
+  and any MCP tool's `content` is flattened to readable text. Anything else — or a result with an
+  unexpected shape — falls back to a prefixed `cursor_*` block with the raw payload.
 - **`"reasoning"` (fallback)** — each tool call is shown as a compact reasoning line
   (`[tool] write {"path":…}`; failures as `[tool] x failed`). Robust on every host: no tool-call
   parts cross into opencode, so there's no dependency on how the host treats provider-executed
