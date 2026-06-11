@@ -25,6 +25,24 @@ All notable changes to this project will be documented in this file.
   TTL, 200-entry LRU cap), so the first turn after a restart resumes the
   session's Cursor agent — whose conversation lives in Cursor's own checkpoint
   store — instead of paying a cache-cold full-transcript replay.
+- **MCP servers are re-forwarded live, per turn, with OAuth mapping.** The
+  `config` hook's startup snapshot meant mid-session MCP enable/disable never
+  reached the Cursor agent. The `chat.params` hook now forwards the live set
+  each turn (`client.mcp.status()` for runtime truth, `client.config.get()` for
+  launch specs). Because a resumed agent keeps its original servers, a changed
+  set forces a fresh agent (full-transcript replay, re-pooled) so the new
+  servers take effect — the session fingerprint carries an `mcpHash` for this.
+  Remote servers with a registered OAuth client are forwarded with a Cursor
+  `auth` block so the agent runs its own OAuth flow; servers needing OAuth
+  without a shareable `clientId` (dynamic registration) are skipped with a
+  one-time toast instead of forwarding a spec that would 401.
+- **Fixed: text/reasoning streamed after a tool call rendered above the tool
+  block.** The earlier ordering fix closed parts on text↔reasoning transitions,
+  but blocks-mode tool parts were emitted while the narration part stayed open
+  — and hosts position a part where it started. Open text/reasoning parts are
+  now closed before tool parts are emitted (except for buffered edit calls,
+  which emit nothing until their result arrives, so narration isn't split
+  needlessly).
 - **Tool outputs are included (truncated) in flattened transcripts.** The
   fresh/divergence/`session: false` replay paths previously dropped Cursor tool
   results to bare `[result of X]` placeholders, so a fresh agent re-read a

@@ -175,6 +175,7 @@ classifies each turn:
 | First turn of the session | **new** | fresh agent, full transcript, pool it |
 | System prompt differs (title gen and other side calls) | **side-call** | fresh ephemeral agent; the pooled agent is left untouched |
 | Prior user sequence is an exact prefix + exactly one new user message | **continuation** | `Agent.resume` the pooled agent, send **only** the new message |
+| Continuation, but the forwarded MCP server set changed | **continuation** (fresh agent) | fresh agent + full transcript, re-pool — a resumed agent keeps its original MCP servers, so a fresh one is needed for the new set |
 | Earlier message edited/reverted, conversation compacted, or several messages queued | **divergence** | fresh agent, full transcript, re-pool |
 
 The worst case on any misclassification is a single full-transcript replay that self-heals on the
@@ -193,7 +194,8 @@ checkpoint store, and the next turn resumes it instead of replaying the transcri
 cache (Anthropic uses a ~5-minute sliding TTL) decides hits. `"auto"` keeps the prompt prefix stable
 across turns, which is what lands cache reads instead of expensive re-seeds. Things that re-seed the
 cache even mid-window: switching model/variant, changing the thinking level, toggling agent/plan
-mode, or editing an earlier message (all change the exact token prefix). Tool outputs from earlier
+mode, editing an earlier message, or changing the forwarded MCP server set (tool definitions sit at
+the top of the provider's cache-prefix hierarchy, so they invalidate everything after them). Tool outputs from earlier
 turns are included (truncated) in the replay paths so a fresh/diverged agent still sees what prior
 tools produced. Set `OPENCODE_CURSOR_DEBUG=1` to log the per-turn classification and the
 `cacheReadTokens`/`cacheWriteTokens` reported by Cursor.
@@ -236,19 +238,35 @@ To disable MCP forwarding, set `provider.cursor.options.forwardMcp: false` in yo
 
 ## MCP servers
 
-The Cursor agent can use the **same MCP servers you've configured in opencode**. The plugin's
-`config` hook reads opencode's `config.mcp`, translates each entry into the Cursor SDK's
-`McpServerConfig` shape, and hands them to the agent via `Agent.create({ mcpServers })`:
+The Cursor agent can use the **same MCP servers you've configured in opencode**. Forwarding is
+**live, per turn**: the plugin's `chat.params` hook reads opencode's current MCP state
+(`client.mcp.status()` for what's actually enabled right now, `client.config.get()` for the launch
+specs), translates each entry into the Cursor SDK's `McpServerConfig` shape, and hands the set to
+the agent — so enabling or disabling an MCP server mid-session takes effect on the next turn, not
+the next restart. A startup snapshot from the `config` hook remains as the fallback when the live
+read is unavailable.
 
 | opencode `config.mcp` | → Cursor |
 | --- | --- |
 | `{ type: "local", command: [cmd, ...args], environment }` | `{ type: "stdio", command: cmd, args, env }` |
 | `{ type: "remote", url, headers }` | `{ type: "http", url, headers }` |
+| remote with registered OAuth client (`clientId`, optional secret/scopes) | `{ type: "http", url, auth: { CLIENT_ID, … } }` — the agent runs its own OAuth flow |
 
 So whatever MCP servers your `opencode.json` defines, your Cursor agent connects to those same
 servers — MCP servers are independent processes, so opencode and the agent each connect to them
 directly.
 Disabled entries (`enabled: false`) are skipped. Turn this off with `forwardMcp: false`.
+
+> **OAuth caveat.** opencode's own access tokens never land in `config.mcp`, so a remote server
+> that needs OAuth **without** a shareable `clientId` (dynamic client registration / `needs_auth`)
+> can't be forwarded — forwarding its spec would just 401. Such servers are skipped and a one-time
+> toast tells you which ones; they keep working inside opencode itself.
+>
+> **Session-reuse interaction.** A resumed Cursor agent keeps the MCP servers it was created with,
+> so when the forwarded set changes between turns the provider creates a fresh agent (full
+> transcript replay, re-pooled) instead of resuming — see
+> [Session reuse](#session-reuse-session). Tool definitions sit at the top of the provider's
+> cache-prefix hierarchy, so an MCP change also re-seeds the prompt cache.
 
 > Scope note: this forwards **MCP servers**. opencode's *loop-internal* features — its own skills
 > and subagents — are not exposed to the Cursor agent (they run inside opencode's agent loop, which
