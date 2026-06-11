@@ -22,7 +22,8 @@ import {
 	type ToolDisplay,
 } from "./stream-map.js";
 import { resolveControls } from "./controls.js";
-import { acquireAgent } from "./session-pool.js";
+import { acquireAgent, getSessionRecord } from "./session-pool.js";
+import { classifyTurn, fingerprint } from "./transcript-fingerprint.js";
 
 export interface CursorModelConfig {
 	/** Provider id used for logging and the providerOptions key (e.g. "cursor"). */
@@ -44,11 +45,16 @@ export interface CursorModelConfig {
 	/** Cursor subagent definitions made available to the agent. */
 	agents?: Record<string, AgentDefinition>;
 	/**
-	 * Reuse one Cursor agent per opencode session (resume across turns, sending
-	 * only the new message). Off by default; the default per-turn-fresh path
-	 * re-sends the full transcript and is robust to opencode's non-chat calls.
+	 * Session reuse strategy:
+	 *  - `"auto"` (default): fingerprint-guarded reuse — resume the pooled Cursor
+	 *    agent and send only the new message on a clean continuation, otherwise
+	 *    fall back to a fresh agent + full transcript. Robust to opencode's
+	 *    non-chat side calls, message edits, reverts, and compaction.
+	 *  - `true`: alias for `"auto"`.
+	 *  - `false`: always create a fresh agent per turn and re-send the full
+	 *    transcript (the original behavior; the escape hatch).
 	 */
-	session?: boolean;
+	session?: boolean | "auto";
 	/**
 	 * How Cursor's internal tool activity is surfaced (see {@link ToolDisplay}).
 	 * Defaults to `"blocks"`.
@@ -106,13 +112,56 @@ export class CursorLanguageModel implements LanguageModelV3 {
 			typeof providerOptions?.["sessionID"] === "string"
 				? (providerOptions["sessionID"] as string)
 				: undefined;
-		const useSession = this.config.session === true && Boolean(sessionID);
+		// `session` defaults to "auto" (fingerprint-guarded reuse); `true` is an
+		// alias for "auto"; `false` keeps the per-turn-fresh full-transcript path.
+		const sessionEnabled = (this.config.session ?? "auto") !== false;
 		// Power users can resume a specific Cursor agent via
 		// `providerOptions.cursor.agentId`; it takes precedence over session pooling.
 		const explicitAgentId =
 			typeof providerOptions?.["agentId"] === "string"
 				? (providerOptions["agentId"] as string)
 				: undefined;
+		// The plugin may mark opencode's non-chat side calls (e.g. title
+		// generation) so they never resume or disturb the pooled agent.
+		const ephemeral = providerOptions?.["ephemeral"] === true;
+
+		// Decide create-vs-resume and whether to pool, from the turn classification.
+		const usePool = sessionEnabled && Boolean(sessionID) && !explicitAgentId;
+		let resumeAgentId: string | undefined = explicitAgentId;
+		let poolKey: string | undefined;
+		let record: { systemHash: string; userHashes: string[] } | undefined;
+		if (usePool) {
+			const classification = ephemeral
+				? {
+						kind: "side-call" as const,
+						fingerprint: fingerprint(options.prompt),
+					}
+				: classifyTurn(getSessionRecord(sessionID!), options.prompt);
+			switch (classification.kind) {
+				case "continuation":
+					resumeAgentId = getSessionRecord(sessionID!)?.agentId;
+					poolKey = sessionID;
+					record = classification.fingerprint;
+					break;
+				case "new":
+				case "divergence":
+					poolKey = sessionID;
+					record = classification.fingerprint;
+					break;
+				case "side-call":
+					// fresh ephemeral agent; pool left untouched.
+					break;
+			}
+			if (process.env["OPENCODE_CURSOR_DEBUG"] === "1") {
+				const label =
+					classification.kind === "continuation"
+						? "resume"
+						: `fresh:${classification.kind}`;
+				console.error(
+					`[cursor:debug] turn classification=${label} session=${sessionID}`,
+				);
+			}
+		}
 
 		const acquired = await acquireAgent({
 			apiKey: this.requireApiKey(),
@@ -127,10 +176,10 @@ export class CursorLanguageModel implements LanguageModelV3 {
 				: {}),
 			...(this.config.mcpServers ? { mcpServers: this.config.mcpServers } : {}),
 			...(this.config.agents ? { agents: this.config.agents } : {}),
-			...(useSession ? { name: `opencode/${sessionID!.slice(-8)}` } : {}),
-			...(explicitAgentId ? { agentId: explicitAgentId } : {}),
-			sessionID,
-			session: useSession,
+			...(poolKey ? { name: `opencode/${sessionID!.slice(-8)}` } : {}),
+			...(resumeAgentId ? { resumeAgentId } : {}),
+			...(poolKey ? { poolKey } : {}),
+			...(record ? { record } : {}),
 		});
 
 		// A resumed agent already remembers the prior conversation, so send only the

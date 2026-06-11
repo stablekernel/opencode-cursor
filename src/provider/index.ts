@@ -50,10 +50,12 @@ export interface CursorProviderOptions {
 	/** Cursor subagent definitions (`{ description, prompt, model?, mcpServers? }`). */
 	agents?: Record<string, AgentDefinition>;
 	/**
-	 * Reuse one Cursor agent per opencode session (resume across turns instead of
-	 * creating a fresh agent each turn). Off by default.
+	 * Session reuse strategy: `"auto"` (default) resumes the pooled Cursor agent
+	 * and sends only the new message on a clean continuation, falling back to a
+	 * fresh agent + full transcript on edits/reverts/compaction/side calls; `true`
+	 * is an alias for `"auto"`; `false` always creates a fresh agent per turn.
 	 */
-	session?: boolean;
+	session?: boolean | "auto";
 	/**
 	 * How Cursor's internal tool activity (shell/read/edit/mcp/…) is surfaced:
 	 *  - `"blocks"` (default): structured provider-executed `tool-call`/
@@ -90,7 +92,7 @@ export function createCursor(options: CursorProviderOptions = {}): ProviderV3 {
 			: {}),
 		...(options.sandbox !== undefined ? { sandbox: options.sandbox } : {}),
 		...(options.agents ? { agents: options.agents } : {}),
-		...(options.session !== undefined ? { session: options.session } : {}),
+		session: options.session ?? "auto",
 		toolDisplay: options.toolDisplay ?? "blocks",
 	};
 

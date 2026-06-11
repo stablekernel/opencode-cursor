@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- **Fingerprint-guarded session reuse, now the default (`session: "auto"`).**
+  Previously the provider created a fresh Cursor agent every turn and re-sent
+  the whole transcript (robust but cache-hostile and increasingly costly as a
+  conversation grows), while opt-in `session: true` resumed one agent per
+  session but could drift from opencode's history (edits/reverts/compaction) and
+  was disturbed by non-chat side calls. `session: "auto"` (the new default)
+  hashes only the parts opencode replays verbatim — the system prompt and the
+  user-message sequence — and classifies each turn: a clean **continuation**
+  resumes the pooled agent and sends only the new message (maximizing prefix
+  cache hits); a **side-call** (system prompt differs, e.g. title generation)
+  runs a fresh ephemeral agent without touching the pool; a **divergence**
+  (edit/revert/compaction/queued messages) or a failed resume falls back to a
+  fresh agent + full transcript and re-pools. Worst case is one self-healing
+  full replay — never worse than the old default. `session: true` is now an
+  alias for `"auto"`; `session: false` keeps the always-fresh behavior.
+  Set `OPENCODE_CURSOR_DEBUG=1` to log per-turn classification and cache usage.
+- **Tool outputs are included (truncated) in flattened transcripts.** The
+  fresh/divergence/`session: false` replay paths previously dropped Cursor tool
+  results to bare `[result of X]` placeholders, so a fresh agent re-read a
+  transcript with prior tool outputs missing. Outputs are now inlined and capped
+  (2,000 chars per result, 500 per tool-call args) so context stays faithful
+  without unbounded bloat.
+
 ## [0.2.0] — 2026-06-11
 
 - **More Cursor tools map onto opencode's native tool renderers (blocks mode).**
@@ -47,7 +70,8 @@ and a permission-gated delegation tool surface.
 - **Session reuse** (`session: true`) — keeps one Cursor agent per opencode
   session via `Agent.resume()` across turns, with automatic fallback to a fresh
   agent. A run wedged by a crashed/duplicate process is recovered by retrying
-  the send once with the SDK's `local.force` escape hatch.
+  the send once with the SDK's `local.force` escape hatch. (Superseded by the
+  fingerprint-guarded `session: "auto"` default; see Unreleased.)
 - **Native diff viewer for Cursor edits (blocks mode).** A Cursor `edit` tool
   call is now surfaced under opencode's registered `edit` tool with its real
   unified diff in `metadata.diff`, so opencode renders its built-in diff viewer

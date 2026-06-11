@@ -152,20 +152,48 @@ This plugin also registers two **delegation tools** that complement the provider
 | `settingSources` | — | Cursor settings layers to load from disk: `["project","user","all",...]` — pulls in your Cursor **skills**, rules, and `.cursor/mcp.json` |
 | `sandbox` | — | Run the agent's tools inside Cursor's sandbox (`true`/`false`) |
 | `agents` | — | Cursor subagent definitions (`{ <name>: { description, prompt, model?, mcpServers? } }`) |
-| `session` | `false` | Reuse one Cursor agent per opencode session (resume across turns; see below) |
+| `session` | `"auto"` | Session reuse strategy: `"auto"` (fingerprint-guarded resume), `true` (alias for `"auto"`), or `false` (always fresh). See below |
 | `forwardMcp` | `true` | Forward opencode's configured MCP servers to the Cursor agent |
 | `mcpServers` | — | Extra MCP servers (Cursor `McpServerConfig` shape); merged with forwarded ones |
 | `toolDisplay` | `"blocks"` | How Cursor's internal tool activity is shown: `"blocks"` (structured provider-executed tool blocks; default, requires opencode 1.16+) or `"reasoning"` (compact lines, the fallback for older/non-V3 hosts). See [Tool display](#tool-display) |
 
 ### Session reuse (`session`)
 
-By default each opencode turn spins up a **fresh** Cursor agent and re-sends the full conversation
-transcript — robust, and correct even for opencode's non-chat calls (e.g. title generation). Set
-`session: true` to instead keep **one Cursor agent per opencode session**: the provider names the
-agent after the session, `Agent.resume()`s it on later turns, and sends only the new message so
-Cursor uses its native conversation memory and checkpoints (the agent is visible in Cursor's
-dashboard). The opencode session id reaches the provider via the plugin's `chat.params` hook
-(`providerOptions.cursor.sessionID`); a failed resume falls back to a fresh turn automatically.
+opencode re-sends the **entire** conversation transcript on every turn. Replaying that into a fresh
+Cursor agent each turn is robust but costs more input tokens as the conversation grows (and pays
+opencode's system prompt on top of Cursor's own). Reusing one Cursor agent and sending only the new
+message is the cache-friendly, native-CLI-like path — but a blindly resumed agent can drift from
+opencode's view of history (message edits, reverts, opencode-side compaction) and must not be
+disturbed by opencode's non-chat side calls (e.g. title generation).
+
+**`session: "auto"` (the default) resolves this with a per-turn fingerprint.** The provider hashes
+only the parts opencode replays verbatim — the system prompt and the user-message sequence — and
+classifies each turn:
+
+| Situation | Classification | What the provider does |
+| --- | --- | --- |
+| First turn of the session | **new** | fresh agent, full transcript, pool it |
+| System prompt differs (title gen and other side calls) | **side-call** | fresh ephemeral agent; the pooled agent is left untouched |
+| Prior user sequence is an exact prefix + exactly one new user message | **continuation** | `Agent.resume` the pooled agent, send **only** the new message |
+| Earlier message edited/reverted, conversation compacted, or several messages queued | **divergence** | fresh agent, full transcript, re-pool |
+
+The worst case on any misclassification is a single full-transcript replay that self-heals on the
+next turn — never worse than `session: false`. A failed resume also degrades to a fresh replay. The
+resumed agent is named after the session and visible in Cursor's dashboard; the opencode session id
+reaches the provider via the plugin's `chat.params` hook (`providerOptions.cursor.sessionID`).
+
+- `session: true` is an alias for `"auto"`.
+- `session: false` restores the original behavior: always a fresh agent + full transcript, every
+  turn. Use it if you want each turn fully independent.
+
+**Cache implications.** Cursor builds prompts cache-friendly and the model provider's own prefix
+cache (Anthropic uses a ~5-minute sliding TTL) decides hits. `"auto"` keeps the prompt prefix stable
+across turns, which is what lands cache reads instead of expensive re-seeds. Things that re-seed the
+cache even mid-window: switching model/variant, changing the thinking level, toggling agent/plan
+mode, or editing an earlier message (all change the exact token prefix). Tool outputs from earlier
+turns are included (truncated) in the replay paths so a fresh/diverged agent still sees what prior
+tools produced. Set `OPENCODE_CURSOR_DEBUG=1` to log the per-turn classification and the
+`cacheReadTokens`/`cacheWriteTokens` reported by Cursor.
 
 ### Per-request controls (`mode`, thinking level)
 
@@ -297,9 +325,10 @@ This plugin runs Cursor as a **local agent** (`Agent.create({ local: { cwd } })`
   directory. How that activity is shown is controlled by the [`toolDisplay`](#tool-display) option.
   Either way it is **not** routed through opencode's tool/permission system — Cursor runs the tools
   itself.
-- By default each turn creates a fresh local agent and sends the full conversation transcript, so
-  context is always complete. Enable `session: true` to reuse Cursor's native per-agent memory
-  across turns (see [Session reuse](#session-reuse-session)).
+- By default (`session: "auto"`) the provider resumes one Cursor agent per session and sends only
+  the new message on a clean continuation, falling back to a fresh agent + full transcript on
+  edits/reverts/compaction/side calls (see [Session reuse](#session-reuse-session)). Set
+  `session: false` to always create a fresh agent and re-send the full transcript every turn.
 - Token usage is reported from Cursor's `turn-ended` event; cost is shown as `0` because Cursor
   bills your account separately.
 - **Provider path is local.** The `cursor/*` models you chat with run as a **local** agent. Cursor's
