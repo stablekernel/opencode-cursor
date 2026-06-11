@@ -50,7 +50,7 @@ export interface AcquireAgentParams {
 	 */
 	poolKey?: string;
 	/** Fingerprint of the current prompt, stored when `poolKey` is set. */
-	record?: { systemHash: string; userHashes: string[] };
+	record?: { systemHash: string; userHashes: string[]; mcpHash?: string };
 }
 
 export interface AcquiredAgent {
@@ -111,6 +111,9 @@ export async function acquireAgent(
 			agentId: agent.agentId,
 			systemHash: params.record.systemHash,
 			userHashes: params.record.userHashes,
+			...(params.record.mcpHash !== undefined
+				? { mcpHash: params.record.mcpHash }
+				: {}),
 		});
 	}
 

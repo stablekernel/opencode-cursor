@@ -76,6 +76,20 @@ describe("acquireAgent", () => {
 		expect(getPooledAgentId("s1")).toBe("a2");
 	});
 
+	it("persists mcpHash in the pooled record when provided", async () => {
+		create.mockResolvedValue(fakeAgent("a1"));
+		await acquireAgent({
+			...base,
+			poolKey: "s1",
+			record: { ...rec, mcpHash: "mcp-v1" },
+		});
+		expect(getSessionRecord("s1")).toEqual({
+			agentId: "a1",
+			...rec,
+			mcpHash: "mcp-v1",
+		});
+	});
+
 	it("re-pools a new record under the same session (divergence)", async () => {
 		create.mockResolvedValueOnce(fakeAgent("a1"));
 		await acquireAgent({ ...base, poolKey: "s1", record: rec });

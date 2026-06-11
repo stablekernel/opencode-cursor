@@ -23,7 +23,11 @@ import {
 } from "./stream-map.js";
 import { resolveControls } from "./controls.js";
 import { acquireAgent, getSessionRecord } from "./session-pool.js";
-import { classifyTurn, fingerprint } from "./transcript-fingerprint.js";
+import {
+	classifyTurn,
+	fingerprint,
+	mcpServersFingerprint,
+} from "./transcript-fingerprint.js";
 
 export interface CursorModelConfig {
 	/** Provider id used for logging and the providerOptions key (e.g. "cursor"). */
@@ -112,6 +116,14 @@ export class CursorLanguageModel implements LanguageModelV3 {
 			typeof providerOptions?.["sessionID"] === "string"
 				? (providerOptions["sessionID"] as string)
 				: undefined;
+		// MCP servers may be re-forwarded per turn by the plugin's chat.params hook
+		// (reflecting live opencode enable/disable). When present, the dynamic set
+		// wins over the static startup snapshot baked into config.mcpServers.
+		const dynamicMcp = providerOptions?.["mcpServers"] as
+			| Record<string, McpServerConfig>
+			| undefined;
+		const mcpServers = dynamicMcp ?? this.config.mcpServers;
+		const mcpHash = mcpServersFingerprint(mcpServers);
 		// `session` defaults to "auto" (fingerprint-guarded reuse); `true` is an
 		// alias for "auto"; `false` keeps the per-turn-fresh full-transcript path.
 		const sessionEnabled = (this.config.session ?? "auto") !== false;
@@ -129,7 +141,9 @@ export class CursorLanguageModel implements LanguageModelV3 {
 		const usePool = sessionEnabled && Boolean(sessionID) && !explicitAgentId;
 		let resumeAgentId: string | undefined = explicitAgentId;
 		let poolKey: string | undefined;
-		let record: { systemHash: string; userHashes: string[] } | undefined;
+		let record:
+			| { systemHash: string; userHashes: string[]; mcpHash?: string }
+			| undefined;
 		if (usePool) {
 			const classification = ephemeral
 				? {
@@ -138,15 +152,22 @@ export class CursorLanguageModel implements LanguageModelV3 {
 					}
 				: classifyTurn(getSessionRecord(sessionID!), options.prompt);
 			switch (classification.kind) {
-				case "continuation":
-					resumeAgentId = getSessionRecord(sessionID!)?.agentId;
+				case "continuation": {
+					const prev = getSessionRecord(sessionID!);
+					// A resumed agent keeps its original MCP servers, so only resume
+					// when the live MCP set is unchanged; otherwise create fresh so the
+					// new server set takes effect (re-pooled under the same session).
+					if (prev?.mcpHash === mcpHash) {
+						resumeAgentId = prev?.agentId;
+					}
 					poolKey = sessionID;
-					record = classification.fingerprint;
+					record = { ...classification.fingerprint, mcpHash };
 					break;
+				}
 				case "new":
 				case "divergence":
 					poolKey = sessionID;
-					record = classification.fingerprint;
+					record = { ...classification.fingerprint, mcpHash };
 					break;
 				case "side-call":
 					// fresh ephemeral agent; pool left untouched.
@@ -174,7 +195,7 @@ export class CursorLanguageModel implements LanguageModelV3 {
 			...(this.config.sandbox !== undefined
 				? { sandbox: this.config.sandbox }
 				: {}),
-			...(this.config.mcpServers ? { mcpServers: this.config.mcpServers } : {}),
+			...(mcpServers ? { mcpServers } : {}),
 			...(this.config.agents ? { agents: this.config.agents } : {}),
 			...(poolKey ? { name: `opencode/${sessionID!.slice(-8)}` } : {}),
 			...(resumeAgentId ? { resumeAgentId } : {}),

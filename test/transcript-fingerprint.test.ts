@@ -3,6 +3,7 @@ import type { LanguageModelV3Prompt } from "@ai-sdk/provider";
 import {
 	classifyTurn,
 	fingerprint,
+	mcpServersFingerprint,
 	type TranscriptRecord,
 } from "../src/provider/transcript-fingerprint.js";
 
@@ -88,6 +89,36 @@ describe("classifyTurn", () => {
 		const prev = record([sys("S"), img()]);
 		const turn2 = [sys("S"), img(), assistant("seen"), user("and now?")];
 		expect(classifyTurn(prev, turn2).kind).toBe("continuation");
+	});
+});
+
+describe("mcpServersFingerprint", () => {
+	it("hashes empty/undefined sets to the same empty string", () => {
+		expect(mcpServersFingerprint(undefined)).toBe("");
+		expect(mcpServersFingerprint({})).toBe("");
+	});
+
+	it("is independent of key insertion order", () => {
+		const a = mcpServersFingerprint({
+			serena: { type: "stdio", command: "serena" },
+			ctx: { type: "http", url: "https://x" },
+		});
+		const b = mcpServersFingerprint({
+			ctx: { type: "http", url: "https://x" },
+			serena: { type: "stdio", command: "serena" },
+		});
+		expect(a).toBe(b);
+	});
+
+	it("changes when a server is added or removed", () => {
+		const one = mcpServersFingerprint({
+			serena: { type: "stdio", command: "serena" },
+		});
+		const two = mcpServersFingerprint({
+			serena: { type: "stdio", command: "serena" },
+			ctx: { type: "http", url: "https://x" },
+		});
+		expect(one).not.toBe(two);
 	});
 });
 

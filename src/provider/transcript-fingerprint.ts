@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { LanguageModelV3Prompt } from "@ai-sdk/provider";
+import type { McpServerConfig } from "@cursor/sdk";
 
 /**
  * Per-session bookkeeping that lets the provider decide, on each turn, whether
@@ -21,6 +22,12 @@ export interface TranscriptRecord {
 	systemHash: string;
 	/** Ordered hash per user message (text + a stable image token). */
 	userHashes: string[];
+	/**
+	 * Hash of the MCP server set the pooled agent was created with. A resumed
+	 * Cursor agent keeps its original MCP servers, so when this changes between
+	 * turns the pool must create a fresh agent rather than resume.
+	 */
+	mcpHash?: string;
 }
 
 /** What kind of turn this is relative to the session's last recorded state. */
@@ -42,6 +49,19 @@ export interface TurnClassification {
 
 function sha(input: string): string {
 	return createHash("sha256").update(input).digest("hex");
+}
+
+/**
+ * Stable hash of the MCP server set handed to `Agent.create`. Keys are sorted
+ * so map ordering never changes the result; empty/undefined sets hash to "".
+ */
+export function mcpServersFingerprint(
+	servers: Record<string, McpServerConfig> | undefined,
+): string {
+	if (!servers) return "";
+	const keys = Object.keys(servers).sort();
+	if (keys.length === 0) return "";
+	return sha(JSON.stringify(keys.map((k) => [k, servers[k]])));
 }
 
 /** Stable key for one user message: its text plus a token per attached image. */
