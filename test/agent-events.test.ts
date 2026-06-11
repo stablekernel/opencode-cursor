@@ -126,7 +126,7 @@ describe("streamAgentTurn MCP error surfacing", () => {
 					callId: "c1",
 					toolCall: {
 						type: "mcp",
-						args: { toolName: "find_symbol", providerIdentifier: "serena" },
+						args: { toolName: "find_symbol", providerIdentifier: "myserver" },
 						result: {
 							status: "success",
 							value: { content: [], isError: true },
@@ -141,6 +141,6 @@ describe("streamAgentTurn MCP error surfacing", () => {
 			streamAgentTurn(agent, MESSAGE, { mode: "agent" }),
 		);
 		const result = events.find((e) => e.type === "tool-result");
-		expect(result).toMatchObject({ name: "serena/find_symbol", isError: true });
+		expect(result).toMatchObject({ name: "myserver/find_symbol", isError: true });
 	});
 });

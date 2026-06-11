@@ -35,7 +35,7 @@ export interface CursorModelConfig {
 	mode: AgentModeOption;
 	/** Default Cursor model params (id -> value); overridable per-request. */
 	params?: Record<string, string>;
-	/** MCP servers forwarded to the Cursor agent (e.g. opencode's Serena). */
+	/** MCP servers forwarded to the Cursor agent from opencode's config. */
 	mcpServers?: Record<string, McpServerConfig>;
 	/** Cursor settings layers to load from disk (skills, rules, .cursor/mcp.json). */
 	settingSources?: SettingSource[];

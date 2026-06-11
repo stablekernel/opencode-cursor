@@ -8,7 +8,6 @@ coverage/
 *.tgz
 
 # Local editor / agent tooling
-.serena/
 .opencode/
 .claude/
 

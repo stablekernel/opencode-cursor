@@ -214,8 +214,9 @@ The Cursor agent can use the **same MCP servers you've configured in opencode**.
 | `{ type: "local", command: [cmd, ...args], environment }` | `{ type: "stdio", command: cmd, args, env }` |
 | `{ type: "remote", url, headers }` | `{ type: "http", url, headers }` |
 
-So if your `opencode.json` defines Serena, your Cursor agent connects to that same Serena — MCP
-servers are independent processes, so opencode and the agent each connect to them directly.
+So whatever MCP servers your `opencode.json` defines, your Cursor agent connects to those same
+servers — MCP servers are independent processes, so opencode and the agent each connect to them
+directly.
 Disabled entries (`enabled: false`) are skipped. Turn this off with `forwardMcp: false`.
 
 > Scope note: this forwards **MCP servers**. opencode's *loop-internal* features — its own skills
