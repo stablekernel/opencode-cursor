@@ -145,11 +145,11 @@ describe("cursorEventsToStream", () => {
 				result: { ok: true },
 				isError: false,
 			},
-			{ type: "tool-call", id: "c2", name: "serena/find_symbol", input: {} },
+			{ type: "tool-call", id: "c2", name: "myserver/find_symbol", input: {} },
 			{
 				type: "tool-result",
 				id: "c2",
-				name: "serena/find_symbol",
+				name: "myserver/find_symbol",
 				result: { e: 1 },
 				isError: true,
 			},
@@ -176,7 +176,7 @@ describe("cursorEventsToStream", () => {
 		expect(reasoning).toContain("[tool] write");
 		expect(reasoning).toContain('{"path":"a.txt"}');
 		// A failed tool surfaces its failure; a successful one does not add a status line.
-		expect(reasoning).toContain("[tool] serena/find_symbol failed");
+		expect(reasoning).toContain("[tool] myserver/find_symbol failed");
 		expect(reasoning).not.toContain("write failed");
 
 		// The final answer text is unpolluted by tool noise.
@@ -205,13 +205,13 @@ describe("cursorEventsToStream", () => {
 			{
 				type: "tool-call",
 				id: "c2",
-				name: "serena/find_symbol",
+				name: "myserver/find_symbol",
 				input: { q: "x" },
 			},
 			{
 				type: "tool-result",
 				id: "c2",
-				name: "serena/find_symbol",
+				name: "myserver/find_symbol",
 				result: { err: "no" },
 				isError: true,
 			},
@@ -255,7 +255,7 @@ describe("cursorEventsToStream", () => {
 		});
 		expect(results[1]).toMatchObject({
 			toolCallId: "c2",
-			toolName: "cursor_serena_find_symbol",
+			toolName: "cursor_myserver_find_symbol",
 			result: { err: "no" },
 			isError: true,
 		});

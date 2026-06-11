@@ -35,8 +35,8 @@ export interface CursorProviderOptions {
 	/**
 	 * MCP servers to make available to the Cursor agent, keyed by name. The
 	 * plugin's `config` hook populates this by translating opencode's configured
-	 * `config.mcp` servers, so the agent can use the same MCP servers (e.g.
-	 * Serena) that opencode does.
+	 * `config.mcp` servers, so the agent can use the same MCP servers that
+	 * opencode does.
 	 */
 	mcpServers?: Record<string, McpServerConfig>;
 	/**

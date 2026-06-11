@@ -43,7 +43,7 @@ function safeJsonString(input: unknown): string {
 /**
  * Tool name as it crosses into opencode in "blocks" mode. Prefixed so it can
  * never collide with a tool opencode has registered, and sanitized because MCP
- * names contain `/` (e.g. `serena/find_symbol` → `cursor_serena_find_symbol`).
+ * names contain `/` (e.g. `myserver/find_symbol` → `cursor_myserver_find_symbol`).
  */
 function blockToolName(name: string): string {
 	return `cursor_${name.replace(/[^A-Za-z0-9_-]/g, "_")}`;

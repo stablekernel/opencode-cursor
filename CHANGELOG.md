@@ -61,7 +61,7 @@ and a permission-gated delegation tool surface.
   - `"blocks"` (default) emits structured, provider-executed **dynamic** `tool-call` /
     `tool-result` parts so opencode renders native tool blocks. Names are
     `cursor_`-prefixed and sanitized (`shell` → `cursor_shell`,
-    `serena/find_symbol` → `cursor_serena_find_symbol`) so they can't collide
+    `myserver/find_symbol` → `cursor_myserver_find_symbol`) so they can't collide
     with opencode-registered tools, and carry `providerExecuted: true` +
     `dynamic: true` so ai v6's `parseToolCall` accepts them without
     registered-tool validation. Tool-results use the V3-spec `result` +
@@ -97,7 +97,7 @@ and a permission-gated delegation tool surface.
   rather than showing only the fallback snapshot.
 - **MCP server forwarding** — opencode's configured `config.mcp` entries are
   translated to Cursor `McpServerConfig` and passed to the local agent so it can
-  use the same servers (e.g. Serena). Opt out with `provider.cursor.options.forwardMcp`.
+  use the same servers. Opt out with `provider.cursor.options.forwardMcp`.
 - **Model discovery** with a 24-hour cache (keyed by key fingerprint) and a
   built-in fallback snapshot (composer-2.5, claude-opus-4-8, claude-sonnet-4-6,
   gpt-5.5) for use without an API key.
