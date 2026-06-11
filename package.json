@@ -58,6 +58,11 @@
     "@cursor/sdk": "^1.0.18",
     "@opencode-ai/plugin": "^1.17.1"
   },
+  "overrides": {
+    "undici": "^6.24.0",
+    "tar": "^7.5.11",
+    "node-gyp": "^12.4.0"
+  },
   "peerDependencies": {
     "@ai-sdk/provider": "^3.0.0"
   },
