@@ -108,7 +108,10 @@ describe("cursorEventsToStream", () => {
 				type: "tool-result",
 				id: "c1",
 				name: "shell",
-				result: { status: "success", value: { stdout: "a.ts", stderr: "", exitCode: 0 } },
+				result: {
+					status: "success",
+					value: { stdout: "a.ts", stderr: "", exitCode: 0 },
+				},
 				isError: false,
 			},
 			{ type: "text-delta", text: "Found it." },
@@ -147,7 +150,10 @@ describe("cursorEventsToStream", () => {
 				type: "tool-result",
 				id: "c1",
 				name: "shell",
-				result: { status: "success", value: { stdout: "", stderr: "", exitCode: 0 } },
+				result: {
+					status: "success",
+					value: { stdout: "", stderr: "", exitCode: 0 },
+				},
 				isError: false,
 			},
 			{ type: "reasoning-delta", text: "now I see" },

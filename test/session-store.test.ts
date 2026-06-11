@@ -26,7 +26,9 @@ function record(
 const DAY = 24 * 60 * 60 * 1000;
 
 beforeEach(() => {
-	process.env.XDG_CACHE_HOME = mkdtempSync(join(tmpdir(), "cursor-store-test-"));
+	process.env.XDG_CACHE_HOME = mkdtempSync(
+		join(tmpdir(), "cursor-store-test-"),
+	);
 });
 
 describe("session store", () => {
@@ -38,7 +40,10 @@ describe("session store", () => {
 		]);
 		saveSessionRecords(map, now);
 		const loaded = loadSessionRecords(now);
-		expect(loaded.get("s1")).toMatchObject({ agentId: "a1", mcpHash: "mcp-v1" });
+		expect(loaded.get("s1")).toMatchObject({
+			agentId: "a1",
+			mcpHash: "mcp-v1",
+		});
 		expect(loaded.get("s2")).toMatchObject({ agentId: "a2" });
 	});
 
