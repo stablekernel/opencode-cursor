@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-06-11
+
 - **More Cursor tools map onto opencode's native tool renderers (blocks mode).**
   Following the `edit` → diff-viewer mapping, Cursor's `shell`, `read`, `write`,
   `glob`, `grep`, `ls`, `updateTodos`, and `task` tool activity is now surfaced
