@@ -20,6 +20,11 @@ All notable changes to this project will be documented in this file.
   full replay — never worse than the old default. `session: true` is now an
   alias for `"auto"`; `session: false` keeps the always-fresh behavior.
   Set `OPENCODE_CURSOR_DEBUG=1` to log per-turn classification and cache usage.
+- **Session reuse survives opencode restarts.** The pool's fingerprint records
+  persist (best-effort) to `~/.cache/opencode-cursor/session-pool.json` (7-day
+  TTL, 200-entry LRU cap), so the first turn after a restart resumes the
+  session's Cursor agent — whose conversation lives in Cursor's own checkpoint
+  store — instead of paying a cache-cold full-transcript replay.
 - **Tool outputs are included (truncated) in flattened transcripts.** The
   fresh/divergence/`session: false` replay paths previously dropped Cursor tool
   results to bare `[result of X]` placeholders, so a fresh agent re-read a

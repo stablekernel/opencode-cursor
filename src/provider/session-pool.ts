@@ -6,24 +6,54 @@ import type {
 	SettingSource,
 } from "@cursor/sdk";
 import { loadAgentBackend, type AgentLike } from "./agent-backend.js";
+import {
+	deleteSessionStore,
+	loadSessionRecords,
+	saveSessionRecords,
+	type StoredSessionRecord,
+} from "./session-store.js";
 import type { TranscriptRecord } from "./transcript-fingerprint.js";
 
 /** sessionID -> fingerprint record, so a session reuses one Cursor agent across turns. */
-const pool = new Map<string, TranscriptRecord>();
+const pool = new Map<string, StoredSessionRecord>();
+
+/**
+ * Lazily merge disk-persisted records into the in-memory pool (memory wins),
+ * so `session: "auto"` resumes a session's Cursor agent even after an opencode
+ * restart. The agent's conversation itself lives in Cursor's checkpoint store;
+ * this only restores our agentId + fingerprint bookkeeping.
+ */
+let hydrated = false;
+function hydrate(): void {
+	if (hydrated) return;
+	hydrated = true;
+	for (const [key, record] of loadSessionRecords()) {
+		if (!pool.has(key)) pool.set(key, record);
+	}
+}
 
 /** Read the fingerprint record pooled for a session (undefined if none). */
 export function getSessionRecord(
 	sessionID: string,
 ): TranscriptRecord | undefined {
+	hydrate();
 	return pool.get(sessionID);
 }
 
 /** Test/diagnostic helpers. */
 export function getPooledAgentId(sessionID: string): string | undefined {
+	hydrate();
 	return pool.get(sessionID)?.agentId;
 }
 export function clearAgentPool(): void {
 	pool.clear();
+	hydrated = true; // don't re-hydrate stale disk state into a cleared pool
+	deleteSessionStore();
+}
+/** Test hook: drop in-memory state only, as if the process restarted. */
+export function resetSessionPoolMemory(): void {
+	pool.clear();
+	hydrated = false;
 }
 
 export interface AcquireAgentParams {
@@ -107,6 +137,7 @@ export async function acquireAgent(
 
 	const pooling = params.poolKey !== undefined;
 	if (pooling && params.record) {
+		hydrate();
 		pool.set(params.poolKey!, {
 			agentId: agent.agentId,
 			systemHash: params.record.systemHash,
@@ -114,7 +145,10 @@ export async function acquireAgent(
 			...(params.record.mcpHash !== undefined
 				? { mcpHash: params.record.mcpHash }
 				: {}),
+			updatedAt: Date.now(),
 		});
+		// Persist so session reuse survives opencode restarts (best-effort).
+		saveSessionRecords(pool);
 	}
 
 	const release = () => {

@@ -181,6 +181,9 @@ The worst case on any misclassification is a single full-transcript replay that 
 next turn — never worse than `session: false`. A failed resume also degrades to a fresh replay. The
 resumed agent is named after the session and visible in Cursor's dashboard; the opencode session id
 reaches the provider via the plugin's `chat.params` hook (`providerOptions.cursor.sessionID`).
+Fingerprint records persist (best-effort) to `~/.cache/opencode-cursor/session-pool.json`, so
+session reuse survives opencode restarts — the conversation itself lives in Cursor's own local
+checkpoint store, and the next turn resumes it instead of replaying the transcript.
 
 - `session: true` is an alias for `"auto"`.
 - `session: false` restores the original behavior: always a fresh agent + full transcript, every

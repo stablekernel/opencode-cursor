@@ -1,4 +1,10 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+// Sandbox the on-disk session store away from the user's real cache dir.
+process.env.XDG_CACHE_HOME = mkdtempSync(join(tmpdir(), "cursor-pool-test-"));
 
 const create = vi.fn();
 const resume = vi.fn();
@@ -7,8 +13,13 @@ vi.mock("../src/cursor-runtime.js", () => ({
 	loadCursorSdk: async () => ({ Agent: { create, resume } }),
 }));
 
-const { acquireAgent, clearAgentPool, getPooledAgentId, getSessionRecord } =
-	await import("../src/provider/session-pool.js");
+const {
+	acquireAgent,
+	clearAgentPool,
+	getPooledAgentId,
+	getSessionRecord,
+	resetSessionPoolMemory,
+} = await import("../src/provider/session-pool.js");
 
 function fakeAgent(agentId: string) {
 	return { agentId, close: vi.fn() };
@@ -45,7 +56,7 @@ describe("acquireAgent", () => {
 		const r = await acquireAgent({ ...base, poolKey: "s1", record: rec });
 		expect(r.resumed).toBe(false);
 		expect(getPooledAgentId("s1")).toBe("a1");
-		expect(getSessionRecord("s1")).toEqual({ agentId: "a1", ...rec });
+		expect(getSessionRecord("s1")).toMatchObject({ agentId: "a1", ...rec });
 		r.release();
 		expect(r.agent.close).not.toHaveBeenCalled(); // pooled agents persist
 	});
@@ -83,7 +94,7 @@ describe("acquireAgent", () => {
 			poolKey: "s1",
 			record: { ...rec, mcpHash: "mcp-v1" },
 		});
-		expect(getSessionRecord("s1")).toEqual({
+		expect(getSessionRecord("s1")).toMatchObject({
 			agentId: "a1",
 			...rec,
 			mcpHash: "mcp-v1",
@@ -98,7 +109,44 @@ describe("acquireAgent", () => {
 		create.mockResolvedValueOnce(fakeAgent("a2"));
 		const next = { systemHash: "sys", userHashes: ["u1", "u2", "edited"] };
 		await acquireAgent({ ...base, poolKey: "s1", record: next });
-		expect(getSessionRecord("s1")).toEqual({ agentId: "a2", ...next });
+		expect(getSessionRecord("s1")).toMatchObject({ agentId: "a2", ...next });
+	});
+
+	it("survives a process restart: records rehydrate from disk", async () => {
+		create.mockResolvedValue(fakeAgent("a1"));
+		await acquireAgent({
+			...base,
+			poolKey: "s1",
+			record: { ...rec, mcpHash: "mcp-v1" },
+		});
+
+		// Simulate an opencode restart: in-memory pool gone, disk store intact.
+		resetSessionPoolMemory();
+		expect(getSessionRecord("s1")).toMatchObject({
+			agentId: "a1",
+			...rec,
+			mcpHash: "mcp-v1",
+		});
+	});
+
+	it("prefers in-memory state over stale disk state when both exist", async () => {
+		create.mockResolvedValueOnce(fakeAgent("a1"));
+		await acquireAgent({ ...base, poolKey: "s1", record: rec });
+
+		// Restart, rehydrate, then advance the conversation in-memory.
+		resetSessionPoolMemory();
+		create.mockResolvedValueOnce(fakeAgent("a2"));
+		const next = { systemHash: "sys", userHashes: ["u1", "u2"] };
+		await acquireAgent({ ...base, poolKey: "s1", record: next });
+		expect(getSessionRecord("s1")).toMatchObject({ agentId: "a2", ...next });
+	});
+
+	it("clearAgentPool wipes the disk store too", async () => {
+		create.mockResolvedValue(fakeAgent("a1"));
+		await acquireAgent({ ...base, poolKey: "s1", record: rec });
+		clearAgentPool();
+		resetSessionPoolMemory(); // would rehydrate if the file survived
+		expect(getSessionRecord("s1")).toBeUndefined();
 	});
 
 	it("resumes an explicit agent without pooling (no poolKey)", async () => {
