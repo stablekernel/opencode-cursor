@@ -894,9 +894,30 @@ describe("native tool mapping (blocks)", () => {
 			input: JSON.stringify({ filePath: "/a.ts" }),
 		});
 		expect(foldedResult(result)).toMatchObject({
-			title: "/a.ts",
+			title: "/a.ts (2/2 lines)",
 			output: "l1\nl2",
-			metadata: { preview: "l1\nl2", totalLines: 2 },
+			metadata: {
+				preview: "l1\nl2",
+				totalLines: 2,
+				linesReturned: 2,
+				fileSize: 6,
+			},
+		});
+	});
+
+	it("read title shows lines-read/total when Cursor truncates the file", async () => {
+		const { result } = await mapTool(
+			"read",
+			{ path: "/a.ts" },
+			{
+				status: "success",
+				value: { content: "l1", totalLines: 10, fileSize: 99 },
+			},
+		);
+		expect(foldedResult(result)).toMatchObject({
+			title: "/a.ts (1/10 lines)",
+			output: "l1",
+			metadata: { linesReturned: 1, totalLines: 10, fileSize: 99 },
 		});
 	});
 
