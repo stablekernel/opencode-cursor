@@ -939,6 +939,7 @@ describe("native tool mapping (blocks)", () => {
 			input: JSON.stringify({ pattern: "**/*.ts", path: "/src" }),
 		});
 		expect(foldedResult(result)).toMatchObject({
+			title: "**/*.ts in /src",
 			metadata: { count: 2, truncated: false },
 			output: "/src/a.ts\n/src/b.ts",
 		});
@@ -969,7 +970,10 @@ describe("native tool mapping (blocks)", () => {
 			toolName: "grep",
 			input: JSON.stringify({ pattern: "foo", path: "/src", include: "*.ts" }),
 		});
-		expect(foldedResult(result)).toMatchObject({ metadata: { matches: 1 } });
+		expect(foldedResult(result)).toMatchObject({
+			title: "foo (*.ts) in /src",
+			metadata: { matches: 1 },
+		});
 		expect(foldedResult(result).output).toContain("/src/a.ts:");
 		expect(foldedResult(result).output).toContain("Line 3: const foo = 1");
 	});
