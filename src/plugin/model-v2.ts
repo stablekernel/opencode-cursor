@@ -1,7 +1,7 @@
 import type { Model as ModelV2 } from "@opencode-ai/sdk/v2";
 import type { ModelListItem } from "@cursor/sdk";
 import { modelSupportsReasoning } from "../model-discovery.js";
-import { buildModelVariants } from "../model-variants.js";
+import { buildModelVariants, defaultModelParams } from "../model-variants.js";
 
 export const PROVIDER_ID = "cursor";
 export const NPM_PACKAGE = "@stablekernel/opencode-cursor";
@@ -26,6 +26,7 @@ export function providerNpm(): string {
 export function buildModelV2Map(items: ModelListItem[]): Record<string, ModelV2> {
   const out: Record<string, ModelV2> = {};
   for (const item of items) {
+    const params = defaultModelParams(item);
     out[item.id] = {
       id: item.id,
       providerID: PROVIDER_ID,
@@ -43,7 +44,7 @@ export function buildModelV2Map(items: ModelListItem[]): Record<string, ModelV2>
       cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
       limit: { context: 200_000, output: 32_000 },
       status: "active",
-      options: {},
+      options: Object.keys(params).length > 0 ? { params } : {},
       headers: {},
       release_date: "",
       variants: buildModelVariants(item) as ModelV2["variants"],

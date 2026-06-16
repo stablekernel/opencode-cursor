@@ -151,8 +151,13 @@ survives opencode restarts.
 
 ### Per-request controls (`mode`, thinking level)
 
-The plugin auto-generates model variants for each reasoning/effort level a model advertises.
-Selecting a variant in the model picker sends its settings through `providerOptions.cursor`.
+The plugin auto-generates model variants for each reasoning/effort level a model advertises,
+plus a `fast` toggle for models that expose Cursor's fast tier. Selecting a variant in the
+model picker sends its settings through `providerOptions.cursor`.
+
+`fast` defaults **off** (even though Cursor's own default is `fast: true` for some models, e.g.
+Composer and the codex line) so opencode never silently runs the fast tier — pick the `fast`
+variant to opt in, or set it per model under `options.params.fast` below.
 
 opencode's **plan agent** (`Tab`) maps to Cursor's plan mode automatically — no manual config
 needed.
