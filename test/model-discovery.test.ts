@@ -62,6 +62,23 @@ describe("toOpencodeModels", () => {
     // No reasoning params → no variants (plan is an opencode agent, not a variant).
     expect(map["plain"]!.variants).toEqual({});
   });
+
+  it("seeds the fast-off default into a fast-capable model's options.params", () => {
+    // The config-seeded models map is the only channel through which per-model
+    // defaults reach opencode, so a fast-capable model must default `fast` OFF
+    // here (sent on every turn unless the user picks the `fast` variant).
+    const map = toOpencodeModels([
+      {
+        id: "composer-2.5",
+        displayName: "Composer 2.5",
+        parameters: [{ id: "fast", values: [{ value: "false" }, { value: "true" }] }],
+      },
+      { id: "plain", displayName: "Plain Model" },
+    ]);
+    expect(map["composer-2.5"]!.options).toEqual({ params: { fast: "false" } });
+    expect(map["composer-2.5"]!.variants).toEqual({ fast: { params: { fast: "true" } } });
+    expect(map["plain"]!.options).toEqual({});
+  });
 });
 
 describe("discoverModels without a key", () => {
