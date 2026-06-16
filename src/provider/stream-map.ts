@@ -361,15 +361,17 @@ const NATIVE_ADAPTERS: Record<string, NativeToolAdapter> = {
 			const dir = strField(args, "targetDirectory");
 			return dir ? { pattern, path: dir } : { pattern };
 		},
-		result: (value) => {
+		result: (value, args) => {
 			if (!isRecord(value) || !Array.isArray(value["files"])) return null;
 			const files = (value["files"] as unknown[]).filter(
 				(f): f is string => typeof f === "string",
 			);
 			const truncated =
 				value["clientTruncated"] === true || value["ripgrepTruncated"] === true;
+			const pattern = strField(args, "globPattern") ?? "";
+			const dir = strField(args, "targetDirectory");
 			return {
-				title: "",
+				title: dir ? `${pattern} in ${dir}` : pattern,
 				metadata: { count: files.length, truncated },
 				output: files.length > 0 ? files.join("\n") : "No files found",
 			};
@@ -388,7 +390,7 @@ const NATIVE_ADAPTERS: Record<string, NativeToolAdapter> = {
 			if (g) out["include"] = g;
 			return out;
 		},
-		result: (value) => {
+		result: (value, args) => {
 			if (!isRecord(value)) return null;
 			const unions: unknown[] = [];
 			const ws = value["workspaceResults"];
@@ -434,8 +436,14 @@ const NATIVE_ADAPTERS: Record<string, NativeToolAdapter> = {
 					}
 				}
 			}
+			const pattern = strField(args, "pattern") ?? "";
+			const glob = strField(args, "glob");
+			const path = strField(args, "path");
+			let title = pattern;
+			if (glob) title += ` (${glob})`;
+			if (path) title += ` in ${path}`;
 			return {
-				title: "",
+				title,
 				metadata: { matches: total, truncated: false },
 				output:
 					total > 0
