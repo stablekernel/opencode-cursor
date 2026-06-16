@@ -3,7 +3,7 @@ import { fingerprintApiKey, resolveCursorApiKey } from "./api-key.js";
 import { readLatestModelCache, readModelCache, writeModelCache } from "./model-cache.js";
 import { FALLBACK_MODELS } from "./fallback-models.js";
 import { loadCursorSdk } from "./cursor-runtime.js";
-import { buildModelVariants, type CursorVariant } from "./model-variants.js";
+import { buildModelVariants, defaultModelParams, type CursorVariant } from "./model-variants.js";
 
 export type ModelSource = "live" | "cache" | "fallback";
 
@@ -98,6 +98,13 @@ export interface OpencodeModelConfigEntry {
    * through which cursor model variants reach the picker.
    */
   variants: Record<string, CursorVariant>;
+  /**
+   * Default `providerOptions.cursor` for the model, merged into every request
+   * unless a variant overrides it. Carries the non-reasoning boolean defaults
+   * (e.g. `{ params: { fast: "false" } }`) so the provider never silently runs
+   * Cursor's server-side `fast` default. See {@link defaultModelParams}.
+   */
+  options: { params?: Record<string, string> };
 }
 
 /**
@@ -108,6 +115,7 @@ export interface OpencodeModelConfigEntry {
 export function toOpencodeModels(items: ModelListItem[]): Record<string, OpencodeModelConfigEntry> {
   const out: Record<string, OpencodeModelConfigEntry> = {};
   for (const item of items) {
+    const params = defaultModelParams(item);
     out[item.id] = {
       id: item.id,
       name: item.displayName || item.id,
@@ -116,6 +124,7 @@ export function toOpencodeModels(items: ModelListItem[]): Record<string, Opencod
       temperature: false,
       tool_call: true,
       variants: buildModelVariants(item),
+      options: Object.keys(params).length > 0 ? { params } : {},
     };
   }
   return out;

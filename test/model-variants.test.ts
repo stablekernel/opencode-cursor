@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ModelListItem } from "@cursor/sdk";
-import { buildModelVariants } from "../src/model-variants.js";
+import { buildModelVariants, defaultModelParams } from "../src/model-variants.js";
 
 function model(parameters: ModelListItem["parameters"]): ModelListItem {
   return { id: "m", displayName: "M", parameters };
@@ -54,19 +54,57 @@ describe("buildModelVariants", () => {
     });
   });
 
-  it("ignores non-reasoning params and offers no plan variant", () => {
-    // fast/context are not reasoning levels; plan is opencode's plan AGENT
-    // (Tab), mapped via the chat.params hook — not a model variant.
+  it("surfaces a non-reasoning boolean (fast) as an opt-in toggle; ignores enum context", () => {
+    // `fast` is Cursor's fast-tier toggle. It is not a reasoning level, but the
+    // user must be able to opt INTO it from the picker (default is off, sent
+    // explicitly via defaultModelParams). `context` is an enum, still unsupported.
+    // plan is opencode's plan AGENT (Tab), mapped via the chat.params hook.
     const variants = buildModelVariants(
       model([
         { id: "fast", values: [{ value: "false" }, { value: "true" }] },
         { id: "context", values: [{ value: "300k" }, { value: "1m" }] },
       ]),
     );
-    expect(variants).toEqual({});
+    expect(variants).toEqual({ fast: { params: { fast: "true" } } });
+  });
+
+  it("bakes the fast-off default into reasoning variants for fast-capable models", () => {
+    // Cursor defaults `fast` to true for several models (composer/codex). When
+    // the user picks a reasoning level we must pin fast OFF explicitly, so a
+    // reasoning selection never silently falls back to Cursor's fast default.
+    const variants = buildModelVariants(
+      model([
+        { id: "effort", values: [{ value: "low" }, { value: "high" }] },
+        { id: "fast", values: [{ value: "false" }, { value: "true" }] },
+      ]),
+    );
+    expect(variants).toEqual({
+      low: { params: { effort: "low", fast: "false" } },
+      high: { params: { effort: "high", fast: "false" } },
+      fast: { params: { fast: "true" } },
+    });
   });
 
   it("returns no variants for a model without parameters", () => {
     expect(buildModelVariants(model(undefined))).toEqual({});
+  });
+});
+
+describe("defaultModelParams", () => {
+  it("defaults non-reasoning boolean params (fast) OFF", () => {
+    expect(
+      defaultModelParams(
+        model([{ id: "fast", values: [{ value: "false" }, { value: "true" }] }]),
+      ),
+    ).toEqual({ fast: "false" });
+  });
+
+  it("returns no defaults for models without non-reasoning booleans", () => {
+    expect(
+      defaultModelParams(
+        model([{ id: "effort", values: [{ value: "low" }, { value: "high" }] }]),
+      ),
+    ).toEqual({});
+    expect(defaultModelParams(model(undefined))).toEqual({});
   });
 });

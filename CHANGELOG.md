@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- **Fixed: Cursor's `fast` tier is no longer silently forced on.** The variant
+  builder only mapped reasoning/effort params and dropped Cursor's `fast` toggle
+  entirely, so it never reached `providerOptions.cursor`. Because Cursor marks
+  the **default** variant of several models as `fast: true` (composer-2.5,
+  composer-2, and the gpt-*-codex line), omitting the param meant opencode
+  silently ran the fast tier with no way to opt out. Now `fast` defaults OFF —
+  fast-capable models seed `options.params.fast = "false"` (sent every turn, and
+  pinned into each reasoning variant so picking a reasoning level can't re-enable
+  it) — and a `fast` picker variant lets you opt back in. Override per model via
+  `provider.cursor.models.<id>.options.params.fast`.
 - **Fingerprint-guarded session reuse, now the default (`session: "auto"`).**
   Previously the provider created a fresh Cursor agent every turn and re-sent
   the whole transcript (robust but cache-hostile and increasingly costly as a
