@@ -41,14 +41,18 @@ for Node.js 22+, and offers to set `CURSOR_API_KEY`. Flags:
 npm install @stablekernel/opencode-cursor
 ```
 
-Add to your `opencode.json`:
+Add to your `opencode.json` (or `opencode.jsonc` — both are supported):
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["@stablekernel/opencode-cursor"]
+  "plugin": ["@stablekernel/opencode-cursor@latest"]
 }
 ```
+
+The `@latest` suffix makes opencode re-resolve to the newest release on each
+startup. Drop it (`"@stablekernel/opencode-cursor"`) or pin a version
+(`"@stablekernel/opencode-cursor@1.2.3"`) if you prefer.
 
 The plugin injects the `provider` block automatically. If you need explicit control:
 
