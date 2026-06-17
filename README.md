@@ -51,8 +51,21 @@ Add to your `opencode.json` (or `opencode.jsonc` — both are supported):
 ```
 
 The `@latest` suffix makes opencode re-resolve to the newest release on each
-startup. Drop it (`"@stablekernel/opencode-cursor"`) or pin a version
-(`"@stablekernel/opencode-cursor@1.2.3"`) if you prefer.
+startup. In practice opencode caches the `@latest` plugin install and does **not**
+auto-update it. If you see a stale-version warning from the plugin, or a version
+mismatch, exit opencode and clear the cached package:
+
+```bash
+# macOS / Linux
+rm -rf ~/.cache/opencode/packages/@stablekernel/opencode-cursor@latest
+# Windows
+rmdir /s "%LocalAppData%\opencode\cache\packages\@stablekernel\opencode-cursor@latest"
+```
+
+Then restart opencode.
+
+Drop `@latest` (`"@stablekernel/opencode-cursor"`) or pin a version
+(`"@stablekernel/opencode-cursor@1.2.3"`) if you prefer deterministic installs.
 
 The plugin injects the `provider` block automatically. If you need explicit control:
 
@@ -267,9 +280,10 @@ Override with `OPENCODE_CURSOR_SIDECAR=1` (always sidecar) or `OPENCODE_CURSOR_S
   on your `PATH`. Install Node.js 22+, or force the sidecar with `OPENCODE_CURSOR_SIDECAR=1`.
 - **"Running under Bun without a usable Node sidecar" warning.** Install Node.js 22+, or set
   `OPENCODE_CURSOR_SIDECAR=0` to accept in-process behavior and silence the warning.
-- **Plugin enabled but no `cursor` provider/models appear.** Stale opencode plugin cache. Pin an
-  exact version (`@stablekernel/opencode-cursor@<version>`) or delete
-  `~/.cache/opencode/packages/` and restart.
+- **Plugin enabled but no `cursor` provider/models appear, or you see a stale-version warning.**
+  opencode caches the `@latest` plugin install on first use and never refreshes it.
+  Exit opencode, delete `~/.cache/opencode/packages/@stablekernel/opencode-cursor@latest`
+  (or the pinned version directory), and restart.
 - **Only the four fallback models appear.** The live catalog loads after the first authenticated
   use. Restart opencode once after login, or run `cursor_refresh_models`.
 - **Invalid or expired key.** Validated on first use — that's where the error surfaces.
