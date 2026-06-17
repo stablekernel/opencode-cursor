@@ -313,6 +313,15 @@ const NATIVE_ADAPTERS: Record<string, NativeToolAdapter> = {
 		},
 	},
 	// Cursor `read` → opencode `read`.
+	//
+	// Cursor's read tool takes ONLY `{ path }` — there is no `offset`/`limit`/
+	// line-range arg (see `@cursor/sdk` `ReadArgsSchema`, a `{ path: string }`
+	// "strip" object). The model therefore cannot request a sub-range, so two
+	// same-path reads in a transcript are RE-READS of the same content, never
+	// "different sections". The only per-call detail available is in the result
+	// `value` (`content`, `totalLines`, `fileSize`); we derive the lines-read
+	// count from `content` and surface `linesReturned/totalLines` in the title
+	// so a reader can see how much was read and spot redundant re-reads.
 	read: {
 		tool: "read",
 		input: (args) => ({ filePath: strField(args, "path") ?? "" }),
@@ -321,12 +330,20 @@ const NATIVE_ADAPTERS: Record<string, NativeToolAdapter> = {
 			if (content === undefined) return null;
 			const filePath = strField(args, "path") ?? "";
 			const totalLines = numField(value, "totalLines");
+			const fileSize = numField(value, "fileSize");
+			const linesReturned = content.split("\n").length;
+			const lineLabel =
+				totalLines !== undefined
+					? `${linesReturned}/${totalLines} lines`
+					: `${linesReturned} lines`;
 			return {
-				title: filePath,
+				title: `${filePath} (${lineLabel})`,
 				metadata: {
 					preview: content.split("\n").slice(0, 20).join("\n"),
 					loaded: [] as string[],
+					linesReturned,
 					...(totalLines !== undefined ? { totalLines } : {}),
+					...(fileSize !== undefined ? { fileSize } : {}),
 				},
 				output: content,
 			};

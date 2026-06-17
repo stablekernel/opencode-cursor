@@ -1,6 +1,6 @@
 {
   "name": "@stablekernel/opencode-cursor",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "opencode provider plugin backed by the official Cursor SDK (@cursor/sdk) — adds a Cursor provider and lists its models",
   "type": "module",
   "license": "MIT",
@@ -56,7 +56,7 @@
   },
   "dependencies": {
     "@cursor/sdk": "^1.0.18",
-    "@opencode-ai/plugin": "^1.17.1"
+    "@opencode-ai/plugin": "^1.17.7"
   },
   "overrides": {
     "undici": "^6.24.0",
