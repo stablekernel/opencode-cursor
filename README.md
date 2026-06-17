@@ -267,10 +267,6 @@ Override with `OPENCODE_CURSOR_SIDECAR=1` (always sidecar) or `OPENCODE_CURSOR_S
   on your `PATH`. Install Node.js 22+, or force the sidecar with `OPENCODE_CURSOR_SIDECAR=1`.
 - **"Running under Bun without a usable Node sidecar" warning.** Install Node.js 22+, or set
   `OPENCODE_CURSOR_SIDECAR=0` to accept in-process behavior and silence the warning.
-- **"Could not locate the bindings file" / `node_sqlite3.node` not found.** The `@cursor/sdk`
-  native sqlite3 addon was skipped during Bun install. The plugin self-heals on first load (needs
-  Node on `PATH`). If that fails, `cd` into the printed sqlite3 directory and run
-  `npx prebuild-install -r napi`.
 - **Plugin enabled but no `cursor` provider/models appear.** Stale opencode plugin cache. Pin an
   exact version (`@stablekernel/opencode-cursor@<version>`) or delete
   `~/.cache/opencode/packages/` and restart.

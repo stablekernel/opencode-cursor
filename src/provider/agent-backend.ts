@@ -14,7 +14,6 @@ import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { loadCursorSdk } from "../cursor-runtime.js";
-import { ensureSqliteBinding } from "../native-binding.js";
 import { SidecarClient, type AgentLike } from "./sidecar-client.js";
 
 export type { AgentLike, AgentRunLike, AgentSendOptions } from "./sidecar-client.js";
@@ -94,18 +93,10 @@ export function resolveSidecarScript(): string | undefined {
 
 function sidecarBackend(nodePath: string, scriptPath: string): AgentBackend {
   const client = new SidecarClient({ scriptPath, nodePath });
-  // The sidecar imports @cursor/sdk (which eagerly requires sqlite3's native
-  // binding) in the child process; repair the binding before first use.
   return {
     kind: "sidecar",
-    createAgent: async (options) => {
-      await ensureSqliteBinding();
-      return client.createAgent(options);
-    },
-    resumeAgent: async (agentId, options) => {
-      await ensureSqliteBinding();
-      return client.resumeAgent(agentId, options);
-    },
+    createAgent: (options) => client.createAgent(options),
+    resumeAgent: (agentId, options) => client.resumeAgent(agentId, options),
   };
 }
 
