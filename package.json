@@ -55,6 +55,7 @@
     "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
+    "@connectrpc/connect-node": "^1.6.1",
     "@cursor/sdk": "^1.0.18",
     "@opencode-ai/plugin": "^1.17.7"
   },
