@@ -124,6 +124,17 @@ function toolResultObj(
 /** Cursor's file-edit tool surfaces with this name (its `toolCall.type`). */
 const EDIT_TOOL_NAME = "edit";
 
+/** Cursor plan-mode tool; markdown lives in call args, result is empty. */
+const CREATE_PLAN_TOOL_NAME = "createPlan";
+
+function isCreatePlanTool(name: string): boolean {
+	return name === CREATE_PLAN_TOOL_NAME;
+}
+
+function createPlanContent(input: unknown): string | undefined {
+	return strField(input, "plan");
+}
+
 function isRecord(v: unknown): v is Record<string, unknown> {
 	return typeof v === "object" && v !== null;
 }
@@ -285,9 +296,10 @@ function mapTodos(args: unknown): Array<{ content: string; status: string }> {
 /**
  * Cursor tool name → opencode native tool adapter. Cursor tools without a
  * natural opencode counterpart (`delete`, `mcp`, `semSearch`, `readLints`,
- * `generateImage`, `createPlan`, `recordScreen`, `task`) are intentionally
- * absent and fall through to generic `cursor_*` blocks. `edit` is handled
- * separately (its native call input depends on the diff in the result).
+ * `generateImage`, `recordScreen`) are intentionally absent and fall through
+ * to generic `cursor_*` blocks. `edit` and `createPlan` are handled separately
+ * (edit: native call input depends on the diff in the result; createPlan:
+ * emitted as assistant markdown text so opencode renders it like a normal plan).
  */
 const NATIVE_ADAPTERS: Record<string, NativeToolAdapter> = {
 	// Cursor `shell` → opencode `bash` (console renderer).
@@ -743,10 +755,11 @@ interface OpenToolCall {
 interface BlockToolState {
 	open: Map<string, OpenToolCall>;
 	pendingEdits: Map<string, string>;
+	dropped: Set<string>;
 }
 
 function newBlockToolState(): BlockToolState {
-	return { open: new Map(), pendingEdits: new Map() };
+	return { open: new Map(), pendingEdits: new Map(), dropped: new Set() };
 }
 
 /** Parts to emit for a blocks-mode `tool-call` event (edits are buffered). */
@@ -991,6 +1004,20 @@ export function cursorEventsToStream(
 							reasoningLine(event.text);
 							break;
 						case "tool-call":
+							if (isCreatePlanTool(event.name)) {
+								const plan = createPlanContent(event.input);
+								if (plan) {
+									closeReasoning();
+									streamedText = true;
+									controller.enqueue({
+										type: "text-delta",
+										id: ensureText(),
+										delta: plan,
+									});
+								}
+								toolState.dropped.add(event.id);
+								break;
+							}
 							if (toolDisplay === "blocks") {
 								const parts = blockToolCallParts(
 									event.id,
@@ -1015,6 +1042,7 @@ export function cursorEventsToStream(
 							}
 							break;
 						case "tool-result":
+							if (toolState.dropped.delete(event.id)) break;
 							if (toolDisplay === "blocks") {
 								const parts = blockToolResultParts(
 									event.id,
@@ -1109,6 +1137,12 @@ export async function cursorEventsToContent(
 					reasoning += event.text;
 					break;
 				case "tool-call":
+					if (isCreatePlanTool(event.name)) {
+						const plan = createPlanContent(event.input);
+						if (plan) text += plan;
+						toolState.dropped.add(event.id);
+						break;
+					}
 					if (toolDisplay === "blocks") {
 						for (const part of blockToolCallParts(
 							event.id,
@@ -1123,6 +1157,7 @@ export async function cursorEventsToContent(
 					}
 					break;
 				case "tool-result":
+					if (toolState.dropped.delete(event.id)) break;
 					if (toolDisplay === "blocks") {
 						for (const part of blockToolResultParts(
 							event.id,
