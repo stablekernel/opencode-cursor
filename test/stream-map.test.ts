@@ -1239,6 +1239,125 @@ describe("native tool mapping (blocks)", () => {
 	});
 });
 
+describe("createPlan mapping", () => {
+	const PLAN = "# Plan\n\n- step one\n- step two";
+
+	it("emits createPlan markdown as assistant text, not a tool block", async () => {
+		const events: CursorEvent[] = [
+			{
+				type: "tool-call",
+				id: "p1",
+				name: "createPlan",
+				input: { plan: PLAN },
+			},
+			{
+				type: "tool-result",
+				id: "p1",
+				name: "createPlan",
+				result: { status: "success", value: {} },
+				isError: false,
+			},
+			{ type: "finish" },
+		];
+		const parts = await collect(cursorEventsToStream(gen(events), "blocks"));
+
+		expect(types(parts)).not.toContain("tool-call");
+		expect(types(parts)).not.toContain("tool-result");
+		const text = parts
+			.filter(
+				(p): p is Extract<LanguageModelV3StreamPart, { type: "text-delta" }> =>
+					p.type === "text-delta",
+			)
+			.map((p) => p.delta)
+			.join("");
+		expect(text).toBe(PLAN);
+	});
+
+	it("closes reasoning before emitting the plan as text", async () => {
+		const events: CursorEvent[] = [
+			{ type: "reasoning-delta", text: "thinking" },
+			{
+				type: "tool-call",
+				id: "p1",
+				name: "createPlan",
+				input: { plan: PLAN },
+			},
+			{
+				type: "tool-result",
+				id: "p1",
+				name: "createPlan",
+				result: { status: "success", value: {} },
+				isError: false,
+			},
+			{ type: "finish" },
+		];
+		const parts = await collect(cursorEventsToStream(gen(events), "blocks"));
+		expect(types(parts)).toEqual([
+			"stream-start",
+			"reasoning-start",
+			"reasoning-delta",
+			"reasoning-end",
+			"text-start",
+			"text-delta",
+			"text-end",
+			"finish",
+		]);
+	});
+
+	it("does not duplicate finish.text when the plan was already streamed", async () => {
+		const events: CursorEvent[] = [
+			{
+				type: "tool-call",
+				id: "p1",
+				name: "createPlan",
+				input: { plan: PLAN },
+			},
+			{
+				type: "tool-result",
+				id: "p1",
+				name: "createPlan",
+				result: { status: "success", value: {} },
+				isError: false,
+			},
+			{ type: "finish", text: PLAN },
+		];
+		const parts = await collect(cursorEventsToStream(gen(events), "blocks"));
+		const text = parts
+			.filter(
+				(p): p is Extract<LanguageModelV3StreamPart, { type: "text-delta" }> =>
+					p.type === "text-delta",
+			)
+			.map((p) => p.delta)
+			.join("");
+		expect(text).toBe(PLAN);
+	});
+
+	it("maps createPlan to text content in doGenerate", async () => {
+		const { content } = await cursorEventsToContent(
+			gen([
+				{
+					type: "tool-call",
+					id: "p1",
+					name: "createPlan",
+					input: { plan: PLAN },
+				},
+				{
+					type: "tool-result",
+					id: "p1",
+					name: "createPlan",
+					result: { status: "success", value: {} },
+					isError: false,
+				},
+				{ type: "finish" },
+			]),
+			"blocks",
+		);
+		expect(content.find((c) => c.type === "tool-call")).toBeUndefined();
+		expect(content.find((c) => c.type === "tool-result")).toBeUndefined();
+		expect(content).toMatchObject([{ type: "text", text: PLAN }]);
+	});
+});
+
 describe("mapUsage", () => {
 	it("maps Cursor usage into the V3 nested shape", () => {
 		expect(
