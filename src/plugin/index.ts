@@ -10,6 +10,7 @@ import {
 	translateMcpServers,
 } from "./mcp-config.js";
 import { buildCursorTools } from "./cursor-tools.js";
+import { warnIfStale } from "../version-check.js";
 
 function apiKeyFromAuth(auth: Auth | undefined): string | undefined {
 	return auth?.type === "api" ? auth.key : undefined;
@@ -28,6 +29,11 @@ function apiKeyFromAuth(auth: Auth | undefined): string | undefined {
  * - `tool.cursor_refresh_models`: force-refresh the model catalog.
  */
 export const CursorPlugin: Plugin = async (input) => {
+	// Warn once per day if the installed plugin is behind the npm `latest` tag.
+	// opencode freezes `@latest` plugin installs on first use, so this keeps
+	// users from silently running stale releases.
+	void warnIfStale();
+
 	// The Cursor API key resolved by opencode's auth loader, captured so the
 	// delegation tools (which don't receive auth directly) can reuse it. Falls
 	// back to the CURSOR_API_KEY env var when the loader hasn't run.
