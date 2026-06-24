@@ -147,6 +147,8 @@ UPDATED=""
 # for plain .json when node is unavailable (jq cannot parse JSONC comments).
 if command -v node >/dev/null 2>&1; then
 	# shellcheck disable=SC2016  # single-quoted block is JS source, not shell
+	# NOTE: scan() and removeTrailingCommas() below are plain-JS copies of the
+	# functions in src/jsonc.ts. Keep the two in sync when making changes.
 	UPDATED="$(node -e '
     const fs = require("fs");
     const [p, spec, name] = [process.argv[1], process.argv[2], process.argv[3]];
@@ -200,9 +202,32 @@ if command -v node >/dev/null 2>&1; then
       return ind;
     }
 
+    // Remove trailing commas from comment-stripped JSONC so JSON.parse accepts it.
+    // Tracks string context to avoid touching commas inside string values.
+    function removeTrailingCommas(s) {
+      let result = "", inStr = false, i = 0;
+      while (i < s.length) {
+        const ch = s[i];
+        if (inStr) {
+          result += ch;
+          if (ch === "\\") { result += (s[i + 1] || ""); i += 2; continue; }
+          if (ch === "\"") inStr = false;
+          i++; continue;
+        }
+        if (ch === "\"") { inStr = true; result += ch; i++; continue; }
+        if (ch === ",") {
+          let j = i + 1;
+          while (j < s.length && (s[j] === " " || s[j] === "\t" || s[j] === "\n" || s[j] === "\r")) j++;
+          if (j < s.length && (s[j] === "}" || s[j] === "]")) { i++; continue; }
+        }
+        result += ch; i++;
+      }
+      return result;
+    }
+
     const { out: stripped, map } = scan(raw);
     let parsed;
-    try { parsed = JSON.parse(stripped); }
+    try { parsed = JSON.parse(removeTrailingCommas(stripped)); }
     catch (e) { console.error("Failed to parse " + p + ": " + e.message); process.exit(1); }
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
       console.error("Expected a JSON object in " + p); process.exit(1);
