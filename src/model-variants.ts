@@ -88,9 +88,19 @@ export function buildModelVariants(item: ModelListItem): Record<string, CursorVa
       }
 
       for (const value of values) {
-        // Key by the bare value (e.g. "high"); prefix with the param id only
-        // when two params share a value (e.g. reasoning-low vs effort-low).
-        const key = out[value] === undefined ? value : `${param.id}-${value}`;
+        // `none` means reasoning OFF — the model's default when no variant is
+        // selected. Surfacing it as a selectable variant is meaningless (you
+        // get it by picking nothing), so skip it. Standard providers
+        // (models.dev) include `none` in their effort values, but the
+        // no-variant-selected state already represents it.
+        if (value === "none") continue;
+        // Cursor labels the top reasoning tier "extra-high"; the opencode
+        // standard (models.dev) calls it "xhigh". Use the standard label for
+        // the variant key so the cycler is consistent across providers, but
+        // keep the Cursor wire-format value ("extra-high") in the params sent
+        // to the API.
+        const displayKey = value === "extra-high" ? "xhigh" : value;
+        const key = out[displayKey] === undefined ? displayKey : `${param.id}-${displayKey}`;
         out[key] = { params: { ...defaults, [param.id]: value } };
       }
       continue;

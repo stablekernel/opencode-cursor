@@ -131,6 +131,79 @@ describe("buildModelVariants", () => {
     });
   });
 
+  it("renames extra-high to xhigh in the variant key but keeps the wire value", () => {
+    // Cursor labels the top reasoning tier "extra-high"; the opencode standard
+    // (models.dev) calls it "xhigh". The variant KEY normalizes to xhigh so
+    // the cycler is consistent across providers; the param VALUE sent to
+    // Cursor's API stays "extra-high".
+    const variants = buildModelVariants(
+      model([{ id: "reasoning", values: [{ value: "low" }, { value: "extra-high" }] }]),
+    );
+    expect(variants).toEqual({
+      low: { params: { reasoning: "low" } },
+      xhigh: { params: { reasoning: "extra-high" } },
+    });
+  });
+
+  it("drops the 'none' reasoning value (it is the model default)", () => {
+    // `none` = reasoning OFF, which is what you get by selecting no variant.
+    // Surfacing it as a selectable entry is meaningless, so it is skipped.
+    const variants = buildModelVariants(
+      model([
+        { id: "reasoning", values: [{ value: "none" }, { value: "low" }, { value: "high" }] },
+      ]),
+    );
+    expect(variants).toEqual({
+      low: { params: { reasoning: "low" } },
+      high: { params: { reasoning: "high" } },
+    });
+  });
+
+  it("composes none-drop and extra-high rename for the real GPT shape", () => {
+    // gpt-5.5 / gpt-5.4 catalog: reasoning=[none,low,medium,high,extra-high]
+    // + fast. Expect: low, medium, high, xhigh (no none, extra-high→xhigh),
+    // each effort variant bakes fast OFF, plus a standalone fast opt-in.
+    const variants = buildModelVariants(
+      model([
+        {
+          id: "reasoning",
+          values: [
+            { value: "none" },
+            { value: "low" },
+            { value: "medium" },
+            { value: "high" },
+            { value: "extra-high" },
+          ],
+        },
+        { id: "fast", values: [{ value: "false" }, { value: "true" }] },
+      ]),
+    );
+    expect(variants).toEqual({
+      low: { params: { reasoning: "low", fast: "false" } },
+      medium: { params: { reasoning: "medium", fast: "false" } },
+      high: { params: { reasoning: "high", fast: "false" } },
+      xhigh: { params: { reasoning: "extra-high", fast: "false" } },
+      fast: { params: { fast: "true" } },
+    });
+  });
+
+  it("prefixes the display key on a collision involving extra-high", () => {
+    // Defensive: if two reasoning params both resolve to the xhigh display key
+    // (one via the real "xhigh" value, one via "extra-high"→xhigh), the second
+    // is prefixed with its param id. No current catalog model hits this, but
+    // the guard must hold.
+    const variants = buildModelVariants(
+      model([
+        { id: "effort", values: [{ value: "xhigh" }] },
+        { id: "reasoning", values: [{ value: "extra-high" }] },
+      ]),
+    );
+    expect(variants).toEqual({
+      xhigh: { params: { effort: "xhigh" } },
+      "reasoning-xhigh": { params: { reasoning: "extra-high" } },
+    });
+  });
+
   it("surfaces a non-reasoning boolean (fast) as an opt-in toggle; ignores enum context", () => {
     // `fast` is Cursor's fast-tier toggle. It is not a reasoning level, but the
     // user must be able to opt INTO it from the picker (default is off, sent
