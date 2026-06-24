@@ -173,7 +173,8 @@ describe("scan", () => {
     const s = '{"a": 1} // tail';
     const { out, map } = scan(s);
     const closingBrace = out.indexOf("}");
-    expect(s[map[closingBrace]]).toBe("}");
+    const rawIdx = map[closingBrace]!;
+    expect(s[rawIdx]).toBe("}");
   });
 });
 
