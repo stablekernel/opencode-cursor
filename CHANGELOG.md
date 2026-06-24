@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- **Fixed: redundant `thinking` variant removed for effort-enum models.** When a
+  Cursor catalog model exposes both a boolean `thinking` toggle and an effort
+  enum (e.g. Claude models exposing `thinking=["false","true"]` alongside
+  `["low","medium","high","xhigh","max"]`), the variant picker showed a stray
+  `thinking` entry in addition to the effort levels. Standard opencode providers
+  (driven by models.dev `reasoning_options` of type `effort`) surface only the
+  five effort levels, so the extra entry broke parity and was redundant —
+  selecting any effort level already enables reasoning. The boolean `thinking`
+  variant is now suppressed whenever a non-boolean reasoning enum is present on
+  the same model. Models whose only reasoning control is the boolean toggle
+  still surface the single `thinking` variant; the `fast` toggle and its baked-
+  off default are unchanged.
+
 - **Fixed: Cursor's `fast` tier is no longer silently forced on.** The variant
   builder only mapped reasoning/effort params and dropped Cursor's `fast` toggle
   entirely, so it never reached `providerOptions.cursor`. Because Cursor marks
