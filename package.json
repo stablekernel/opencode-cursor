@@ -55,9 +55,9 @@
     "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
-    "@connectrpc/connect-node": "^1.6.1",
-    "@cursor/sdk": "^1.0.18",
-    "@opencode-ai/plugin": "^1.17.7"
+    "@connectrpc/connect-node": "^2.1.2",
+    "@cursor/sdk": "^1.0.20",
+    "@opencode-ai/plugin": "^1.17.9"
   },
   "overrides": {
     "undici": "^6.24.0",
@@ -69,8 +69,8 @@
   },
   "devDependencies": {
     "@ai-sdk/provider": "^3.0.10",
-    "@opencode-ai/sdk": "^1.17.1",
-    "@types/node": "^25.9.2",
+    "@opencode-ai/sdk": "^1.17.9",
+    "@types/node": "^26.0.0",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"
