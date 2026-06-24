@@ -58,6 +58,17 @@ export function buildModelVariants(item: ModelListItem): Record<string, CursorVa
   // reasoning variant so picking a reasoning level never re-enables fast.
   const defaults = defaultModelParams(item);
 
+  // Pre-pass: does any reasoning param expose a non-boolean effort enum (e.g.
+  // ["low","medium","high","xhigh","max"])? When it does, a coexisting boolean
+  // reasoning toggle (Cursor's `thinking=["false","true"]` on claude-* models)
+  // is redundant — selecting any effort level already enables reasoning — and
+  // surfacing it would add a stray `thinking` variant the standard opencode
+  // providers don't show. Suppress the boolean variant for parity. Order-
+  // independent: the enum may be declared before or after the boolean.
+  const hasEffortEnum = (item.parameters ?? []).some(
+    (p) => REASONING_PARAM.test(p.id) && !isBooleanParam(paramValues(p)) && paramValues(p).length > 0,
+  );
+
   for (const param of item.parameters ?? []) {
     const values = paramValues(param);
     if (values.length === 0) continue;
@@ -68,8 +79,9 @@ export function buildModelVariants(item: ModelListItem): Record<string, CursorVa
         // Boolean toggle (e.g. thinking=["false","true"]). Literal true/false
         // variant names are meaningless in the picker — surface a single
         // variant named after the param that switches it on. "Off" is the
-        // model's default (no variant selected).
-        if (values.includes("true")) {
+        // model's default (no variant selected). Skipped entirely when an
+        // effort enum coexists (see hasEffortEnum above).
+        if (!hasEffortEnum && values.includes("true")) {
           out[param.id.toLowerCase()] = { params: { ...defaults, [param.id]: "true" } };
         }
         continue;

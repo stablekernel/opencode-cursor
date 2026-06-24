@@ -27,7 +27,11 @@ describe("buildModelVariants", () => {
     });
   });
 
-  it("combines boolean thinking with enum effort (claude catalog shape)", () => {
+  it("drops the boolean thinking variant when an effort enum is present (claude catalog shape)", () => {
+    // Cursor's claude-* catalog exposes BOTH a boolean `thinking` toggle and an
+    // effort enum. Selecting any effort level already enables reasoning, so the
+    // standalone `thinking` variant is redundant — and surfacing it would add a
+    // stray entry the standard opencode providers (effort-only) never show.
     const variants = buildModelVariants(
       model([
         { id: "thinking", values: [{ value: "false" }, { value: "true" }] },
@@ -35,9 +39,82 @@ describe("buildModelVariants", () => {
       ]),
     );
     expect(variants).toEqual({
-      thinking: { params: { thinking: "true" } },
       low: { params: { effort: "low" } },
       max: { params: { effort: "max" } },
+    });
+  });
+
+  it("suppresses the boolean thinking variant regardless of param order", () => {
+    // Order-independence guard for the hasEffortEnum pre-pass: the effort enum
+    // declared AFTER the boolean must still suppress it, and vice versa.
+    const enumFirst = buildModelVariants(
+      model([
+        { id: "effort", values: [{ value: "low" }, { value: "max" }] },
+        { id: "thinking", values: [{ value: "false" }, { value: "true" }] },
+      ]),
+    );
+    expect(enumFirst).toEqual({
+      low: { params: { effort: "low" } },
+      max: { params: { effort: "max" } },
+    });
+  });
+
+  it("composes suppression with fast defaults (production claude-via-Cursor shape)", () => {
+    // The real catalog model: boolean `thinking` + effort enum + `fast`. The
+    // `thinking` variant is suppressed, each effort variant bakes `fast` OFF
+    // (defaultModelParams), and a standalone `fast` opt-in still surfaces.
+    const variants = buildModelVariants(
+      model([
+        { id: "thinking", values: [{ value: "false" }, { value: "true" }] },
+        { id: "effort", values: [{ value: "low" }, { value: "high" }] },
+        { id: "fast", values: [{ value: "false" }, { value: "true" }] },
+      ]),
+    );
+    expect(variants).toEqual({
+      low: { params: { effort: "low", fast: "false" } },
+      high: { params: { effort: "high", fast: "false" } },
+      fast: { params: { fast: "true" } },
+    });
+  });
+
+  it("does not suppress the boolean thinking variant for a zero-value effort enum", () => {
+    // hasEffortEnum requires a non-empty enum; an effort param with no values
+    // must not count as an enum, so the boolean `thinking` variant survives.
+    const variants = buildModelVariants(
+      model([
+        { id: "thinking", values: [{ value: "false" }, { value: "true" }] },
+        { id: "effort", values: [] },
+      ]),
+    );
+    expect(variants).toEqual({ thinking: { params: { thinking: "true" } } });
+  });
+
+  it("does not emit a thinking variant when the boolean lacks a 'true' value", () => {
+    // Boolean `thinking=["false"]` has nothing to opt INTO; combined with an
+    // effort enum the result is purely the effort variants.
+    const variants = buildModelVariants(
+      model([
+        { id: "thinking", values: [{ value: "false" }] },
+        { id: "effort", values: [{ value: "low" }] },
+      ]),
+    );
+    expect(variants).toEqual({ low: { params: { effort: "low" } } });
+  });
+
+  it("pins current behavior for a mixed boolean+enum reasoning param", () => {
+    // A single reasoning param mixing boolean sentinels with effort values is
+    // classified non-boolean (isBooleanParam requires EVERY value be a sentinel),
+    // so it flows through the enum branch and emits literal false/true variants.
+    // Not a real catalog shape today; pinned so a future change is caught.
+    const variants = buildModelVariants(
+      model([
+        { id: "reasoning", values: [{ value: "false" }, { value: "true" }, { value: "high" }] },
+      ]),
+    );
+    expect(variants).toEqual({
+      false: { params: { reasoning: "false" } },
+      true: { params: { reasoning: "true" } },
+      high: { params: { reasoning: "high" } },
     });
   });
 
