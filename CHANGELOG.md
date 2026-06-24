@@ -4,6 +4,59 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+_No unreleased changes._
+
+## [0.4.4] — 2026-06-24
+
+- **Fixed: installer fails on `opencode.jsonc` files with trailing commas.**
+  The installer's naive JSON parse broke on JSONC's trailing-comma syntax
+  (common in hand-edited configs). A dedicated JSONC parser (`src/jsonc.ts`)
+  now strips trailing commas before parsing, so existing JSONC configs are
+  detected and reused instead of clobbering or skipping them (#49).
+- **Fixed: variant enum keys normalized and `'none'` dropped for provider
+  parity.** Cursor's model params can advertise enum values like `'none'` for
+  reasoning/effort levels that don't make sense as a model variant. Enum keys
+  are now normalized (lowercased, trimmed) and `'none'` is excluded so the
+  variant picker doesn't show a no-op variant. This aligns the Cursor provider's
+  variant surface with other opencode providers (#48).
+- **Fixed: redundant thinking variant dropped when an effort enum is present.**
+  When a model advertises both a boolean `thinking` param and an `effort`
+  enum (e.g. `low`/`medium`/`high`), the variant builder previously emitted a
+  standalone `thinking` variant that duplicated one of the effort levels. The
+  standalone thinking variant is now suppressed in favor of the effort enum
+  so the picker isn't cluttered with duplicates (#43).
+- **Dependency consolidation.** npm deps bumped in one pass: `@connectrpc/connect-node`
+  1.7.0→2.1.2, `@cursor/sdk` 1.0.19→1.0.20, `@opencode-ai/plugin` 1.17.7→1.17.9,
+  `@opencode-ai/sdk` 1.17.7→1.17.9, `@types/node` 25.9.3→26.0.0 (#44). GitHub
+  Actions updates consolidated into a single dependabot group (#45), and
+  `@opencode-ai/*` packages are now grouped together (#46).
+
+## [0.4.3] — 2026-06-18
+
+- **`createPlan` mapping emits markdown as plain text.** Cursor's plan-mode
+  tool returned markdown that opencode rendered as a raw code block. The
+  `createPlan` tool output is now mapped to a plain-text part so the plan reads
+  as formatted prose in the opencode transcript.
+
+## [0.4.2] — 2026-06-17
+
+- **Fixed: missing `@connectrpc/connect-node` dependency.** `@cursor/sdk`
+  requires `@connectrpc/connect-node` at runtime but didn't declare it as a
+  direct dependency, so installs that hoisted differently could fail with a
+  module-not-found error. It's now an explicit dependency (#31).
+
+## [0.4.1] — 2026-06-17
+
+- **`read` transcript label surfaces lines-read / total.** The Read tool's
+  transcript label now shows how many lines were read out of the total (e.g.
+  `read src/foo.ts (50/200)`), so partial reads are visible in the conversation.
+- **Removed obsolete sqlite3 native-binding self-heal.** The workaround for a
+  Bun/sqlite3 native-binding crash is no longer needed and has been removed.
+- **Dependency bumps.** `@cursor/sdk` 1.0.18→1.0.19, `@opencode-ai/plugin`
+  1.17.3→1.17.7, dev-dependencies group bumped.
+
+## [0.4.0] — 2026-06-16
+
 - **Fixed: Cursor's `fast` tier is no longer silently forced on.** The variant
   builder only mapped reasoning/effort params and dropped Cursor's `fast` toggle
   entirely, so it never reached `providerOptions.cursor`. Because Cursor marks
@@ -14,6 +67,17 @@ All notable changes to this project will be documented in this file.
   pinned into each reasoning variant so picking a reasoning level can't re-enable
   it) — and a `fast` picker variant lets you opt back in. Override per model via
   `provider.cursor.models.<id>.options.params.fast`.
+- **Installer detects and reuses `opencode.jsonc`.** The installer now
+  recognizes both `opencode.json` and `opencode.jsonc` and reuses whichever
+  exists instead of always writing `opencode.json`. The plugin is also pinned
+  to `@latest` so opencode re-resolves to the newest release on each startup
+  (#24).
+- **Grep and glob tool blocks get a distinguishing title.** Cursor's `grep` and
+  `glob` tools both render as search-result blocks; they now carry distinct
+  titles so you can tell them apart in the opencode transcript (#22).
+
+## [0.3.0] — 2026-06-11
+
 - **Fingerprint-guarded session reuse, now the default (`session: "auto"`).**
   Previously the provider created a fresh Cursor agent every turn and re-sent
   the whole transcript (robust but cache-hostile and increasingly costly as a
@@ -59,6 +123,9 @@ All notable changes to this project will be documented in this file.
   transcript with prior tool outputs missing. Outputs are now inlined and capped
   (2,000 chars per result, 500 per tool-call args) so context stays faithful
   without unbounded bloat.
+- **Patched transitive dependabot vulnerabilities via overrides.** `undici`,
+  `tar`, and `node-gyp` pinned via npm `overrides` to clear advisories in
+  transitive dependencies (#16).
 
 ## [0.2.0] — 2026-06-11
 
