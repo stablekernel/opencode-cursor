@@ -68,7 +68,7 @@
     "@ai-sdk/provider": "^3.0.0"
   },
   "devDependencies": {
-    "@ai-sdk/provider": "^3.0.10",
+    "@ai-sdk/provider": "^4.0.1",
     "@opencode-ai/sdk": "^1.17.9",
     "@types/node": "^26.0.0",
     "tsup": "^8.5.1",
