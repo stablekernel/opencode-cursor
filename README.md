@@ -122,6 +122,9 @@ The plugin also registers two **delegation tools**:
 > - Set `sandbox: true` in `provider.cursor.options` to run Cursor's tools in Cursor's sandbox.
 > - Use `cursor_delegate` instead of the provider path — it is gated by opencode's `permission`
 >   config.
+> - By default opencode's system prompt is delivered via a git-ignored Cursor
+>   rule (`systemPrompt: "rules"`), not inlined into the message stream. See
+>   [System prompt](#system-prompt).
 
 See [SECURITY.md](./SECURITY.md) for the full threat model.
 
@@ -140,6 +143,7 @@ See [SECURITY.md](./SECURITY.md) for the full threat model.
 | `forwardMcp` | `true` | Forward opencode's configured MCP servers to the Cursor agent |
 | `mcpServers` | — | Extra MCP servers (Cursor `McpServerConfig` shape); merged with forwarded ones |
 | `toolDisplay` | `"blocks"` | How Cursor's internal tool activity is shown — see [Tool display](#tool-display) |
+| `systemPrompt` | `"rules"` | How opencode's system prompt reaches the agent — see [System prompt](#system-prompt) |
 
 | Environment variable | Default | Meaning |
 | --- | --- | --- |
@@ -189,6 +193,31 @@ To set controls statically per model:
   "composer-2.5": { "options": { "params": { "thinking": "high" } } }
 } } } }
 ```
+
+## System prompt
+
+opencode drives the Cursor agent the way it drives any provider — through its
+**system prompt**. But the Cursor SDK has no system-prompt input (an agent, not a
+raw model), and flattening opencode's system prompt into the message stream makes
+injection-hardened Cursor models reject it as a prompt-injection attempt.
+
+So by default (`systemPrompt: "rules"`) the plugin writes opencode's system prompt
+to `<cwd>/.cursor/rules/opencode.mdc` (`alwaysApply: true`, git-ignored) and loads
+the `project` settings layer, delivering it through Cursor's **authoritative rules
+channel**. Cursor treats rules as system-level instructions, so opencode stays in
+control and nothing is flagged.
+
+Tradeoffs to know:
+
+- A project rule also applies to **your own Cursor IDE** open on this repo. The
+  plugin removes the file when the session disposes (best-effort).
+- Enabling the `project` layer also loads other `.cursor/` config (`.cursor/mcp.json`,
+  `.cursor/agents`, hooks).
+
+Alternatives:
+
+- `systemPrompt: "message"` — legacy inline delivery (may be rejected as injection).
+- `systemPrompt: "omit"` — don't forward the system prompt at all.
 
 ## MCP servers
 
