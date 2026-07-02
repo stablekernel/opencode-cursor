@@ -11,6 +11,7 @@ import {
 } from "./mcp-config.js";
 import { buildCursorTools } from "./cursor-tools.js";
 import { warnIfStale } from "../version-check.js";
+import { removeSystemRule } from "../provider/system-rule.js";
 
 function apiKeyFromAuth(auth: Auth | undefined): string | undefined {
 	return auth?.type === "api" ? auth.key : undefined;
@@ -218,6 +219,12 @@ export const CursorPlugin: Plugin = async (input) => {
 				resolveApiKey: () => resolveCursorApiKey(capturedApiKey),
 				defaultCwd: () => input?.directory ?? process.cwd(),
 			}),
+		},
+
+		dispose: async () => {
+			// Best-effort: drop the generated system-prompt rule so it doesn't
+			// linger in the user's workspace / Cursor IDE after the session ends.
+			if (directory) removeSystemRule(directory);
 		},
 	};
 };
