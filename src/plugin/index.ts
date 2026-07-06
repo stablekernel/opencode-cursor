@@ -29,10 +29,13 @@ function apiKeyFromAuth(auth: Auth | undefined): string | undefined {
  * - `tool.cursor_refresh_models`: force-refresh the model catalog.
  */
 export const CursorPlugin: Plugin = async (input) => {
-	// Warn once per day if the installed plugin is behind the npm `latest` tag.
-	// opencode freezes `@latest` plugin installs on first use, so this keeps
-	// users from silently running stale releases.
-	void warnIfStale();
+	// Warn if the installed plugin is behind the npm `latest` tag. The registry
+	// fetch is throttled to once per 24h via an on-disk cache, but while the
+	// cached result says the install is stale the warning prints on each
+	// startup. opencode freezes `@latest` plugin installs on first use, so this
+	// keeps users from silently running stale releases. Fire-and-forget: never
+	// block or fail plugin init.
+	void warnIfStale().catch(() => {});
 
 	// The Cursor API key resolved by opencode's auth loader, captured so the
 	// delegation tools (which don't receive auth directly) can reuse it. Falls

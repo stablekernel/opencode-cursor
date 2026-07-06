@@ -59,13 +59,16 @@ mismatch, exit opencode and clear the cached package:
 # macOS / Linux
 rm -rf ~/.cache/opencode/packages/@stablekernel/opencode-cursor@latest
 # Windows
-rmdir /s "%LocalAppData%\opencode\cache\packages\@stablekernel\opencode-cursor@latest"
+rmdir /s /q "%LocalAppData%\opencode\cache\packages\@stablekernel\opencode-cursor@latest"
 ```
 
 Then restart opencode.
 
 Drop `@latest` (`"@stablekernel/opencode-cursor"`) or pin a version
 (`"@stablekernel/opencode-cursor@1.2.3"`) if you prefer deterministic installs.
+
+The stale-version check is skipped when the `CI` or `NO_UPDATE_NOTIFIER`
+environment variable is set.
 
 The plugin injects the `provider` block automatically. If you need explicit control:
 
