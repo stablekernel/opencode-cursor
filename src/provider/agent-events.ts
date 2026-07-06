@@ -202,9 +202,22 @@ async function sendWithBusyRetry(
  * Honors `options.abortSignal`: an abort cancels the in-flight run so the
  * caller can stop before sending the next queued message.
  *
- * Known trade-off: token usage from silent turns is not reported (no onDelta
- * means the `turn-ended` usage update is never observed), so opencode slightly
- * undercounts usage on multi-message turns.
+ * Known trade-offs of silent turns being FULL agent runs:
+ *  - Tool invisibility: the agent may execute tools (shell, edits, MCP) during
+ *    a silent turn with zero streamed output or tool display — the user sees
+ *    nothing until the final message streams. Accepted because interjections
+ *    are typically short course-corrections, and opencode itself folds
+ *    interjected messages into one visible turn.
+ *  - Serial latency: each silent turn is awaited to completion before the next
+ *    send, so an N-message interjection costs N sequential agent runs.
+ *  - Usage undercount: no onDelta means the `turn-ended` usage update is never
+ *    observed, so opencode slightly undercounts tokens on multi-message turns.
+ *
+ * Concatenating the queued messages into one Cursor message was rejected for
+ * message fidelity: each interjection must land as a distinct user turn in the
+ * agent's conversation memory (mirroring opencode's transcript), so the model
+ * sees the same message boundaries the user created and later fingerprint
+ * classification stays aligned turn-for-turn.
  */
 export async function sendAgentTurnSilently(
   agent: AgentLike,
@@ -226,9 +239,16 @@ export async function sendAgentTurnSilently(
     // was populated, so onAbort had nothing to cancel); cancel now.
     if (options.abortSignal?.aborted) void Promise.resolve(run.cancel()).catch(() => {});
     const result = await run.wait();
-    if (result.status === "error") {
+    if (result.status !== "finished") {
+      // Our own abort cancelled the run mid-flight: expected, not a failure.
+      // The caller's abort check stops the multi-send sequence and drops the
+      // session record, so this partial turn is never counted as delivered.
+      if (options.abortSignal?.aborted) return;
+      // Anything else ("error", an external "cancelled", unknown states) means
+      // the message was NOT delivered; treating it as success would leave the
+      // session record claiming the agent saw a message it never received.
       throw new Error(
-        `Cursor run ended with status "error"${result.result ? `: ${result.result}` : ""}`,
+        `Cursor run ended with status "${result.status}"${result.result ? `: ${result.result}` : ""}`,
       );
     }
   } finally {

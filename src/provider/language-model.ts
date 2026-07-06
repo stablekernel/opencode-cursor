@@ -12,6 +12,7 @@ import type {
 	McpServerConfig,
 	SettingSource,
 	AgentModeOption,
+	SDKUserMessage,
 } from "@cursor/sdk";
 import { resolveCursorApiKey } from "../api-key.js";
 import {
@@ -209,6 +210,31 @@ export class CursorLanguageModel implements LanguageModelV3 {
 			}
 		}
 
+		// A multi-message interjection: two-or-more user messages were queued while
+		// the agent was busy, forming a contiguous user-turn tail (the classifier
+		// guarantees this shape for "continuation-multi"). On a resumed agent we
+		// replay just those new messages as sequential turns.
+		//
+		// Defensive invariant check: if the recovered tail doesn't match the
+		// classifier's count (unreachable today, but one classifier refactor away
+		// from real), we must NOT degrade to sending only the latest message —
+		// the session record keeps the full N-message fingerprint, so messages
+		// 1..N-1 would be silently lost. Instead force the cold path: clear the
+		// resume id so a FRESH agent gets the FULL transcript, which matches the
+		// record being written and loses nothing.
+		//
+		// Computed before acquireAgent so a mismatched tail can clear
+		// resumeAgentId in time to affect which agent we acquire.
+		let multiTurns: SDKUserMessage[] | undefined;
+		if (multiNewUserCount >= 2) {
+			const turns = trailingUserMessages(options.prompt, multiNewUserCount);
+			if (turns.length === multiNewUserCount) {
+				multiTurns = turns;
+			} else {
+				resumeAgentId = undefined;
+			}
+		}
+
 		// Shared acquire params. The retry path reuses this verbatim (minus
 		// resumeAgentId) so a fresh agent can never drift from the first attempt's
 		// config (sandbox, settingSources, MCP, etc.).
@@ -235,26 +261,20 @@ export class CursorLanguageModel implements LanguageModelV3 {
 			...(resumeAgentId ? { resumeAgentId } : {}),
 		});
 
-		// A multi-message interjection: two-or-more user messages were queued while
-		// the agent was busy, forming a contiguous user-turn tail (the classifier
-		// guarantees this shape for "continuation-multi"). On a resumed agent,
-		// replay just those new messages as sequential turns — send the leading
-		// ones silently and stream only the final one. If the tail can't be
-		// recovered (defensive; shouldn't happen post-classifier), skip the multi
-		// path: on a resumed agent that means sending only the latest message, so
-		// the empty/short check below treats it as a normal single continuation.
-		const multiTurns =
-			acquired.resumed && multiNewUserCount >= 2
-				? trailingUserMessages(options.prompt, multiNewUserCount)
-				: undefined;
-
 		let yielded = false;
 		let releasedOriginal = false;
 		try {
-			if (multiTurns && multiTurns.length === multiNewUserCount) {
-				// A multi-message interjection on a resumed agent: send the leading
-				// messages silently and stream only the final one.
-				//
+			// Replay the queued messages as sequential turns: leading ones silent,
+			// only the final one streamed. Note silent turns are FULL agent runs —
+			// tools may execute with nothing surfaced until the last turn streams,
+			// and each run is awaited serially (see sendAgentTurnSilently for the
+			// trade-offs and why concatenation was rejected).
+			//
+			// Guard on acquired.resumed: multiTurns is computed before acquire (so a
+			// mismatched tail can clear resumeAgentId), but the silent-replay path
+			// only makes sense against a resumed agent. A fresh agent falls through
+			// to the full-transcript replay below.
+			if (acquired.resumed && multiTurns) {
 				// The pool record was written optimistically with the FULL new
 				// fingerprint before any send. If delivery stops partway (error or
 				// abort), drop the record so the next turn classifies fresh instead

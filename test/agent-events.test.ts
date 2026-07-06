@@ -140,6 +140,39 @@ describe("sendAgentTurnSilently", () => {
 		).rejects.toThrow(/error/i);
 	});
 
+	it("throws when the run ends 'cancelled' without our abort (message never delivered)", async () => {
+		// Cancellation we did NOT request (external cancel, CLI kill, …) means the
+		// silent turn was not delivered; treating it as success would let the
+		// caller keep a session record for a message the agent never received.
+		const agent = fakeAgent({ result: { status: "cancelled" } });
+		await expect(
+			sendAgentTurnSilently(agent, MESSAGE, { mode: "agent" }),
+		).rejects.toThrow(/cancelled/);
+	});
+
+	it("throws when the run ends with an unknown terminal status", async () => {
+		const agent = fakeAgent({ result: { status: "expired" } });
+		await expect(
+			sendAgentTurnSilently(agent, MESSAGE, { mode: "agent" }),
+		).rejects.toThrow(/expired/);
+	});
+
+	it("does not throw on 'cancelled' when our own abort signal caused it", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		// Already-aborted signal: returns early without sending at all.
+		const sendCalls: Array<Record<string, unknown> | undefined> = [];
+		const agent = fakeAgent({
+			result: { status: "cancelled" },
+			sendCalls,
+		});
+		await sendAgentTurnSilently(agent, MESSAGE, {
+			mode: "agent",
+			abortSignal: controller.signal,
+		});
+		expect(sendCalls).toHaveLength(0);
+	});
+
 	it("retries with local.force on AgentBusyError", async () => {
 		const busy = new Error("agent busy");
 		busy.name = "AgentBusyError";
