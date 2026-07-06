@@ -16,6 +16,7 @@ vi.mock("../src/cursor-runtime.js", () => ({
 const {
 	acquireAgent,
 	clearAgentPool,
+	dropSessionRecord,
 	getPooledAgentId,
 	getSessionRecord,
 	resetSessionPoolMemory,
@@ -158,6 +159,19 @@ describe("acquireAgent", () => {
 		expect(getSessionRecord("s1")).toBeUndefined();
 		r.release();
 		expect(r.agent.close).toHaveBeenCalled();
+	});
+
+	it("dropSessionRecord removes the record from memory and disk", async () => {
+		create.mockResolvedValue(fakeAgent("a1"));
+		await acquireAgent({ ...base, poolKey: "s1", record: rec });
+		expect(getSessionRecord("s1")).toBeDefined();
+
+		dropSessionRecord("s1");
+		expect(getSessionRecord("s1")).toBeUndefined();
+
+		// The delete must persist: rehydration from disk must not resurrect it.
+		resetSessionPoolMemory();
+		expect(getSessionRecord("s1")).toBeUndefined();
 	});
 
 	it("does not touch the pool when poolKey is omitted (side-call)", async () => {

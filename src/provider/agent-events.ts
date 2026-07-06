@@ -111,21 +111,8 @@ export async function* streamAgentTurn(
   };
   options.abortSignal?.addEventListener("abort", onAbort);
 
-  // A previous opencode/CLI crash (or a second instance racing on the same
-  // agent store) can leave a persisted run wedged; the SDK then rejects new
-  // sends with AgentBusyError. Retry once with the SDK's documented recovery
-  // path (local.force expires the wedged run) instead of failing the turn.
-  const sendTurn = async (): Promise<AgentRunLike> => {
-    try {
-      return await agent.send(message, { mode: options.mode, onDelta });
-    } catch (err) {
-      if (err instanceof Error && err.name === "AgentBusyError") {
-        if (debug) console.error("[cursor:debug] agent busy; retrying send with local.force");
-        return agent.send(message, { mode: options.mode, onDelta, local: { force: true } });
-      }
-      throw err;
-    }
-  };
+  const sendTurn = (): Promise<AgentRunLike> =>
+    sendWithBusyRetry(agent, message, { mode: options.mode, onDelta }, debug);
 
   // Kick off the turn. Resolve text from run.wait() for models that don't emit
   // incremental text deltas.
@@ -172,6 +159,98 @@ export async function* streamAgentTurn(
     // Drain anything queued right before completion.
     while (queue.length > 0) yield queue.shift()!;
     if (failure) throw failure;
+  } finally {
+    options.abortSignal?.removeEventListener("abort", onAbort);
+  }
+}
+
+/**
+ * Send a message on an agent, retrying once with the SDK's documented recovery
+ * path on `AgentBusyError`. A previous opencode/CLI crash (or a second instance
+ * racing on the same agent store) can leave a persisted run wedged; the SDK then
+ * rejects new sends with `AgentBusyError`. `local.force` expires the wedged run
+ * instead of failing the turn. Shared by streaming and silent sends.
+ */
+async function sendWithBusyRetry(
+  agent: AgentLike,
+  message: SDKUserMessage,
+  sendOptions: {
+    mode: AgentModeOption;
+    onDelta?: (args: { update: { type: string } & Record<string, any> }) => void;
+  },
+  debug: boolean,
+): Promise<AgentRunLike> {
+  try {
+    return await agent.send(message, sendOptions);
+  } catch (err) {
+    if (err instanceof Error && err.name === "AgentBusyError") {
+      if (debug) console.error("[cursor:debug] agent busy; retrying send with local.force");
+      return agent.send(message, { ...sendOptions, local: { force: true } });
+    }
+    throw err;
+  }
+}
+
+/**
+ * Send a single turn on an already-acquired agent WITHOUT streaming anything
+ * back. Used to replay the leading messages of a multi-message interjection
+ * (two-or-more user messages queued while the agent was busy): messages
+ * `1..N-1` are sent silently and awaited, and only the final message streams
+ * via {@link streamAgentTurn}. This mirrors opencode's own model, where
+ * interjected messages fold into a single visible turn.
+ *
+ * Honors `options.abortSignal`: an abort cancels the in-flight run so the
+ * caller can stop before sending the next queued message.
+ *
+ * Known trade-offs of silent turns being FULL agent runs:
+ *  - Tool invisibility: the agent may execute tools (shell, edits, MCP) during
+ *    a silent turn with zero streamed output or tool display — the user sees
+ *    nothing until the final message streams. Accepted because interjections
+ *    are typically short course-corrections, and opencode itself folds
+ *    interjected messages into one visible turn.
+ *  - Serial latency: each silent turn is awaited to completion before the next
+ *    send, so an N-message interjection costs N sequential agent runs.
+ *  - Usage undercount: no onDelta means the `turn-ended` usage update is never
+ *    observed, so opencode slightly undercounts tokens on multi-message turns.
+ *
+ * Concatenating the queued messages into one Cursor message was rejected for
+ * message fidelity: each interjection must land as a distinct user turn in the
+ * agent's conversation memory (mirroring opencode's transcript), so the model
+ * sees the same message boundaries the user created and later fingerprint
+ * classification stays aligned turn-for-turn.
+ */
+export async function sendAgentTurnSilently(
+  agent: AgentLike,
+  message: SDKUserMessage,
+  options: StreamAgentTurnOptions,
+): Promise<void> {
+  // Already aborted: don't start a turn just to cancel it.
+  if (options.abortSignal?.aborted) return;
+  const debug = process.env.OPENCODE_CURSOR_DEBUG === "1";
+  const runHolder: { run?: AgentRunLike } = {};
+  const onAbort = () => {
+    void Promise.resolve(runHolder.run?.cancel()).catch(() => {});
+  };
+  options.abortSignal?.addEventListener("abort", onAbort);
+  try {
+    const run = await sendWithBusyRetry(agent, message, { mode: options.mode }, debug);
+    runHolder.run = run;
+    // The signal may have fired while send() was in flight (before runHolder
+    // was populated, so onAbort had nothing to cancel); cancel now.
+    if (options.abortSignal?.aborted) void Promise.resolve(run.cancel()).catch(() => {});
+    const result = await run.wait();
+    if (result.status !== "finished") {
+      // Our own abort cancelled the run mid-flight: expected, not a failure.
+      // The caller's abort check stops the multi-send sequence and drops the
+      // session record, so this partial turn is never counted as delivered.
+      if (options.abortSignal?.aborted) return;
+      // Anything else ("error", an external "cancelled", unknown states) means
+      // the message was NOT delivered; treating it as success would leave the
+      // session record claiming the agent saw a message it never received.
+      throw new Error(
+        `Cursor run ended with status "${result.status}"${result.result ? `: ${result.result}` : ""}`,
+      );
+    }
   } finally {
     options.abortSignal?.removeEventListener("abort", onAbort);
   }

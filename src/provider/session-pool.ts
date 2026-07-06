@@ -40,6 +40,18 @@ export function getSessionRecord(
 	return pool.get(sessionID);
 }
 
+/**
+ * Drop a session's pooled record so the NEXT turn classifies as "new" (fresh
+ * agent + full transcript replay). Called when a multi-message replay fails or
+ * aborts mid-sequence: the record was written optimistically with the full new
+ * fingerprint before delivery, so leaving it in place would let a later
+ * "continuation" resume on top of messages the agent never received.
+ */
+export function dropSessionRecord(sessionID: string): void {
+	hydrate();
+	if (pool.delete(sessionID)) saveSessionRecords(pool);
+}
+
 /** Test/diagnostic helpers. */
 export function getPooledAgentId(sessionID: string): string | undefined {
 	hydrate();

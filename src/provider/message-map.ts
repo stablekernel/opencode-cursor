@@ -147,6 +147,23 @@ function fileUrlToPath(url: string | URL): string {
 }
 
 /**
+ * Map one AI-SDK user turn into a Cursor `SDKUserMessage`. File parts (images
+ * and other files) can't be forwarded to the local Cursor agent, so they're
+ * noted as text via {@link fileNote} instead of attached natively.
+ */
+function userTurnToCursorMessage(
+	message: Extract<LanguageModelV3Prompt[number], { role: "user" }>,
+): SDKUserMessage {
+	const text: string[] = [];
+	for (const part of message.content) {
+		if (part.type === "text") text.push(part.text);
+		else if (part.type === "file") text.push(fileNote(part));
+	}
+
+	return { text: text.join("\n") };
+}
+
+/**
  * Extract only the final user turn as a Cursor message. Used when resuming a
  * pooled agent that already remembers the prior conversation, so we send just
  * the new message instead of the whole transcript. Returns `undefined` if the
@@ -157,12 +174,30 @@ export function latestUserMessage(
 ): SDKUserMessage | undefined {
 	const last = prompt[prompt.length - 1];
 	if (!last || last.role !== "user") return undefined;
+	return userTurnToCursorMessage(last);
+}
 
-	const text: string[] = [];
-	for (const part of last.content) {
-		if (part.type === "text") text.push(part.text);
-		else if (part.type === "file") text.push(fileNote(part));
+/**
+ * Extract the last `count` CONTIGUOUS trailing user turns as Cursor messages,
+ * in conversation order (oldest of the tail first, newest last). Used when
+ * resuming a pooled agent after two-or-more user messages were queued while it
+ * was busy: we replay just those new messages as sequential turns.
+ *
+ * Only the contiguous trailing run of user turns is considered; if the final
+ * message isn't a user turn the result is empty. Returns fewer than `count`
+ * entries when the trailing run is shorter (caller should fall back to a full
+ * transcript replay when the array is empty or shorter than expected).
+ */
+export function trailingUserMessages(
+	prompt: LanguageModelV3Prompt,
+	count: number,
+): SDKUserMessage[] {
+	if (count <= 0) return [];
+	const collected: SDKUserMessage[] = [];
+	for (let i = prompt.length - 1; i >= 0 && collected.length < count; i--) {
+		const message = prompt[i];
+		if (!message || message.role !== "user") break;
+		collected.push(userTurnToCursorMessage(message));
 	}
-
-	return { text: text.join("\n") };
+	return collected.reverse();
 }
