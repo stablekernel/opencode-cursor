@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.5-next.0] — 2026-07-06
+
 - **Fixed: Cursor agent rejecting turns as "prompt injection" / "gaslighting."**
   The provider flattened opencode's system prompt into the user-message transcript;
   Cursor's agent (which has its own system prompt) treated that as an injection
@@ -11,6 +13,27 @@ All notable changes to this project will be documented in this file.
   rules channel — written to a git-ignored `.cursor/rules/opencode.mdc` and loaded
   via `settingSources` — so opencode keeps control without being flagged. New
   `systemPrompt` option: `"rules"` (default), `"message"` (legacy inline), `"omit"`.
+  An explicit `settingSources` opt-out of the `"project"` layer is respected
+  (degrades to `"message"` delivery), and a failed rule write degrades gracefully
+  instead of failing the turn. The generated rule carries a `generated: opencode-cursor`
+  sentinel so a user-owned `opencode.mdc` is never overwritten or deleted (#56).
+- **Added: warm resume for multi-message prompt interjections.** When a resumed
+  Cursor agent has several queued user messages, the earlier messages are now
+  delivered as silent turns and the final one streams, instead of forcing a cold
+  full-transcript replay. A tail mismatch safely falls back to cold replay so no
+  messages are dropped (#57).
+- **Fixed: resumed turns against an expired Cursor agent are retried.** A pooled
+  agent whose server-side state expired would pass `resume()` locally but error in
+  `run.wait()`; the turn now retries once with a fresh agent when nothing was
+  emitted yet, re-pointing the pool (#52).
+- **Fixed: file/dir `@`-mentions no longer fail the turn.** The local Cursor SDK
+  agent rejects attachment forms, so file/dir mentions are now noted as text
+  (with a filesystem path for `file://` sources) instead of attached; raw base64
+  data without a filename is guarded against inlining a blob into the note (#58).
+- **Added: warn when the installed plugin lags the npm registry latest.** A
+  throttled (24h) startup check compares the installed version against `latest`
+  and prints a one-line upgrade hint; skipped under `CI` / `NO_UPDATE_NOTIFIER`,
+  never blocks init (#33).
 
 ## [0.4.4] — 2026-06-24
 
