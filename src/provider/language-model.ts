@@ -14,15 +14,27 @@ import type {
 	AgentModeOption,
 } from "@cursor/sdk";
 import { resolveCursorApiKey } from "../api-key.js";
-import { latestUserMessage, promptToCursorMessage } from "./message-map.js";
-import { streamAgentTurn, type CursorEvent } from "./agent-events.js";
+import {
+	latestUserMessage,
+	promptToCursorMessage,
+	trailingUserMessages,
+} from "./message-map.js";
+import {
+	sendAgentTurnSilently,
+	streamAgentTurn,
+	type CursorEvent,
+} from "./agent-events.js";
 import {
 	cursorEventsToContent,
 	cursorEventsToStream,
 	type ToolDisplay,
 } from "./stream-map.js";
 import { resolveControls } from "./controls.js";
-import { acquireAgent, getSessionRecord } from "./session-pool.js";
+import {
+	acquireAgent,
+	dropSessionRecord,
+	getSessionRecord,
+} from "./session-pool.js";
 import {
 	classifyTurn,
 	fingerprint,
@@ -146,6 +158,11 @@ export class CursorLanguageModel implements LanguageModelV3 {
 		let record:
 			| { systemHash: string; userHashes: string[]; mcpHash?: string }
 			| undefined;
+		// Number of new trailing user messages for a multi-message interjection
+		// (>= 2). Stays 0 for every other turn kind. When set, and the agent is
+		// resumed, we replay just those new messages as sequential turns instead
+		// of a cold full-transcript replay.
+		let multiNewUserCount = 0;
 		if (usePool) {
 			const classification = ephemeral
 				? {
@@ -154,7 +171,8 @@ export class CursorLanguageModel implements LanguageModelV3 {
 					}
 				: classifyTurn(getSessionRecord(sessionID!), options.prompt);
 			switch (classification.kind) {
-				case "continuation": {
+				case "continuation":
+				case "continuation-multi": {
 					const prev = getSessionRecord(sessionID!);
 					// A resumed agent keeps its original MCP servers, so only resume
 					// when the live MCP set is unchanged; otherwise create fresh so the
@@ -164,6 +182,9 @@ export class CursorLanguageModel implements LanguageModelV3 {
 					}
 					poolKey = sessionID;
 					record = { ...classification.fingerprint, mcpHash };
+					if (classification.kind === "continuation-multi") {
+						multiNewUserCount = classification.newUserCount ?? 0;
+					}
 					break;
 				}
 				case "new":
@@ -179,7 +200,9 @@ export class CursorLanguageModel implements LanguageModelV3 {
 				const label =
 					classification.kind === "continuation"
 						? "resume"
-						: `fresh:${classification.kind}`;
+						: classification.kind === "continuation-multi"
+							? `resume-multi:${multiNewUserCount}`
+							: `fresh:${classification.kind}`;
 				console.error(
 					`[cursor:debug] turn classification=${label} session=${sessionID}`,
 				);
@@ -212,82 +235,127 @@ export class CursorLanguageModel implements LanguageModelV3 {
 			...(resumeAgentId ? { resumeAgentId } : {}),
 		});
 
-		// A resumed agent already remembers the prior conversation, so send only the
-		// new turn; otherwise send the full transcript.
-		const message = acquired.resumed
-			? (latestUserMessage(options.prompt) ??
-				promptToCursorMessage(options.prompt))
-			: promptToCursorMessage(options.prompt);
+		// A multi-message interjection: two-or-more user messages were queued while
+		// the agent was busy, forming a contiguous user-turn tail (the classifier
+		// guarantees this shape for "continuation-multi"). On a resumed agent,
+		// replay just those new messages as sequential turns — send the leading
+		// ones silently and stream only the final one. If the tail can't be
+		// recovered (defensive; shouldn't happen post-classifier), skip the multi
+		// path: on a resumed agent that means sending only the latest message, so
+		// the empty/short check below treats it as a normal single continuation.
+		const multiTurns =
+			acquired.resumed && multiNewUserCount >= 2
+				? trailingUserMessages(options.prompt, multiNewUserCount)
+				: undefined;
 
 		let yielded = false;
 		let releasedOriginal = false;
 		try {
-			try {
-				for await (const event of streamAgentTurn(acquired.agent, message, {
-					mode,
-					abortSignal: options.abortSignal,
-				})) {
-					yielded = true;
-					yield event;
-				}
-			} catch (err) {
-				// Resume-aware retry: a resumed agent can pass resume() yet fail the
-				// actual send when Cursor's server has already expired the agent (its
-				// server-side retention is shorter than our local 7-day reuse window,
-				// and not documented). If nothing has been emitted downstream yet and
-				// the user hasn't aborted, transparently re-create a fresh agent and
-				// replay the full transcript — self-healing, no context loss. The
-				// fresh agent re-pools under the same session (overwriting the dead
-				// agentId) via acquireAgent's existing pooling path.
+			if (multiTurns && multiTurns.length === multiNewUserCount) {
+				// A multi-message interjection on a resumed agent: send the leading
+				// messages silently and stream only the final one.
 				//
-				// Deliberate tradeoff: the retry fires on ANY error class (including
-				// rate-limit or network failures) because Cursor's status:"error"
-				// carries no machine-readable class to discriminate on. Bounded to a
-				// single attempt, so the worst case is one extra create.
-				if (
-					acquired.resumed &&
-					!yielded &&
-					!options.abortSignal?.aborted
-				) {
-					if (process.env["OPENCODE_CURSOR_DEBUG"] === "1") {
-						console.error(
-							"[cursor:debug] resumed turn failed before emitting; retrying with a fresh agent",
-						);
-					}
-					acquired.release();
-					releasedOriginal = true;
-					// A fresh create (no resumeAgentId) re-pools under the same
-					// session, overwriting the dead agentId. If re-acquiring itself
-					// fails (e.g. transient create error), surface that but keep the
-					// original resume failure as the cause for diagnosability.
-					let retry: Awaited<ReturnType<typeof acquireAgent>>;
-					try {
-						retry = await acquireAgent({ ...baseAcquire });
-					} catch (retryErr) {
-						if (retryErr instanceof Error && retryErr.cause === undefined) {
-							retryErr.cause = err;
-						} else if (process.env["OPENCODE_CURSOR_DEBUG"] === "1") {
-							// Non-Error throw or pre-existing cause: the original resume
-							// failure can't ride along as `cause`, so log it instead of
-							// dropping it silently.
-							console.error(
-								"[cursor:debug] original resume failure (not attachable as cause):",
-								err,
-							);
+				// The pool record was written optimistically with the FULL new
+				// fingerprint before any send. If delivery stops partway (error or
+				// abort), drop the record so the next turn classifies fresh instead
+				// of resuming on top of messages the agent never received.
+				let delivered = false;
+				try {
+					let aborted = false;
+					for (let i = 0; i < multiTurns.length - 1; i++) {
+						if (options.abortSignal?.aborted) {
+							aborted = true;
+							break;
 						}
-						throw retryErr;
-					}
-					try {
-						const replay = promptToCursorMessage(options.prompt);
-						yield* streamAgentTurn(retry.agent, replay, {
+						await sendAgentTurnSilently(acquired.agent, multiTurns[i]!, {
 							mode,
 							abortSignal: options.abortSignal,
 						});
-					} finally {
-						retry.release();
 					}
-				} else {
-					throw err;
+					if (!aborted && !options.abortSignal?.aborted) {
+						for await (const event of streamAgentTurn(
+							acquired.agent,
+							multiTurns[multiTurns.length - 1]!,
+							{ mode, abortSignal: options.abortSignal },
+						)) {
+							yielded = true;
+							yield event;
+						}
+						delivered = true;
+					}
+				} finally {
+					if (!delivered && sessionID) dropSessionRecord(sessionID);
+				}
+			} else {
+				// A resumed agent already remembers the prior conversation, so send
+				// only the new turn; otherwise send the full transcript.
+				const message = acquired.resumed
+					? (latestUserMessage(options.prompt) ??
+						promptToCursorMessage(options.prompt))
+					: promptToCursorMessage(options.prompt);
+				try {
+					for await (const event of streamAgentTurn(acquired.agent, message, {
+						mode,
+						abortSignal: options.abortSignal,
+					})) {
+						yielded = true;
+						yield event;
+					}
+				} catch (err) {
+					// Resume-aware retry: a resumed agent can pass resume() yet fail the
+					// actual send when Cursor's server has already expired the agent (its
+					// server-side retention is shorter than our local 7-day reuse window,
+					// and not documented). If nothing has been emitted downstream yet and
+					// the user hasn't aborted, transparently re-create a fresh agent and
+					// replay the full transcript — self-healing, no context loss. The
+					// fresh agent re-pools under the same session (overwriting the dead
+					// agentId) via acquireAgent's existing pooling path.
+					//
+					// Deliberate tradeoff: the retry fires on ANY error class (including
+					// rate-limit or network failures) because Cursor's status:"error"
+					// carries no machine-readable class to discriminate on. Bounded to a
+					// single attempt, so the worst case is one extra create.
+					if (acquired.resumed && !yielded && !options.abortSignal?.aborted) {
+						if (process.env["OPENCODE_CURSOR_DEBUG"] === "1") {
+							console.error(
+								"[cursor:debug] resumed turn failed before emitting; retrying with a fresh agent",
+							);
+						}
+						acquired.release();
+						releasedOriginal = true;
+						// A fresh create (no resumeAgentId) re-pools under the same
+						// session, overwriting the dead agentId. If re-acquiring itself
+						// fails (e.g. transient create error), surface that but keep the
+						// original resume failure as the cause for diagnosability.
+						let retry: Awaited<ReturnType<typeof acquireAgent>>;
+						try {
+							retry = await acquireAgent({ ...baseAcquire });
+						} catch (retryErr) {
+							if (retryErr instanceof Error && retryErr.cause === undefined) {
+								retryErr.cause = err;
+							} else if (process.env["OPENCODE_CURSOR_DEBUG"] === "1") {
+								// Non-Error throw or pre-existing cause: the original resume
+								// failure can't ride along as `cause`, so log it instead of
+								// dropping it silently.
+								console.error(
+									"[cursor:debug] original resume failure (not attachable as cause):",
+									err,
+								);
+							}
+							throw retryErr;
+						}
+						try {
+							const replay = promptToCursorMessage(options.prompt);
+							yield* streamAgentTurn(retry.agent, replay, {
+								mode,
+								abortSignal: options.abortSignal,
+							});
+						} finally {
+							retry.release();
+						}
+					} else {
+						throw err;
+					}
 				}
 			}
 		} finally {

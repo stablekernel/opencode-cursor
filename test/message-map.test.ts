@@ -7,6 +7,7 @@ import type { LanguageModelV3Prompt } from "@ai-sdk/provider";
 import {
 	latestUserMessage,
 	promptToCursorMessage,
+	trailingUserMessages,
 } from "../src/provider/message-map.js";
 
 /** Write a temp file and return its absolute path + file:// URL string. */
@@ -367,5 +368,59 @@ describe("latestUserMessage", () => {
 		expect(msg?.images).toBeUndefined();
 		expect(msg?.text).toContain("src");
 		expect(msg?.text).toContain("application/x-directory");
+	});
+});
+
+describe("trailingUserMessages", () => {
+	it("returns the last N user turns in conversation order", () => {
+		const prompt: LanguageModelV3Prompt = [
+			{ role: "system", content: "S" },
+			{ role: "user", content: [{ type: "text", text: "a" }] },
+			{ role: "assistant", content: [{ type: "text", text: "x" }] },
+			{ role: "user", content: [{ type: "text", text: "b" }] },
+			{ role: "user", content: [{ type: "text", text: "c" }] },
+		];
+		expect(trailingUserMessages(prompt, 2)).toEqual([
+			{ text: "b" },
+			{ text: "c" },
+		]);
+	});
+
+	it("notes files on trailing turns the same way latestUserMessage does", () => {
+		const prompt: LanguageModelV3Prompt = [
+			{ role: "user", content: [{ type: "text", text: "first" }] },
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "look" },
+					{
+						type: "file",
+						data: "https://x/a.png",
+						mediaType: "image/png",
+					},
+				],
+			},
+		];
+		const [msg] = trailingUserMessages(prompt, 1);
+		expect(msg?.images).toBeUndefined();
+		expect(msg?.text).toContain("look");
+		expect(msg?.text).toContain(
+			"[attached file: https://x/a.png (image/png) — not forwarded to Cursor]",
+		);
+	});
+
+	it("returns only the available user turns when fewer than N exist", () => {
+		const prompt: LanguageModelV3Prompt = [
+			{ role: "user", content: [{ type: "text", text: "only" }] },
+		];
+		expect(trailingUserMessages(prompt, 3)).toEqual([{ text: "only" }]);
+	});
+
+	it("returns an empty array when the final turn is not a user message", () => {
+		const prompt: LanguageModelV3Prompt = [
+			{ role: "user", content: [{ type: "text", text: "hi" }] },
+			{ role: "assistant", content: [{ type: "text", text: "bye" }] },
+		];
+		expect(trailingUserMessages(prompt, 2)).toEqual([]);
 	});
 });

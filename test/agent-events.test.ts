@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Run, SDKUserMessage } from "@cursor/sdk";
 import {
+	sendAgentTurnSilently,
 	streamAgentTurn,
 	type CursorEvent,
 } from "../src/provider/agent-events.js";
@@ -114,6 +115,82 @@ describe("streamAgentTurn busy-agent recovery", () => {
 			collect(streamAgentTurn(agent, MESSAGE, { mode: "agent" })),
 		).rejects.toThrow("auth failed");
 		expect(sendCalls).toHaveLength(1);
+	});
+});
+
+describe("sendAgentTurnSilently", () => {
+	it("sends the message with no onDelta and awaits completion", async () => {
+		const sendCalls: Array<Record<string, unknown> | undefined> = [];
+		const agent = fakeAgent({
+			updates: [{ type: "text-delta", text: "should-not-surface" }],
+			result: { status: "finished", result: "done" },
+			sendCalls,
+		});
+
+		await sendAgentTurnSilently(agent, MESSAGE, { mode: "agent" });
+
+		expect(sendCalls).toHaveLength(1);
+		expect(sendCalls[0]?.["onDelta"]).toBeUndefined();
+	});
+
+	it("throws when the run ends with status 'error'", async () => {
+		const agent = fakeAgent({ result: { status: "error", result: "boom" } });
+		await expect(
+			sendAgentTurnSilently(agent, MESSAGE, { mode: "agent" }),
+		).rejects.toThrow(/error/i);
+	});
+
+	it("retries with local.force on AgentBusyError", async () => {
+		const busy = new Error("agent busy");
+		busy.name = "AgentBusyError";
+		const sendCalls: Array<Record<string, unknown> | undefined> = [];
+		const agent = fakeAgent({
+			rejectFirst: { error: busy, times: 1 },
+			result: { status: "finished", result: "" },
+			sendCalls,
+		});
+
+		await sendAgentTurnSilently(agent, MESSAGE, { mode: "agent" });
+
+		expect(sendCalls).toHaveLength(2);
+		expect(sendCalls[1]?.["local"]).toMatchObject({ force: true });
+	});
+
+	it("cancels the run when the abort signal fires", async () => {
+		let cancelled = false;
+		const controller = new AbortController();
+		const agent = {
+			agentId: "agent-test",
+			send: async (
+				_message: SDKUserMessage,
+				_sendOptions?: Record<string, unknown>,
+			) => {
+				const run: Partial<Run> = {
+					wait: () =>
+						new Promise((resolve) => {
+							// Resolve only after abort triggers cancel().
+							const check = setInterval(() => {
+								if (cancelled) {
+									clearInterval(check);
+									resolve({ status: "cancelled" } as never);
+								}
+							}, 1);
+						}),
+					cancel: async () => {
+						cancelled = true;
+					},
+				};
+				return run as Run;
+			},
+		} as unknown as AgentLike;
+
+		const promise = sendAgentTurnSilently(agent, MESSAGE, {
+			mode: "agent",
+			abortSignal: controller.signal,
+		});
+		controller.abort();
+		await promise;
+		expect(cancelled).toBe(true);
 	});
 });
 

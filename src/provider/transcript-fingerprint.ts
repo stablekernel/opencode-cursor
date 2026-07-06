@@ -38,13 +38,21 @@ export type TurnKind =
 	| "side-call"
 	/** Prior user sequence is a strict prefix + exactly one new trailing user msg. */
 	| "continuation"
-	/** Edit / revert / compaction / multiple queued msgs — prior prefix no longer holds. */
+	/** Prior user sequence is a strict prefix + two-or-more new trailing user messages. */
+	| "continuation-multi"
+	/** Edit / revert / compaction — prior prefix no longer holds. */
 	| "divergence";
 
 export interface TurnClassification {
 	kind: TurnKind;
 	/** Fingerprint of the CURRENT prompt, to store when (re)pooling. */
 	fingerprint: { systemHash: string; userHashes: string[] };
+	/**
+	 * Number of new trailing user messages relative to the prior record. Set on
+	 * `continuation` (always 1) and `continuation-multi` (>= 2); undefined for
+	 * other kinds. Lets the caller know how many tail messages to send on resume.
+	 */
+	newUserCount?: number;
 }
 
 function sha(input: string): string {
@@ -108,7 +116,12 @@ function isStrictPrefix(prefix: string[], full: string[]): boolean {
  *  2. system prompt changed -> "side-call" (don't touch the pool)
  *  3. prior user hashes are a strict prefix AND exactly one new trailing user
  *     message AND the last prompt message is a user turn -> "continuation"
- *  4. otherwise            -> "divergence" (edit/revert/compaction/queued)
+ *  4. prior user hashes are a strict prefix AND two-or-more new user messages
+ *     forming a CONTIGUOUS user-turn tail of the prompt -> "continuation-multi"
+ *     (interleaved assistant turns — e.g. an aborted reply between queued
+ *     messages — disqualify, because a resumed replay of only the contiguous
+ *     tail would silently drop the earlier queued message)
+ *  5. otherwise            -> "divergence" (edit/revert/compaction)
  *
  * Worst case on any misclassification is a single wasted full replay that
  * self-heals on the next turn — never worse than the `session: false` default.
@@ -123,13 +136,23 @@ export function classifyTurn(
 		return { kind: "side-call", fingerprint: fp };
 
 	const lastIsUser = prompt[prompt.length - 1]?.role === "user";
-	const exactlyOneNew = fp.userHashes.length === prev.userHashes.length + 1;
-	if (
-		lastIsUser &&
-		exactlyOneNew &&
-		isStrictPrefix(prev.userHashes, fp.userHashes)
-	) {
-		return { kind: "continuation", fingerprint: fp };
+	const newUserCount = fp.userHashes.length - prev.userHashes.length;
+	const isPrefix = isStrictPrefix(prev.userHashes, fp.userHashes);
+	if (lastIsUser && isPrefix && newUserCount === 1) {
+		return { kind: "continuation", fingerprint: fp, newUserCount: 1 };
+	}
+	// The N new messages must be the prompt's contiguous trailing user turns.
+	// When an assistant turn sits between them (aborted reply between queued
+	// interjections), a resumed tail-only replay would drop the earlier queued
+	// message — so that shape must take the divergence full-replay path.
+	const tailContiguous =
+		newUserCount >= 2 &&
+		prompt.length >= newUserCount &&
+		prompt
+			.slice(prompt.length - newUserCount)
+			.every((m) => m.role === "user");
+	if (lastIsUser && isPrefix && tailContiguous) {
+		return { kind: "continuation-multi", fingerprint: fp, newUserCount };
 	}
 	return { kind: "divergence", fingerprint: fp };
 }

@@ -41,6 +41,7 @@ describe("classifyTurn", () => {
 		const c = classifyTurn(prev, turn2);
 		expect(c.kind).toBe("continuation");
 		expect(c.fingerprint.userHashes).toHaveLength(2);
+		expect(c.newUserCount).toBe(1);
 	});
 
 	it("returns 'side-call' when the system prompt changes (e.g. title gen)", () => {
@@ -66,10 +67,36 @@ describe("classifyTurn", () => {
 		expect(classifyTurn(prev, reverted).kind).toBe("divergence");
 	});
 
-	it("returns 'divergence' when more than one new user message is queued", () => {
+	it("returns 'continuation-multi' when >=2 new user messages are appended to a strict prefix", () => {
 		const prev = record([sys("S"), user("a")]);
 		const queued = [sys("S"), user("a"), user("b"), user("c")];
-		expect(classifyTurn(prev, queued).kind).toBe("divergence");
+		const c = classifyTurn(prev, queued);
+		expect(c.kind).toBe("continuation-multi");
+		expect(c.newUserCount).toBe(2);
+		expect(c.fingerprint.userHashes).toHaveLength(3);
+	});
+
+	it("returns 'divergence' when new user msgs are interleaved with assistant turns (non-contiguous tail)", () => {
+		// Interject -> abort mid-response -> interject again: opencode keeps the
+		// aborted assistant turn, so the new user msgs are NOT a contiguous tail.
+		// Resuming here would silently drop the earlier queued message, so this
+		// must fall back to divergence (fresh agent + full replay).
+		const prev = record([sys("S"), user("a")]);
+		const interleaved = [
+			sys("S"),
+			user("a"),
+			assistant("x"),
+			user("b"),
+			assistant("partial"),
+			user("c"),
+		];
+		expect(classifyTurn(prev, interleaved).kind).toBe("divergence");
+	});
+
+	it("returns 'divergence' when an earlier message is edited AND multiple new msgs are queued", () => {
+		const prev = record([sys("S"), user("a")]);
+		const editedPlusQueued = [sys("S"), user("EDITED"), user("b"), user("c")];
+		expect(classifyTurn(prev, editedPlusQueued).kind).toBe("divergence");
 	});
 
 	it("returns 'divergence' when the last message is not a user turn", () => {
