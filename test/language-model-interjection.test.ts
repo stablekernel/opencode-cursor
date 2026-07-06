@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LanguageModelV3Prompt } from "@ai-sdk/provider";
+import type { LanguageModelV3CallOptions } from "@ai-sdk/provider";
 
 // Sandbox the on-disk session store away from the user's real cache dir.
 process.env.XDG_CACHE_HOME = mkdtempSync(join(tmpdir(), "cursor-lm-test-"));
@@ -73,18 +74,20 @@ function model() {
 	});
 }
 
-function callOptions(prompt: LanguageModelV3Prompt) {
+function callOptions(prompt: LanguageModelV3Prompt, abortSignal?: AbortSignal) {
 	return {
 		prompt,
 		providerOptions: { cursor: { sessionID: SESSION_ID } },
-	} as never;
+		...(abortSignal ? { abortSignal } : {}),
+	} as unknown as LanguageModelV3CallOptions;
 }
 
 async function drain(
 	model: InstanceType<typeof CursorLanguageModel>,
 	prompt: LanguageModelV3Prompt,
+	abortSignal?: AbortSignal,
 ): Promise<Array<{ type: string }>> {
-	const { stream } = await model.doStream(callOptions(prompt));
+	const { stream } = await model.doStream(callOptions(prompt, abortSignal));
 	const reader = stream.getReader();
 	const parts: Array<{ type: string }> = [];
 	// eslint-disable-next-line no-constant-condition
@@ -177,6 +180,49 @@ describe("multi-message interjection (continuation-multi)", () => {
 		resume.mockResolvedValue(makeFakeAgent("a1", sentTurns));
 		await drain(model(), [sys, user("a"), user("b"), user("c")]);
 		expect(getSessionRecord(SESSION_ID)).toMatchObject({ agentId: "a1" });
+	});
+
+	it("stops sending and drops the record when abort fires between silent sends", async () => {
+		// Turn 1: pool the agent.
+		create.mockResolvedValue(makeFakeAgent("a1", sentTurns));
+		await drain(model(), [sys, user("a")]);
+		expect(getSessionRecord(SESSION_ID)).toBeDefined();
+
+		// Turn 2: continuation-multi with THREE new msgs (b, c, d). The abort fires
+		// as soon as the first silent send ("b") resolves, so the loop's pre-send
+		// check breaks before "c" is ever sent and the final "d" never streams.
+		const controller = new AbortController();
+		const abortingAgent = {
+			agentId: "a1",
+			close: vi.fn(),
+			send: async (
+				message: { text: string },
+				_sendOptions?: Record<string, unknown>,
+			) => {
+				sentTurns.push({ text: message.text, streamed: false });
+				if (message.text === "b") controller.abort();
+				return {
+					id: "run",
+					wait: async () => ({ status: "finished", result: message.text }),
+					cancel: async () => {},
+				};
+			},
+		};
+		resume.mockResolvedValue(abortingAgent);
+		sentTurns.length = 0;
+
+		const parts = await drain(
+			model(),
+			[sys, user("a"), user("b"), user("c"), user("d")],
+			controller.signal,
+		);
+
+		// Only "b" was sent; "c"/"d" skipped once the signal was observed.
+		expect(sentTurns).toEqual([{ text: "b", streamed: false }]);
+		// No error part: an aborted multi turn finishes cleanly (empty stream).
+		expect(parts.some((p) => p.type === "error")).toBe(false);
+		// Record dropped: next turn must replay fresh, not resume on undelivered msgs.
+		expect(getSessionRecord(SESSION_ID)).toBeUndefined();
 	});
 
 	it("falls back to a full transcript replay when trailing user msgs are insufficient", async () => {
