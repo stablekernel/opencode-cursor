@@ -1,4 +1,9 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "tsup";
+
+const pkg = JSON.parse(
+	readFileSync(new URL("./package.json", import.meta.url), "utf8"),
+) as { version: string };
 
 export default defineConfig({
 	// Emit config (src-only rootDir + declaration); the root tsconfig.json is the
@@ -16,6 +21,10 @@ export default defineConfig({
 	dts: true,
 	clean: true,
 	sourcemap: true,
+	// Bake the package version into the bundle: in dist/, version-check.ts can't
+	// resolve ../package.json (it would point inside dist/), so the version is
+	// inlined at build time instead.
+	define: { __PKG_VERSION__: JSON.stringify(pkg.version) },
 	// @cursor/sdk is heavy and resolved at runtime; keep these external.
 	external: ["@cursor/sdk", "@ai-sdk/provider", "@opencode-ai/plugin"],
 });
