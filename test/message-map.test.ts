@@ -1,9 +1,26 @@
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { LanguageModelV3Prompt } from "@ai-sdk/provider";
 import {
 	latestUserMessage,
 	promptToCursorMessage,
 } from "../src/provider/message-map.js";
+
+/** Write a temp file and return its absolute path + file:// URL string. */
+function tempFile(name: string, bytes: Buffer): { path: string; url: string } {
+	const dir = mkdtempSync(join(tmpdir(), "cursor-msgmap-"));
+	const path = join(dir, name);
+	writeFileSync(path, bytes);
+	return { path, url: pathToFileURL(path).href };
+}
+
+const PNG_BYTES = Buffer.from(
+	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+	"base64",
+);
 
 describe("promptToCursorMessage", () => {
 	it("flattens a multi-role conversation into a transcript", () => {
@@ -21,24 +38,32 @@ describe("promptToCursorMessage", () => {
 		expect(msg.images).toBeUndefined();
 	});
 
-	it("attaches images from the final user turn as base64 data", () => {
+	// Cursor's LOCAL SDK agent (the only backend the chat path uses) cannot
+	// accept images in any form: `{url}` throws "URL images are only supported
+	// for cloud SDK agents", and `{data,mimeType}` base64 fails the run with an
+	// empty `status:"error"` (the "Cursor run ended with status error" a user
+	// hits on an `@image` mention). So we never populate `images`; instead every
+	// file part is surfaced as a text note so the run always completes.
+	it("never attaches images; notes an image file part as text", () => {
 		const bytes = new Uint8Array([1, 2, 3, 4]);
 		const prompt: LanguageModelV3Prompt = [
 			{
 				role: "user",
 				content: [
 					{ type: "text", text: "Describe this" },
-					{ type: "file", data: bytes, mediaType: "image/png" },
+					{
+						type: "file",
+						data: bytes,
+						mediaType: "image/png",
+						filename: "shot.png",
+					},
 				],
 			},
 		];
 		const msg = promptToCursorMessage(prompt);
-		expect(msg.images).toHaveLength(1);
-		expect(msg.images![0]).toEqual({
-			data: Buffer.from(bytes).toString("base64"),
-			mimeType: "image/png",
-		});
-		expect(msg.text).toContain("[image attached]");
+		expect(msg.images).toBeUndefined();
+		expect(msg.text).toContain("shot.png");
+		expect(msg.text).toContain("image/png");
 	});
 
 	it("includes tool outputs (truncated) instead of dropping them", () => {
@@ -90,7 +115,7 @@ describe("promptToCursorMessage", () => {
 		expect(msg.text.length).toBeLessThan(3000);
 	});
 
-	it("passes through image URLs", () => {
+	it("notes an http(s) image URL as text without attaching it", () => {
 		const prompt: LanguageModelV3Prompt = [
 			{
 				role: "user",
@@ -99,12 +124,164 @@ describe("promptToCursorMessage", () => {
 						type: "file",
 						data: "https://example.com/a.png",
 						mediaType: "image/png",
+						filename: "a.png",
 					},
 				],
 			},
 		];
 		const msg = promptToCursorMessage(prompt);
-		expect(msg.images![0]).toEqual({ url: "https://example.com/a.png" });
+		expect(msg.images).toBeUndefined();
+		expect(msg.text).toContain("a.png");
+	});
+
+	it("notes a file:// image URL (URL object) as text, never as an image", () => {
+		const { url } = tempFile("px.png", PNG_BYTES);
+		const prompt: LanguageModelV3Prompt = [
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "look" },
+					{
+						type: "file",
+						data: new URL(url),
+						mediaType: "image/png",
+						filename: "px.png",
+					},
+				],
+			},
+		];
+		const msg = promptToCursorMessage(prompt);
+		expect(msg.images).toBeUndefined();
+		expect(msg.text).toContain("px.png");
+	});
+
+	it("notes a data: URI image as text, never as an image", () => {
+		const b64 = PNG_BYTES.toString("base64");
+		const prompt: LanguageModelV3Prompt = [
+			{
+				role: "user",
+				content: [
+					{
+						type: "file",
+						data: `data:image/png;base64,${b64}`,
+						mediaType: "image/png",
+						filename: "inline.png",
+					},
+				],
+			},
+		];
+		const msg = promptToCursorMessage(prompt);
+		expect(msg.images).toBeUndefined();
+		expect(msg.text).toContain("inline.png");
+	});
+
+	it("notes a non-image file attachment as text instead of dropping it", () => {
+		const { url } = tempFile("doc.pdf", Buffer.from("%PDF-1.4\n"));
+		const prompt: LanguageModelV3Prompt = [
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "summarize" },
+					{
+						type: "file",
+						data: new URL(url),
+						mediaType: "application/pdf",
+						filename: "doc.pdf",
+					},
+				],
+			},
+		];
+		const msg = promptToCursorMessage(prompt);
+		expect(msg.images).toBeUndefined();
+		expect(msg.text).toContain("doc.pdf");
+		expect(msg.text).toContain("application/pdf");
+	});
+
+	it("notes a directory @-mention as text instead of failing the turn", () => {
+		const { url } = tempFile("readme.md", Buffer.from("# hi\n"));
+		const dirUrl = url.slice(0, url.lastIndexOf("/")); // parent dir file:// URL
+		const prompt: LanguageModelV3Prompt = [
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "what's in here?" },
+					{
+						type: "file",
+						data: new URL(dirUrl),
+						mediaType: "application/x-directory",
+						filename: "src",
+					},
+				],
+			},
+		];
+		const msg = promptToCursorMessage(prompt);
+		expect(msg.images).toBeUndefined();
+		expect(msg.text).toContain("src");
+		expect(msg.text).toContain("application/x-directory");
+	});
+
+	it("falls back to the filesystem path when a file:// part has no filename", () => {
+		const { path, url } = tempFile("noname.bin", Buffer.from([0, 1, 2]));
+		const prompt: LanguageModelV3Prompt = [
+			{
+				role: "user",
+				content: [
+					{
+						type: "file",
+						data: new URL(url),
+						mediaType: "application/octet-stream",
+					},
+				],
+			},
+		];
+		const msg = promptToCursorMessage(prompt);
+		expect(msg.images).toBeUndefined();
+		// No filename → the note identifies the file by its filesystem path
+		// (not the file:// href) so the local agent's workspace tools can act
+		// on it directly.
+		expect(msg.text).toContain(path);
+		expect(msg.text).not.toContain("file://");
+		expect(msg.text).toContain("application/octet-stream");
+	});
+
+	it("uses an http URL string as the name when a file part has no filename", () => {
+		const prompt: LanguageModelV3Prompt = [
+			{
+				role: "user",
+				content: [
+					{
+						type: "file",
+						data: "https://example.com/pic.png",
+						mediaType: "image/png",
+					},
+				],
+			},
+		];
+		const msg = promptToCursorMessage(prompt);
+		expect(msg.images).toBeUndefined();
+		expect(msg.text).toContain("https://example.com/pic.png");
+	});
+
+	it("never inlines raw base64 string data; falls back to a generic name", () => {
+		const b64 = PNG_BYTES.toString("base64");
+		const prompt: LanguageModelV3Prompt = [
+			{
+				role: "user",
+				content: [
+					{
+						type: "file",
+						// Raw base64 with no data: prefix and no filename — must NOT
+						// end up verbatim in the note text.
+						data: b64,
+						mediaType: "image/png",
+					},
+				],
+			},
+		];
+		const msg = promptToCursorMessage(prompt);
+		expect(msg.images).toBeUndefined();
+		expect(msg.text).not.toContain(b64);
+		expect(msg.text).toContain("[attached file: file (image/png)");
 	});
 });
 
@@ -125,5 +302,70 @@ describe("latestUserMessage", () => {
 			{ role: "assistant", content: [{ type: "text", text: "bye" }] },
 		];
 		expect(latestUserMessage(prompt)).toBeUndefined();
+	});
+
+	it("notes an image in the final user turn as text, never as an image", () => {
+		const { url } = tempFile("px.png", PNG_BYTES);
+		const prompt: LanguageModelV3Prompt = [
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "look" },
+					{
+						type: "file",
+						data: new URL(url),
+						mediaType: "image/png",
+						filename: "px.png",
+					},
+				],
+			},
+		];
+		const msg = latestUserMessage(prompt);
+		expect(msg?.images).toBeUndefined();
+		expect(msg?.text).toContain("px.png");
+	});
+
+	it("notes a non-image attachment in the final user turn as text", () => {
+		const { url } = tempFile("doc.pdf", Buffer.from("%PDF-1.4\n"));
+		const prompt: LanguageModelV3Prompt = [
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "summarize" },
+					{
+						type: "file",
+						data: new URL(url),
+						mediaType: "application/pdf",
+						filename: "doc.pdf",
+					},
+				],
+			},
+		];
+		const msg = latestUserMessage(prompt);
+		expect(msg?.images).toBeUndefined();
+		expect(msg?.text).toContain("doc.pdf");
+	});
+
+	it("notes a directory @-mention in the final user turn as text", () => {
+		const { url } = tempFile("readme.md", Buffer.from("# hi\n"));
+		const dirUrl = url.slice(0, url.lastIndexOf("/"));
+		const prompt: LanguageModelV3Prompt = [
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "what's in here?" },
+					{
+						type: "file",
+						data: new URL(dirUrl),
+						mediaType: "application/x-directory",
+						filename: "src",
+					},
+				],
+			},
+		];
+		const msg = latestUserMessage(prompt);
+		expect(msg?.images).toBeUndefined();
+		expect(msg?.text).toContain("src");
+		expect(msg?.text).toContain("application/x-directory");
 	});
 });
