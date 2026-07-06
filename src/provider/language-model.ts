@@ -186,7 +186,10 @@ export class CursorLanguageModel implements LanguageModelV3 {
 			}
 		}
 
-		const acquired = await acquireAgent({
+		// Shared acquire params. The retry path reuses this verbatim (minus
+		// resumeAgentId) so a fresh agent can never drift from the first attempt's
+		// config (sandbox, settingSources, MCP, etc.).
+		const baseAcquire = {
 			apiKey: this.requireApiKey(),
 			modelSelection,
 			mode,
@@ -200,9 +203,13 @@ export class CursorLanguageModel implements LanguageModelV3 {
 			...(mcpServers ? { mcpServers } : {}),
 			...(this.config.agents ? { agents: this.config.agents } : {}),
 			...(poolKey ? { name: `opencode/${sessionID!.slice(-8)}` } : {}),
-			...(resumeAgentId ? { resumeAgentId } : {}),
 			...(poolKey ? { poolKey } : {}),
 			...(record ? { record } : {}),
+		};
+
+		const acquired = await acquireAgent({
+			...baseAcquire,
+			...(resumeAgentId ? { resumeAgentId } : {}),
 		});
 
 		// A resumed agent already remembers the prior conversation, so send only the
@@ -212,13 +219,79 @@ export class CursorLanguageModel implements LanguageModelV3 {
 				promptToCursorMessage(options.prompt))
 			: promptToCursorMessage(options.prompt);
 
+		let yielded = false;
+		let releasedOriginal = false;
 		try {
-			yield* streamAgentTurn(acquired.agent, message, {
-				mode,
-				abortSignal: options.abortSignal,
-			});
+			try {
+				for await (const event of streamAgentTurn(acquired.agent, message, {
+					mode,
+					abortSignal: options.abortSignal,
+				})) {
+					yielded = true;
+					yield event;
+				}
+			} catch (err) {
+				// Resume-aware retry: a resumed agent can pass resume() yet fail the
+				// actual send when Cursor's server has already expired the agent (its
+				// server-side retention is shorter than our local 7-day reuse window,
+				// and not documented). If nothing has been emitted downstream yet and
+				// the user hasn't aborted, transparently re-create a fresh agent and
+				// replay the full transcript — self-healing, no context loss. The
+				// fresh agent re-pools under the same session (overwriting the dead
+				// agentId) via acquireAgent's existing pooling path.
+				//
+				// Deliberate tradeoff: the retry fires on ANY error class (including
+				// rate-limit or network failures) because Cursor's status:"error"
+				// carries no machine-readable class to discriminate on. Bounded to a
+				// single attempt, so the worst case is one extra create.
+				if (
+					acquired.resumed &&
+					!yielded &&
+					!options.abortSignal?.aborted
+				) {
+					if (process.env["OPENCODE_CURSOR_DEBUG"] === "1") {
+						console.error(
+							"[cursor:debug] resumed turn failed before emitting; retrying with a fresh agent",
+						);
+					}
+					acquired.release();
+					releasedOriginal = true;
+					// A fresh create (no resumeAgentId) re-pools under the same
+					// session, overwriting the dead agentId. If re-acquiring itself
+					// fails (e.g. transient create error), surface that but keep the
+					// original resume failure as the cause for diagnosability.
+					let retry: Awaited<ReturnType<typeof acquireAgent>>;
+					try {
+						retry = await acquireAgent({ ...baseAcquire });
+					} catch (retryErr) {
+						if (retryErr instanceof Error && retryErr.cause === undefined) {
+							retryErr.cause = err;
+						} else if (process.env["OPENCODE_CURSOR_DEBUG"] === "1") {
+							// Non-Error throw or pre-existing cause: the original resume
+							// failure can't ride along as `cause`, so log it instead of
+							// dropping it silently.
+							console.error(
+								"[cursor:debug] original resume failure (not attachable as cause):",
+								err,
+							);
+						}
+						throw retryErr;
+					}
+					try {
+						const replay = promptToCursorMessage(options.prompt);
+						yield* streamAgentTurn(retry.agent, replay, {
+							mode,
+							abortSignal: options.abortSignal,
+						});
+					} finally {
+						retry.release();
+					}
+				} else {
+					throw err;
+				}
+			}
 		} finally {
-			acquired.release();
+			if (!releasedOriginal) acquired.release();
 		}
 	}
 
