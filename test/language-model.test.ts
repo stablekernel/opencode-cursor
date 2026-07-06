@@ -22,11 +22,9 @@ vi.mock("../src/api-key.js", () => ({
 const { CursorLanguageModel } = await import(
 	"../src/provider/language-model.js"
 );
-const {
-	clearAgentPool,
-	getPooledAgentId,
-	resetSessionPoolMemory,
-} = await import("../src/provider/session-pool.js");
+const { clearAgentPool, getPooledAgentId } = await import(
+	"../src/provider/session-pool.js"
+);
 
 type OnDelta = (input: {
 	update: Record<string, unknown> & { type: string };

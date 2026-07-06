@@ -237,11 +237,21 @@ export class CursorLanguageModel implements LanguageModelV3 {
 				// replay the full transcript — self-healing, no context loss. The
 				// fresh agent re-pools under the same session (overwriting the dead
 				// agentId) via acquireAgent's existing pooling path.
+				//
+				// Deliberate tradeoff: the retry fires on ANY error class (including
+				// rate-limit or network failures) because Cursor's status:"error"
+				// carries no machine-readable class to discriminate on. Bounded to a
+				// single attempt, so the worst case is one extra create.
 				if (
 					acquired.resumed &&
 					!yielded &&
 					!options.abortSignal?.aborted
 				) {
+					if (process.env["OPENCODE_CURSOR_DEBUG"] === "1") {
+						console.error(
+							"[cursor:debug] resumed turn failed before emitting; retrying with a fresh agent",
+						);
+					}
 					acquired.release();
 					releasedOriginal = true;
 					// A fresh create (no resumeAgentId) re-pools under the same
@@ -254,6 +264,14 @@ export class CursorLanguageModel implements LanguageModelV3 {
 					} catch (retryErr) {
 						if (retryErr instanceof Error && retryErr.cause === undefined) {
 							retryErr.cause = err;
+						} else if (process.env["OPENCODE_CURSOR_DEBUG"] === "1") {
+							// Non-Error throw or pre-existing cause: the original resume
+							// failure can't ride along as `cause`, so log it instead of
+							// dropping it silently.
+							console.error(
+								"[cursor:debug] original resume failure (not attachable as cause):",
+								err,
+							);
 						}
 						throw retryErr;
 					}
