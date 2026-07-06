@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync, existsSync, rmSync } from "node:fs";
+import {
+	mkdtempSync,
+	mkdirSync,
+	writeFileSync,
+	readFileSync,
+	existsSync,
+	rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LanguageModelV3Prompt } from "@ai-sdk/provider";
@@ -67,6 +74,38 @@ describe("writeSystemRule", () => {
 			join(cwd, ".cursor", "rules", ".gitignore"),
 			"utf8",
 		);
+		expect(ignore.match(/opencode\.mdc/g)).toHaveLength(1);
+	});
+	it("overwrites the rule body on rewrite", () => {
+		const cwd = tmp();
+		writeSystemRule(cwd, "first");
+		writeSystemRule(cwd, "second");
+		const body = readFileSync(
+			join(cwd, ".cursor", "rules", "opencode.mdc"),
+			"utf8",
+		);
+		expect(body).toBe("---\nalwaysApply: true\n---\n\nsecond\n");
+		expect(body).not.toContain("first");
+	});
+	it("preserves a pre-existing .gitignore and appends the rule", () => {
+		const cwd = tmp();
+		const dir = join(cwd, ".cursor", "rules");
+		mkdirSync(dir, { recursive: true });
+		// Pre-existing entry with no trailing newline exercises the prefix path.
+		writeFileSync(join(dir, ".gitignore"), "other.txt", "utf8");
+		writeSystemRule(cwd, "x");
+		const ignore = readFileSync(join(dir, ".gitignore"), "utf8");
+		const lines = ignore.split(/\r?\n/);
+		expect(lines).toContain("other.txt");
+		expect(lines).toContain("opencode.mdc");
+	});
+	it("does not re-append when the rule is already git-ignored", () => {
+		const cwd = tmp();
+		const dir = join(cwd, ".cursor", "rules");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, ".gitignore"), "opencode.mdc\n", "utf8");
+		writeSystemRule(cwd, "x");
+		const ignore = readFileSync(join(dir, ".gitignore"), "utf8");
 		expect(ignore.match(/opencode\.mdc/g)).toHaveLength(1);
 	});
 });
