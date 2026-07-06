@@ -16,6 +16,7 @@ import {
 	type CursorModelConfig,
 } from "./language-model.js";
 import type { ToolDisplay } from "./stream-map.js";
+import type { SystemPromptMode } from "./message-map.js";
 
 export interface CursorProviderOptions {
 	/**
@@ -65,6 +66,17 @@ export interface CursorProviderOptions {
 	 *    hosts (works everywhere).
 	 */
 	toolDisplay?: ToolDisplay;
+	/**
+	 * How opencode's system prompt reaches the Cursor agent:
+	 *  - "rules" (default): written to `<cwd>/.cursor/rules/opencode.mdc`
+	 *    (git-ignored, alwaysApply) and loaded via the `project` settings layer —
+	 *    Cursor's authoritative channel, so it is not rejected as prompt injection.
+	 *    Note: a project rule also applies to your own Cursor IDE in this repo, and
+	 *    enabling the project layer also loads other `.cursor/` config.
+	 *  - "message": legacy inline `# System` block (may be flagged as injection).
+	 *  - "omit": not forwarded at all.
+	 */
+	systemPrompt?: SystemPromptMode;
 }
 
 /**
@@ -94,6 +106,7 @@ export function createCursor(options: CursorProviderOptions = {}): ProviderV3 {
 		...(options.agents ? { agents: options.agents } : {}),
 		session: options.session ?? "auto",
 		toolDisplay: options.toolDisplay ?? "blocks",
+		systemPrompt: options.systemPrompt ?? "rules",
 	};
 
 	const notImplemented = (kind: string, modelId: string): never => {

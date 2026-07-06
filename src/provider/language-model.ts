@@ -19,7 +19,9 @@ import {
 	latestUserMessage,
 	promptToCursorMessage,
 	trailingUserMessages,
+	type SystemPromptMode,
 } from "./message-map.js";
+import { extractSystemText, resolveSystemDelivery } from "./system-rule.js";
 import {
 	sendAgentTurnSilently,
 	streamAgentTurn,
@@ -77,6 +79,11 @@ export interface CursorModelConfig {
 	 * Defaults to `"blocks"`.
 	 */
 	toolDisplay?: ToolDisplay;
+	/**
+	 * How opencode's system prompt reaches the Cursor agent (see
+	 * {@link SystemPromptMode}). Defaults to "rules".
+	 */
+	systemPrompt?: SystemPromptMode;
 }
 
 /**
@@ -100,6 +107,15 @@ export class CursorLanguageModel implements LanguageModelV3 {
 	) {
 		this.modelId = modelId;
 		this.provider = config.providerName;
+	}
+
+	/** Messages already emitted, so degradation warnings fire once, not per turn. */
+	private readonly warned = new Set<string>();
+
+	private warnOnce(message: string): void {
+		if (this.warned.has(message)) return;
+		this.warned.add(message);
+		console.warn(`[${this.provider}] ${message}`);
 	}
 
 	private requireApiKey(): string {
@@ -235,6 +251,21 @@ export class CursorLanguageModel implements LanguageModelV3 {
 			}
 		}
 
+		// In "rules" mode (default), deliver opencode's system prompt through
+		// Cursor's authoritative rules channel instead of the user transcript.
+		// Degrades to inline "message" delivery when the user explicitly opted
+		// out of the "project" settings layer, when the rule file is user-owned,
+		// or when the write fails (read-only checkout etc.).
+		const delivery = resolveSystemDelivery({
+			mode: this.config.systemPrompt ?? "rules",
+			settingSources: this.config.settingSources,
+			cwd: this.config.cwd,
+			systemText: extractSystemText(options.prompt),
+			warn: (message) => this.warnOnce(message),
+		});
+		const systemMode: SystemPromptMode = delivery.mode;
+		const settingSources = delivery.settingSources;
+
 		// Shared acquire params. The retry path reuses this verbatim (minus
 		// resumeAgentId) so a fresh agent can never drift from the first attempt's
 		// config (sandbox, settingSources, MCP, etc.).
@@ -243,9 +274,7 @@ export class CursorLanguageModel implements LanguageModelV3 {
 			modelSelection,
 			mode,
 			cwd: this.config.cwd,
-			...(this.config.settingSources
-				? { settingSources: this.config.settingSources }
-				: {}),
+			...(settingSources ? { settingSources } : {}),
 			...(this.config.sandbox !== undefined
 				? { sandbox: this.config.sandbox }
 				: {}),
@@ -311,8 +340,8 @@ export class CursorLanguageModel implements LanguageModelV3 {
 				// only the new turn; otherwise send the full transcript.
 				const message = acquired.resumed
 					? (latestUserMessage(options.prompt) ??
-						promptToCursorMessage(options.prompt))
-					: promptToCursorMessage(options.prompt);
+						promptToCursorMessage(options.prompt, systemMode))
+					: promptToCursorMessage(options.prompt, systemMode);
 				try {
 					for await (const event of streamAgentTurn(acquired.agent, message, {
 						mode,
@@ -365,7 +394,7 @@ export class CursorLanguageModel implements LanguageModelV3 {
 							throw retryErr;
 						}
 						try {
-							const replay = promptToCursorMessage(options.prompt);
+							const replay = promptToCursorMessage(options.prompt, systemMode);
 							yield* streamAgentTurn(retry.agent, replay, {
 								mode,
 								abortSignal: options.abortSignal,

@@ -6,6 +6,16 @@ import type {
 import type { SDKUserMessage } from "@cursor/sdk";
 
 /**
+ * How opencode's system prompt reaches the Cursor agent.
+ *  - "rules" (default): delivered out-of-band as a Cursor project rule
+ *    (see system-rule.ts) and therefore omitted from this flattened transcript.
+ *  - "message": legacy — inlined as a `# System` block in the transcript.
+ *    Injection-hardened Cursor models may reject this; kept for back-compat.
+ *  - "omit": dropped entirely (no rule, no inline).
+ */
+export type SystemPromptMode = "rules" | "message" | "omit";
+
+/**
  * Caps on inlined tool payloads in the flattened transcript. Tool outputs are
  * INCLUDED (truncated) rather than dropped so a fresh/diverged agent still sees
  * what prior tools produced, while a huge file read or search dump can't bloat
@@ -45,13 +55,19 @@ function truncate(text: string, cap: number): string {
  */
 export function promptToCursorMessage(
 	prompt: LanguageModelV3Prompt,
+	systemPrompt: SystemPromptMode = "rules",
 ): SDKUserMessage {
 	const lines: string[] = [];
 
 	prompt.forEach((message) => {
 		switch (message.role) {
 			case "system":
-				lines.push(`# System\n${message.content}`);
+				// Only inline in legacy "message" mode. In "rules" mode the system
+				// prompt is delivered via .cursor/rules (authoritative, not flagged);
+				// in "omit" mode it is dropped.
+				if (systemPrompt === "message") {
+					lines.push(`# System\n${message.content}`);
+				}
 				break;
 			case "user": {
 				const text: string[] = [];

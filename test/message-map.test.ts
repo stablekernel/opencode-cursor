@@ -24,7 +24,7 @@ const PNG_BYTES = Buffer.from(
 );
 
 describe("promptToCursorMessage", () => {
-	it("flattens a multi-role conversation into a transcript", () => {
+	it("omits the system prompt from the transcript by default (rules mode)", () => {
 		const prompt: LanguageModelV3Prompt = [
 			{ role: "system", content: "Be concise." },
 			{ role: "user", content: [{ type: "text", text: "Hello" }] },
@@ -32,11 +32,32 @@ describe("promptToCursorMessage", () => {
 			{ role: "user", content: [{ type: "text", text: "What is 2+2?" }] },
 		];
 		const msg = promptToCursorMessage(prompt);
-		expect(msg.text).toContain("# System\nBe concise.");
+		// System prompt is delivered via the Cursor rules channel, not inline.
+		expect(msg.text).not.toContain("# System");
+		expect(msg.text).not.toContain("Be concise.");
 		expect(msg.text).toContain("# User\nHello");
 		expect(msg.text).toContain("# Assistant\nHi there");
 		expect(msg.text).toContain("# User\nWhat is 2+2?");
 		expect(msg.images).toBeUndefined();
+	});
+
+	it("includes the system prompt inline in 'message' (legacy) mode", () => {
+		const prompt: LanguageModelV3Prompt = [
+			{ role: "system", content: "Be concise." },
+			{ role: "user", content: [{ type: "text", text: "Hi" }] },
+		];
+		const msg = promptToCursorMessage(prompt, "message");
+		expect(msg.text).toContain("# System\nBe concise.");
+	});
+
+	it("omits the system prompt in 'omit' mode", () => {
+		const prompt: LanguageModelV3Prompt = [
+			{ role: "system", content: "Be concise." },
+			{ role: "user", content: [{ type: "text", text: "Hi" }] },
+		];
+		const msg = promptToCursorMessage(prompt, "omit");
+		expect(msg.text).not.toContain("Be concise.");
+		expect(msg.text).toBe("# User\nHi");
 	});
 
 	// Cursor's LOCAL SDK agent (the only backend the chat path uses) cannot

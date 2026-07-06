@@ -4,7 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-_No unreleased changes._
+- **Fixed: Cursor agent rejecting turns as "prompt injection" / "gaslighting."**
+  The provider flattened opencode's system prompt into the user-message transcript;
+  Cursor's agent (which has its own system prompt) treated that as an injection
+  attempt. opencode's system prompt is now delivered through Cursor's authoritative
+  rules channel — written to a git-ignored `.cursor/rules/opencode.mdc` and loaded
+  via `settingSources` — so opencode keeps control without being flagged. New
+  `systemPrompt` option: `"rules"` (default), `"message"` (legacy inline), `"omit"`.
 
 ## [0.4.4] — 2026-06-24
 

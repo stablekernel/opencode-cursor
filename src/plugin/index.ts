@@ -11,6 +11,7 @@ import {
 } from "./mcp-config.js";
 import { buildCursorTools } from "./cursor-tools.js";
 import { warnIfStale } from "../version-check.js";
+import { removeSystemRule } from "../provider/system-rule.js";
 
 function apiKeyFromAuth(auth: Auth | undefined): string | undefined {
 	return auth?.type === "api" ? auth.key : undefined;
@@ -47,6 +48,12 @@ export const CursorPlugin: Plugin = async (input) => {
 	// (reflecting mid-session enable/disable) rather than the startup snapshot.
 	const client = input?.client;
 	const directory = input?.directory;
+	// Canonical working directory for the generated system-prompt rule: the
+	// provider writes `.cursor/rules/opencode.mdc` under this path and dispose
+	// cleans it up from the same path. The config hook threads it into the
+	// provider options (respecting a user-configured `cwd` option) so write and
+	// cleanup can never diverge.
+	let resolvedCwd = directory ?? process.cwd();
 	let forwardMcp = true;
 	let userMcp: Record<string, McpServerConfig> = {};
 	// OAuth servers we've already warned about, so the toast fires once per
@@ -102,12 +109,21 @@ export const CursorPlugin: Plugin = async (input) => {
 				? { ...userMcp, ...translateMcpServers(config.mcp) }
 				: userMcp;
 
+			// One canonical cwd for the provider's rule write and our dispose
+			// cleanup: an explicit user option wins, else the plugin directory.
+			const optionCwd = existingOptions["cwd"];
+			resolvedCwd =
+				(typeof optionCwd === "string" ? optionCwd : undefined) ??
+				directory ??
+				process.cwd();
+
 			config.provider[PROVIDER_ID] = {
 				name: "Cursor",
 				npm: providerNpm(),
 				...existing,
 				options: {
 					...existingOptions,
+					cwd: resolvedCwd,
 					...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
 				},
 				models: { ...toOpencodeModels(models), ...(existing.models ?? {}) },
@@ -218,6 +234,14 @@ export const CursorPlugin: Plugin = async (input) => {
 				resolveApiKey: () => resolveCursorApiKey(capturedApiKey),
 				defaultCwd: () => input?.directory ?? process.cwd(),
 			}),
+		},
+
+		dispose: async () => {
+			// Best-effort: drop the generated system-prompt rule so it doesn't
+			// linger in the user's workspace / Cursor IDE after the session ends.
+			// Uses the same canonical cwd the provider wrote to; sentinel-guarded,
+			// so a user-owned opencode.mdc is never deleted.
+			removeSystemRule(resolvedCwd);
 		},
 	};
 };
