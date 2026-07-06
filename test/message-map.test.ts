@@ -196,6 +196,50 @@ describe("promptToCursorMessage", () => {
 		expect(msg.text).toContain("doc.pdf");
 		expect(msg.text).toContain("application/pdf");
 	});
+
+	it("notes a directory @-mention as text instead of failing the turn", () => {
+		const { url } = tempFile("readme.md", Buffer.from("# hi\n"));
+		const dirUrl = url.slice(0, url.lastIndexOf("/")); // parent dir file:// URL
+		const prompt: LanguageModelV3Prompt = [
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "what's in here?" },
+					{
+						type: "file",
+						data: new URL(dirUrl),
+						mediaType: "application/x-directory",
+						filename: "src",
+					},
+				],
+			},
+		];
+		const msg = promptToCursorMessage(prompt);
+		expect(msg.images).toBeUndefined();
+		expect(msg.text).toContain("src");
+		expect(msg.text).toContain("application/x-directory");
+	});
+
+	it("falls back to the file URL when a file part has no filename", () => {
+		const { url } = tempFile("noname.bin", Buffer.from([0, 1, 2]));
+		const prompt: LanguageModelV3Prompt = [
+			{
+				role: "user",
+				content: [
+					{
+						type: "file",
+						data: new URL(url),
+						mediaType: "application/octet-stream",
+					},
+				],
+			},
+		];
+		const msg = promptToCursorMessage(prompt);
+		expect(msg.images).toBeUndefined();
+		// No filename → the note identifies the file by its source URL.
+		expect(msg.text).toContain(url);
+		expect(msg.text).toContain("application/octet-stream");
+	});
 });
 
 describe("latestUserMessage", () => {
@@ -257,5 +301,28 @@ describe("latestUserMessage", () => {
 		const msg = latestUserMessage(prompt);
 		expect(msg?.images).toBeUndefined();
 		expect(msg?.text).toContain("doc.pdf");
+	});
+
+	it("notes a directory @-mention in the final user turn as text", () => {
+		const { url } = tempFile("readme.md", Buffer.from("# hi\n"));
+		const dirUrl = url.slice(0, url.lastIndexOf("/"));
+		const prompt: LanguageModelV3Prompt = [
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "what's in here?" },
+					{
+						type: "file",
+						data: new URL(dirUrl),
+						mediaType: "application/x-directory",
+						filename: "src",
+					},
+				],
+			},
+		];
+		const msg = latestUserMessage(prompt);
+		expect(msg?.images).toBeUndefined();
+		expect(msg?.text).toContain("src");
+		expect(msg?.text).toContain("application/x-directory");
 	});
 });
