@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import type {
 	LanguageModelV3FilePart,
 	LanguageModelV3Prompt,
@@ -119,10 +120,30 @@ function fileNote(part: LanguageModelV3FilePart): string {
 	return `[attached file: ${name} (${part.mediaType}) — not forwarded to Cursor]`;
 }
 
+/** Matches strings with a URL scheme followed by `://` (http, https, file, …). */
+const URL_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
+
 function describeSource(data: string | Uint8Array | URL): string | undefined {
-	if (data instanceof URL) return data.href;
-	if (typeof data === "string" && !data.startsWith("data:")) return data;
+	// file:// sources become filesystem paths: the agent runs locally with
+	// workspace tools that operate on paths, so a path is actionable where a
+	// file:// href is not.
+	if (data instanceof URL)
+		return data.protocol === "file:" ? fileUrlToPath(data) : data.href;
+	// Only accept strings that look like a URL. AI-SDK file parts may carry
+	// raw base64 in `data` (no `data:` prefix); returning that verbatim would
+	// inline the entire blob into the note text.
+	if (typeof data === "string" && URL_SCHEME.test(data))
+		return data.startsWith("file://") ? fileUrlToPath(data) : data;
 	return undefined;
+}
+
+/** Convert a file:// URL to a filesystem path, falling back to the href when invalid. */
+function fileUrlToPath(url: string | URL): string {
+	try {
+		return fileURLToPath(url);
+	} catch {
+		return typeof url === "string" ? url : url.href;
+	}
 }
 
 /**

@@ -220,8 +220,8 @@ describe("promptToCursorMessage", () => {
 		expect(msg.text).toContain("application/x-directory");
 	});
 
-	it("falls back to the file URL when a file part has no filename", () => {
-		const { url } = tempFile("noname.bin", Buffer.from([0, 1, 2]));
+	it("falls back to the filesystem path when a file:// part has no filename", () => {
+		const { path, url } = tempFile("noname.bin", Buffer.from([0, 1, 2]));
 		const prompt: LanguageModelV3Prompt = [
 			{
 				role: "user",
@@ -236,9 +236,52 @@ describe("promptToCursorMessage", () => {
 		];
 		const msg = promptToCursorMessage(prompt);
 		expect(msg.images).toBeUndefined();
-		// No filename → the note identifies the file by its source URL.
-		expect(msg.text).toContain(url);
+		// No filename → the note identifies the file by its filesystem path
+		// (not the file:// href) so the local agent's workspace tools can act
+		// on it directly.
+		expect(msg.text).toContain(path);
+		expect(msg.text).not.toContain("file://");
 		expect(msg.text).toContain("application/octet-stream");
+	});
+
+	it("uses an http URL string as the name when a file part has no filename", () => {
+		const prompt: LanguageModelV3Prompt = [
+			{
+				role: "user",
+				content: [
+					{
+						type: "file",
+						data: "https://example.com/pic.png",
+						mediaType: "image/png",
+					},
+				],
+			},
+		];
+		const msg = promptToCursorMessage(prompt);
+		expect(msg.images).toBeUndefined();
+		expect(msg.text).toContain("https://example.com/pic.png");
+	});
+
+	it("never inlines raw base64 string data; falls back to a generic name", () => {
+		const b64 = PNG_BYTES.toString("base64");
+		const prompt: LanguageModelV3Prompt = [
+			{
+				role: "user",
+				content: [
+					{
+						type: "file",
+						// Raw base64 with no data: prefix and no filename — must NOT
+						// end up verbatim in the note text.
+						data: b64,
+						mediaType: "image/png",
+					},
+				],
+			},
+		];
+		const msg = promptToCursorMessage(prompt);
+		expect(msg.images).toBeUndefined();
+		expect(msg.text).not.toContain(b64);
+		expect(msg.text).toContain("[attached file: file (image/png)");
 	});
 });
 
