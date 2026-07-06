@@ -21,7 +21,7 @@ import {
 	trailingUserMessages,
 	type SystemPromptMode,
 } from "./message-map.js";
-import { extractSystemText, writeSystemRule } from "./system-rule.js";
+import { extractSystemText, resolveSystemDelivery } from "./system-rule.js";
 import {
 	sendAgentTurnSilently,
 	streamAgentTurn,
@@ -107,6 +107,15 @@ export class CursorLanguageModel implements LanguageModelV3 {
 	) {
 		this.modelId = modelId;
 		this.provider = config.providerName;
+	}
+
+	/** Messages already emitted, so degradation warnings fire once, not per turn. */
+	private readonly warned = new Set<string>();
+
+	private warnOnce(message: string): void {
+		if (this.warned.has(message)) return;
+		this.warned.add(message);
+		console.warn(`[${this.provider}] ${message}`);
 	}
 
 	private requireApiKey(): string {
@@ -244,16 +253,18 @@ export class CursorLanguageModel implements LanguageModelV3 {
 
 		// In "rules" mode (default), deliver opencode's system prompt through
 		// Cursor's authoritative rules channel instead of the user transcript.
-		const systemMode: SystemPromptMode = this.config.systemPrompt ?? "rules";
-		let settingSources = this.config.settingSources;
-		if (systemMode === "rules") {
-			const systemText = extractSystemText(options.prompt);
-			if (writeSystemRule(this.config.cwd, systemText)) {
-				settingSources = settingSources?.includes("project")
-					? settingSources
-					: [...(settingSources ?? []), "project"];
-			}
-		}
+		// Degrades to inline "message" delivery when the user explicitly opted
+		// out of the "project" settings layer, when the rule file is user-owned,
+		// or when the write fails (read-only checkout etc.).
+		const delivery = resolveSystemDelivery({
+			mode: this.config.systemPrompt ?? "rules",
+			settingSources: this.config.settingSources,
+			cwd: this.config.cwd,
+			systemText: extractSystemText(options.prompt),
+			warn: (message) => this.warnOnce(message),
+		});
+		const systemMode: SystemPromptMode = delivery.mode;
+		const settingSources = delivery.settingSources;
 
 		// Shared acquire params. The retry path reuses this verbatim (minus
 		// resumeAgentId) so a fresh agent can never drift from the first attempt's
