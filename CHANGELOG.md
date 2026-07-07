@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [0.4.5-next.0] — 2026-07-06
+## [0.4.5] — 2026-07-07
 
 - **Fixed: Cursor agent rejecting turns as "prompt injection" / "gaslighting."**
   The provider flattened opencode's system prompt into the user-message transcript;
