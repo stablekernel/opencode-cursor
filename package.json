@@ -56,8 +56,8 @@
   },
   "dependencies": {
     "@connectrpc/connect-node": "^2.1.2",
-    "@cursor/sdk": "^1.0.20",
-    "@opencode-ai/plugin": "^1.17.9",
+    "@cursor/sdk": "^1.0.23",
+    "@opencode-ai/plugin": "^1.17.14",
     "semver": "^7.8.4"
   },
   "overrides": {
@@ -69,8 +69,8 @@
     "@ai-sdk/provider": "^3.0.0"
   },
   "devDependencies": {
-    "@ai-sdk/provider": "^3.0.10",
-    "@opencode-ai/sdk": "^1.17.9",
+    "@ai-sdk/provider": "^3.0.13",
+    "@opencode-ai/sdk": "^1.17.14",
     "@types/node": "^26.0.0",
     "@types/semver": "^7.7.1",
     "tsup": "^8.5.1",
