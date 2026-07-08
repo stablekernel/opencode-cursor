@@ -72,9 +72,17 @@ export const CursorPlugin: Plugin = async (input) => {
 					// The `config` hook (which seeds opencode's model picker) runs without
 					// a key. Warm the catalog cache here — the loader is the hook that
 					// reliably has the key — so the next launch seeds the full live
-					// catalog instead of the static fallback. Fire-and-forget: discovery
-					// never throws and must not block auth/provider load.
-					void discoverModels({ apiKey });
+					// catalog instead of the static fallback.
+					//
+					// `forceRefresh: true` bypasses the 24h on-disk cache so a live
+					// `Cursor.models.list()` runs on every opencode startup. This is the
+					// stale-while-revalidate write side: the `config` and
+					// `provider.models` hooks still serve the current cache instantly (no
+					// startup latency), while this refreshes it in the background so newly
+					// released Cursor models surface on the next launch instead of waiting
+					// up to 24h for the cache to expire. Fire-and-forget: discovery never
+					// throws and must not block auth/provider load.
+					void discoverModels({ apiKey, forceRefresh: true });
 				}
 				return apiKey ? { apiKey } : {};
 			},
@@ -209,7 +217,7 @@ export const CursorPlugin: Plugin = async (input) => {
 		tool: {
 			cursor_refresh_models: {
 				description:
-					"Refresh the live Cursor model catalog (bypasses the 24h cache) and report the available models.",
+					"Refresh the live Cursor model catalog now (bypasses the cache) and report the available models. The catalog also auto-refreshes on every opencode startup; use this to pick up new models mid-session.",
 				args: {},
 				execute: async () => {
 					const result = await discoverModels({ forceRefresh: true });
