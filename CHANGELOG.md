@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.6] — 2026-07-08
+
+- **Fixed: newly released Cursor models didn't appear locally without a manual
+  refresh.** The auth loader warmed the model cache with a call that respected
+  the 24h on-disk TTL and no-opped while the cache was still fresh. It now
+  passes `forceRefresh: true`, so the catalog is force-refreshed via a live
+  `Cursor.models.list()` on every opencode startup (fire-and-forget, no added
+  latency); the `config` and `provider.models` hooks keep serving the existing
+  cache instantly (#65).
+
 ## [0.4.5] — 2026-07-07
 
 - **Fixed: Cursor agent rejecting turns as "prompt injection" / "gaslighting."**
