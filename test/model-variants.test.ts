@@ -54,6 +54,14 @@ describe("buildModelVariants (curated, non-cartesian)", () => {
     // Known --pure fallback limitation: nothing non-default/non-off to add.
     expect(buildModelVariants(byId("composer-2.5"))).toEqual({});
   });
+
+  it("renames the extra-high reasoning wire value to the xhigh key", () => {
+    const variants = buildModelVariants(byId("gpt-5.5"));
+    // key is normalized to xhigh; the Cursor wire value stays extra-high.
+    expect(variants["xhigh"]).toEqual({
+      params: { context: "1m", reasoning: "extra-high", fast: "false" },
+    });
+  });
 });
 
 describe("defaultModelParams (axis defaults + pinned)", () => {
