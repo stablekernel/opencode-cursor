@@ -8,7 +8,10 @@ describe("buildModelV2Map", () => {
       {
         id: "composer-2.5",
         displayName: "Composer 2.5",
-        parameters: [{ id: "fast", values: [{ value: "false" }, { value: "true" }] }],
+        variants: [
+          { params: [{ id: "fast", value: "false" }], displayName: "d", isDefault: true },
+          { params: [{ id: "fast", value: "true" }], displayName: "d" },
+        ],
       } satisfies ModelListItem,
     ]);
     expect(map["composer-2.5"]!.options).toEqual({ params: { fast: "false" } });

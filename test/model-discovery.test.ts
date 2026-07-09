@@ -18,7 +18,11 @@ const items: ModelListItem[] = [
   {
     id: "composer-2.5",
     displayName: "Composer 2.5",
-    parameters: [{ id: "thinking", values: [{ value: "off" }, { value: "on" }] }],
+    parameters: [{ id: "thinking", values: [{ value: "false" }, { value: "true" }] }],
+    variants: [
+      { params: [{ id: "thinking", value: "false" }], displayName: "d", isDefault: true },
+      { params: [{ id: "thinking", value: "true" }], displayName: "d" },
+    ],
   },
   { id: "plain", displayName: "Plain Model" },
 ];
@@ -56,10 +60,8 @@ describe("toOpencodeModels", () => {
     // variants can come from — they must be present here.
     const map = toOpencodeModels(items);
     expect(map["composer-2.5"]!.variants).toEqual({
-      off: { params: { thinking: "off" } },
-      on: { params: { thinking: "on" } },
+      thinking: { params: { thinking: "true" } },
     });
-    // No reasoning params → no variants (plan is an opencode agent, not a variant).
     expect(map["plain"]!.variants).toEqual({});
   });
 
@@ -72,6 +74,10 @@ describe("toOpencodeModels", () => {
         id: "composer-2.5",
         displayName: "Composer 2.5",
         parameters: [{ id: "fast", values: [{ value: "false" }, { value: "true" }] }],
+        variants: [
+          { params: [{ id: "fast", value: "false" }], displayName: "d", isDefault: true },
+          { params: [{ id: "fast", value: "true" }], displayName: "d" },
+        ],
       },
       { id: "plain", displayName: "Plain Model" },
     ]);

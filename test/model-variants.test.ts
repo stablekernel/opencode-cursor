@@ -1,260 +1,77 @@
 import { describe, expect, it } from "vitest";
 import type { ModelListItem } from "@cursor/sdk";
 import { buildModelVariants, defaultModelParams } from "../src/model-variants.js";
+import catalog from "./fixtures/cursor-catalog.json" with { type: "json" };
 
-function model(parameters: ModelListItem["parameters"]): ModelListItem {
-  return { id: "m", displayName: "M", parameters };
+const cat = catalog as ModelListItem[];
+function byId(id: string): ModelListItem {
+  const m = cat.find((x) => x.id === id);
+  if (!m) throw new Error(`fixture missing model ${id}`);
+  return m;
 }
 
-describe("buildModelVariants", () => {
-  it("collapses a boolean thinking param into a single param-named variant", () => {
-    // Real catalog shape: thinking=["false","true"] (claude-* models). A
-    // literal "true"/"false" variant pair is meaningless in the picker.
-    const variants = buildModelVariants(
-      model([{ id: "thinking", values: [{ value: "false" }, { value: "true" }] }]),
+describe("buildModelVariants (curated, non-cartesian)", () => {
+  it("curates a 40-variant model into a short single-axis list", () => {
+    const variants = buildModelVariants(byId("claude-opus-4-8"));
+    expect(Object.keys(variants).sort()).toEqual(
+      ["300k", "fast", "low", "max", "medium", "xhigh"].sort(),
     );
-    expect(variants).toEqual({ thinking: { params: { thinking: "true" } } });
+    // effort values vary effort only; other axes stay at model defaults.
+    expect(variants["low"]).toEqual({
+      params: { thinking: "true", context: "1m", effort: "low", fast: "false" },
+    });
+    // the fast opt-in bakes the effort/context/thinking defaults.
+    expect(variants["fast"]).toEqual({
+      params: { thinking: "true", context: "1m", effort: "high", fast: "true" },
+    });
+    // the non-default context value is offered too.
+    expect(variants["300k"]).toEqual({
+      params: { thinking: "true", context: "300k", effort: "high", fast: "false" },
+    });
   });
 
-  it("keys enum reasoning params by their values", () => {
-    // Real catalog shape: reasoning=["none","low","medium","high","extra-high"].
-    const variants = buildModelVariants(
-      model([{ id: "reasoning", values: [{ value: "low" }, { value: "high" }] }]),
-    );
-    expect(variants).toEqual({
+  it("varies effort and bakes the model's default fast (grok fast defaults ON)", () => {
+    expect(buildModelVariants(byId("grok-4.5"))).toEqual({
+      low: { params: { effort: "low", fast: "true" } },
+      medium: { params: { effort: "medium", fast: "true" } },
+    });
+  });
+
+  it("keys a reasoning axis by value, dropping the default (medium)", () => {
+    expect(buildModelVariants(byId("gpt-5.4-mini"))).toEqual({
+      none: { params: { reasoning: "none" } },
       low: { params: { reasoning: "low" } },
       high: { params: { reasoning: "high" } },
+      xhigh: { params: { reasoning: "xhigh" } },
     });
   });
 
-  it("drops the boolean thinking variant when an effort enum is present (claude catalog shape)", () => {
-    // Cursor's claude-* catalog exposes BOTH a boolean `thinking` toggle and an
-    // effort enum. Selecting any effort level already enables reasoning, so the
-    // standalone `thinking` variant is redundant — and surfacing it would add a
-    // stray entry the standard opencode providers (effort-only) never show.
-    const variants = buildModelVariants(
-      model([
-        { id: "thinking", values: [{ value: "false" }, { value: "true" }] },
-        { id: "effort", values: [{ value: "low" }, { value: "max" }] },
-      ]),
-    );
-    expect(variants).toEqual({
-      low: { params: { effort: "low" } },
-      max: { params: { effort: "max" } },
-    });
+  it("returns no variants for a model with no axes", () => {
+    expect(buildModelVariants(byId("gemini-3.1-pro"))).toEqual({});
   });
 
-  it("suppresses the boolean thinking variant regardless of param order", () => {
-    // Order-independence guard for the hasEffortEnum pre-pass: the effort enum
-    // declared AFTER the boolean must still suppress it, and vice versa.
-    const enumFirst = buildModelVariants(
-      model([
-        { id: "effort", values: [{ value: "low" }, { value: "max" }] },
-        { id: "thinking", values: [{ value: "false" }, { value: "true" }] },
-      ]),
-    );
-    expect(enumFirst).toEqual({
-      low: { params: { effort: "low" } },
-      max: { params: { effort: "max" } },
-    });
-  });
-
-  it("composes suppression with fast defaults (production claude-via-Cursor shape)", () => {
-    // The real catalog model: boolean `thinking` + effort enum + `fast`. The
-    // `thinking` variant is suppressed, each effort variant bakes `fast` OFF
-    // (defaultModelParams), and a standalone `fast` opt-in still surfaces.
-    const variants = buildModelVariants(
-      model([
-        { id: "thinking", values: [{ value: "false" }, { value: "true" }] },
-        { id: "effort", values: [{ value: "low" }, { value: "high" }] },
-        { id: "fast", values: [{ value: "false" }, { value: "true" }] },
-      ]),
-    );
-    expect(variants).toEqual({
-      low: { params: { effort: "low", fast: "false" } },
-      high: { params: { effort: "high", fast: "false" } },
-      fast: { params: { fast: "true" } },
-    });
-  });
-
-  it("does not suppress the boolean thinking variant for a zero-value effort enum", () => {
-    // hasEffortEnum requires a non-empty enum; an effort param with no values
-    // must not count as an enum, so the boolean `thinking` variant survives.
-    const variants = buildModelVariants(
-      model([
-        { id: "thinking", values: [{ value: "false" }, { value: "true" }] },
-        { id: "effort", values: [] },
-      ]),
-    );
-    expect(variants).toEqual({ thinking: { params: { thinking: "true" } } });
-  });
-
-  it("does not emit a thinking variant when the boolean lacks a 'true' value", () => {
-    // Boolean `thinking=["false"]` has nothing to opt INTO; combined with an
-    // effort enum the result is purely the effort variants.
-    const variants = buildModelVariants(
-      model([
-        { id: "thinking", values: [{ value: "false" }] },
-        { id: "effort", values: [{ value: "low" }] },
-      ]),
-    );
-    expect(variants).toEqual({ low: { params: { effort: "low" } } });
-  });
-
-  it("pins current behavior for a mixed boolean+enum reasoning param", () => {
-    // A single reasoning param mixing boolean sentinels with effort values is
-    // classified non-boolean (isBooleanParam requires EVERY value be a sentinel),
-    // so it flows through the enum branch and emits literal false/true variants.
-    // Not a real catalog shape today; pinned so a future change is caught.
-    const variants = buildModelVariants(
-      model([
-        { id: "reasoning", values: [{ value: "false" }, { value: "true" }, { value: "high" }] },
-      ]),
-    );
-    expect(variants).toEqual({
-      false: { params: { reasoning: "false" } },
-      true: { params: { reasoning: "true" } },
-      high: { params: { reasoning: "high" } },
-    });
-  });
-
-  it("prefixes a value key on collision between two enum params", () => {
-    const variants = buildModelVariants(
-      model([
-        { id: "reasoning", values: [{ value: "low" }] },
-        { id: "effort", values: [{ value: "low" }] },
-      ]),
-    );
-    expect(variants).toEqual({
-      low: { params: { reasoning: "low" } },
-      "effort-low": { params: { effort: "low" } },
-    });
-  });
-
-  it("renames extra-high to xhigh in the variant key but keeps the wire value", () => {
-    // Cursor labels the top reasoning tier "extra-high"; the opencode standard
-    // (models.dev) calls it "xhigh". The variant KEY normalizes to xhigh so
-    // the cycler is consistent across providers; the param VALUE sent to
-    // Cursor's API stays "extra-high".
-    const variants = buildModelVariants(
-      model([{ id: "reasoning", values: [{ value: "low" }, { value: "extra-high" }] }]),
-    );
-    expect(variants).toEqual({
-      low: { params: { reasoning: "low" } },
-      xhigh: { params: { reasoning: "extra-high" } },
-    });
-  });
-
-  it("drops the 'none' reasoning value (it is the model default)", () => {
-    // `none` = reasoning OFF, which is what you get by selecting no variant.
-    // Surfacing it as a selectable entry is meaningless, so it is skipped.
-    const variants = buildModelVariants(
-      model([
-        { id: "reasoning", values: [{ value: "none" }, { value: "low" }, { value: "high" }] },
-      ]),
-    );
-    expect(variants).toEqual({
-      low: { params: { reasoning: "low" } },
-      high: { params: { reasoning: "high" } },
-    });
-  });
-
-  it("composes none-drop and extra-high rename for the real GPT shape", () => {
-    // gpt-5.5 / gpt-5.4 catalog: reasoning=[none,low,medium,high,extra-high]
-    // + fast. Expect: low, medium, high, xhigh (no none, extra-high→xhigh),
-    // each effort variant bakes fast OFF, plus a standalone fast opt-in.
-    const variants = buildModelVariants(
-      model([
-        {
-          id: "reasoning",
-          values: [
-            { value: "none" },
-            { value: "low" },
-            { value: "medium" },
-            { value: "high" },
-            { value: "extra-high" },
-          ],
-        },
-        { id: "fast", values: [{ value: "false" }, { value: "true" }] },
-      ]),
-    );
-    expect(variants).toEqual({
-      low: { params: { reasoning: "low", fast: "false" } },
-      medium: { params: { reasoning: "medium", fast: "false" } },
-      high: { params: { reasoning: "high", fast: "false" } },
-      xhigh: { params: { reasoning: "extra-high", fast: "false" } },
-      fast: { params: { fast: "true" } },
-    });
-  });
-
-  it("prefixes the display key on a collision involving extra-high", () => {
-    // Defensive: if two reasoning params both resolve to the xhigh display key
-    // (one via the real "xhigh" value, one via "extra-high"→xhigh), the second
-    // is prefixed with its param id. No current catalog model hits this, but
-    // the guard must hold.
-    const variants = buildModelVariants(
-      model([
-        { id: "effort", values: [{ value: "xhigh" }] },
-        { id: "reasoning", values: [{ value: "extra-high" }] },
-      ]),
-    );
-    expect(variants).toEqual({
-      xhigh: { params: { effort: "xhigh" } },
-      "reasoning-xhigh": { params: { reasoning: "extra-high" } },
-    });
-  });
-
-  it("surfaces a non-reasoning boolean (fast) as an opt-in toggle; ignores enum context", () => {
-    // `fast` is Cursor's fast-tier toggle. It is not a reasoning level, but the
-    // user must be able to opt INTO it from the picker (default is off, sent
-    // explicitly via defaultModelParams). `context` is an enum, still unsupported.
-    // plan is opencode's plan AGENT (Tab), mapped via the chat.params hook.
-    const variants = buildModelVariants(
-      model([
-        { id: "fast", values: [{ value: "false" }, { value: "true" }] },
-        { id: "context", values: [{ value: "300k" }, { value: "1m" }] },
-      ]),
-    );
-    expect(variants).toEqual({ fast: { params: { fast: "true" } } });
-  });
-
-  it("bakes the fast-off default into reasoning variants for fast-capable models", () => {
-    // Cursor defaults `fast` to true for several models (composer/codex). When
-    // the user picks a reasoning level we must pin fast OFF explicitly, so a
-    // reasoning selection never silently falls back to Cursor's fast default.
-    const variants = buildModelVariants(
-      model([
-        { id: "effort", values: [{ value: "low" }, { value: "high" }] },
-        { id: "fast", values: [{ value: "false" }, { value: "true" }] },
-      ]),
-    );
-    expect(variants).toEqual({
-      low: { params: { effort: "low", fast: "false" } },
-      high: { params: { effort: "high", fast: "false" } },
-      fast: { params: { fast: "true" } },
-    });
-  });
-
-  it("returns no variants for a model without parameters", () => {
-    expect(buildModelVariants(model(undefined))).toEqual({});
+  it("returns no variants for a single default-ON toggle (composer fast defaults true)", () => {
+    // Known --pure fallback limitation: nothing non-default/non-off to add.
+    expect(buildModelVariants(byId("composer-2.5"))).toEqual({});
   });
 });
 
-describe("defaultModelParams", () => {
-  it("defaults non-reasoning boolean params (fast) OFF", () => {
-    expect(
-      defaultModelParams(
-        model([{ id: "fast", values: [{ value: "false" }, { value: "true" }] }]),
-      ),
-    ).toEqual({ fast: "false" });
+describe("defaultModelParams (axis defaults + pinned)", () => {
+  it("seeds every axis default plus pinned single-value params (opus pins cyber=false)", () => {
+    expect(defaultModelParams(byId("claude-opus-4-8"))).toEqual({
+      thinking: "true",
+      context: "1m",
+      effort: "high",
+      fast: "false",
+      cyber: "false",
+    });
   });
 
-  it("returns no defaults for models without non-reasoning booleans", () => {
-    expect(
-      defaultModelParams(
-        model([{ id: "effort", values: [{ value: "low" }, { value: "high" }] }]),
-      ),
-    ).toEqual({});
-    expect(defaultModelParams(model(undefined))).toEqual({});
+  it("uses the model's own default toggle direction (grok fast defaults ON)", () => {
+    expect(defaultModelParams(byId("grok-4.5"))).toEqual({ effort: "high", fast: "true" });
+  });
+
+  it("returns empty for a model with no axes or pinned params", () => {
+    expect(defaultModelParams(byId("gemini-3.1-pro"))).toEqual({});
   });
 });
