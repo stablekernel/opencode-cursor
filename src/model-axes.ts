@@ -17,7 +17,7 @@ export interface ModelAxis {
 // Any value not listed keeps first-seen order, appended after known ones.
 const VALUE_ORDER: Record<string, string[]> = {
   effort: ["low", "medium", "high", "xhigh", "max"],
-  reasoning: ["none", "low", "medium", "high", "extra-high"],
+  reasoning: ["none", "low", "medium", "high", "extra-high", "xhigh", "max"],
   context: ["200k", "272k", "300k", "1m"],
   thinking: ["false", "true"],
   fast: ["false", "true"],
@@ -83,4 +83,74 @@ export function buildModelAxes(item: ModelListItem): ModelAxis[] {
     });
   }
   return axes;
+}
+
+/** Serialize a param map to a stable key for set membership. */
+function comboKey(params: Record<string, string>): string {
+  return Object.keys(params)
+    .sort()
+    .map((k) => `${k}=${params[k]}`)
+    .join("|");
+}
+
+/** Build the set of all offered variant combos (over the axis param ids). */
+function offeredCombos(item: ModelListItem, axisIds: string[]): Set<string> {
+  const out = new Set<string>();
+  for (const v of item.variants ?? []) {
+    const proj: Record<string, string> = {};
+    for (const p of v.params ?? []) {
+      if (axisIds.includes(p.id)) proj[p.id] = p.value;
+    }
+    out.add(comboKey(proj));
+  }
+  return out;
+}
+
+/**
+ * True if `params` (restricted to the model's axis ids) matches an offered
+ * variant. Params outside the axis set are ignored.
+ */
+export function isValidCombo(item: ModelListItem, params: Record<string, string>): boolean {
+  const axisIds = buildModelAxes(item).map((a) => a.id);
+  if (axisIds.length === 0) return true;
+  const proj: Record<string, string> = {};
+  for (const id of axisIds) {
+    const val = params[id];
+    if (val !== undefined) proj[id] = val;
+  }
+  return offeredCombos(item, axisIds).has(comboKey(proj));
+}
+
+/**
+ * If `params` is invalid after changing `changedAxisId`, adjust the OTHER axes
+ * to the nearest offered combo that preserves the changed axis's value. Picks
+ * the first offered variant whose changed-axis value matches; falls back to the
+ * default variant if none match. Never mutates the changed axis.
+ */
+export function snapCombo(
+  item: ModelListItem,
+  params: Record<string, string>,
+  changedAxisId: string,
+): Record<string, string> {
+  if (isValidCombo(item, params)) return params;
+  const axisIds = buildModelAxes(item).map((a) => a.id);
+  const target = params[changedAxisId];
+
+  // Prefer an offered variant that keeps the changed axis value.
+  for (const v of item.variants ?? []) {
+    const proj: Record<string, string> = {};
+    for (const p of v.params ?? []) {
+      if (axisIds.includes(p.id)) proj[p.id] = p.value;
+    }
+    if (proj[changedAxisId] === target) return proj;
+  }
+
+  // No variant supports the changed value together with anything: fall back to
+  // the default variant's projection.
+  const def = (item.variants ?? []).find((v) => v.isDefault) ?? (item.variants ?? [])[0];
+  const proj: Record<string, string> = {};
+  for (const p of def?.params ?? []) {
+    if (axisIds.includes(p.id)) proj[p.id] = p.value;
+  }
+  return proj;
 }
