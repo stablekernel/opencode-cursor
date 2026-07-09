@@ -1,0 +1,42 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { readSelection, readStates, writeSelection } from "../src/tui/state-file.js";
+
+describe("cursor-states file bridge", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "cursor-states-"));
+    process.env.OPENCODE_CURSOR_STATE_FILE = join(dir, "cursor-states.json");
+  });
+  afterEach(() => {
+    delete process.env.OPENCODE_CURSOR_STATE_FILE;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("returns empty map when no file exists", () => {
+    expect(readStates()).toEqual({});
+    expect(readSelection("s1")).toBeUndefined();
+  });
+
+  it("round-trips a selection for a session", () => {
+    writeSelection("s1", { effort: "high", fast: "false" });
+    expect(readSelection("s1")).toEqual({ effort: "high", fast: "false" });
+  });
+
+  it("keeps sessions independent and overwrites in place", () => {
+    writeSelection("s1", { effort: "low" });
+    writeSelection("s2", { effort: "max" });
+    writeSelection("s1", { effort: "high" });
+    expect(readSelection("s1")).toEqual({ effort: "high" });
+    expect(readSelection("s2")).toEqual({ effort: "max" });
+  });
+
+  it("tolerates a corrupt file by treating it as empty", () => {
+    writeSelection("s1", { effort: "high" });
+    // corrupt it
+    require("node:fs").writeFileSync(process.env.OPENCODE_CURSOR_STATE_FILE!, "{not json");
+    expect(readStates()).toEqual({});
+  });
+});
