@@ -121,7 +121,9 @@ const tui: TuiPlugin = async (api) => {
     setSelSig({ ...selection });
     // Persist the reconciled selection so file/widget/wire agree. No-op off a
     // session route.
-    applySelection();
+    // Only persist once a model is actually known; writing an empty selection
+    // for an unresolved model would clobber the session's saved state on resume.
+    if (model) applySelection();
   }
 
   // Persist the composed selection for the active session. The server half
