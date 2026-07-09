@@ -41,7 +41,9 @@
     "./server": {
       "types": "./dist/plugin/index.d.ts",
       "import": "./dist/plugin/index.js",
-      "config": { "custom": true }
+      "config": {
+        "custom": true
+      }
     },
     "./plugin": {
       "types": "./dist/plugin/index.d.ts",
@@ -74,17 +76,28 @@
   "peerDependencies": {
     "@ai-sdk/provider": "^3.0.0",
     "@opentui/core": "*",
-    "@opentui/solid": "*"
+    "@opentui/solid": "*",
+    "solid-js": "*"
   },
   "peerDependenciesMeta": {
-    "@opentui/core": { "optional": true },
-    "@opentui/solid": { "optional": true }
+    "@opentui/core": {
+      "optional": true
+    },
+    "@opentui/solid": {
+      "optional": true
+    },
+    "solid-js": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@ai-sdk/provider": "^3.0.13",
     "@opencode-ai/sdk": "^1.17.14",
+    "@opentui/core": "^0.4.3",
+    "@opentui/solid": "^0.4.3",
     "@types/node": "^26.0.0",
     "@types/semver": "^7.7.1",
+    "solid-js": "^1.9.12",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"

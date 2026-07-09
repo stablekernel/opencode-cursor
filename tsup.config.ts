@@ -33,5 +33,6 @@ export default defineConfig({
 		"@opencode-ai/plugin",
 		"@opentui/core",
 		"@opentui/solid",
+		"solid-js",
 	],
 });

@@ -10,6 +10,8 @@ import { buildModelAxes, snapCombo, type ModelAxis } from "../model-axes.js";
 import { cachedCatalog } from "../model-discovery.js";
 import { cycleAxis, seedSelection, type AxisSelection } from "./axis-state.js";
 import { writeSelection } from "./state-file.js";
+import { createSignal } from "solid-js";
+import { StatusWidget } from "./status-widget.js";
 
 const PLUGIN_ID = "cursor.states";
 
@@ -32,6 +34,13 @@ const tui: TuiPlugin = async (api) => {
   // runs on plugin deactivation, not on our per-model re-registration, so we
   // dispose the old layer ourselves before creating a new one.
   let disposeLayer: (() => void) | undefined;
+
+  // Solid signals mirroring `axes`/`selection` so the status widget re-renders
+  // reactively as the model changes or the user cycles an axis. The widget
+  // reads these getters; we push updates at the end of refreshForModel() and
+  // after each cycle. New objects on write so Solid sees a fresh reference.
+  const [axesSig, setAxesSig] = createSignal<ModelAxis[]>([]);
+  const [selSig, setSelSig] = createSignal<AxisSelection>({});
 
   // The current session id, or undefined on the home route / non-session routes.
   // `TuiRouteCurrent` also has a permissive `{ name: string; params?: ... }` arm
@@ -79,6 +88,10 @@ const tui: TuiPlugin = async (api) => {
     selection = seedSelection(axes);
     // Re-register the hotkey layer for the (possibly new) axis set.
     registerAxisLayer();
+    // Push the fresh axis set + selection into the reactive signals so the
+    // status widget re-renders for the new model.
+    setAxesSig(axes);
+    setSelSig({ ...selection });
   }
 
   // Persist the composed selection for the active session. The server half
@@ -114,6 +127,8 @@ const tui: TuiPlugin = async (api) => {
             selection = cycleAxis(axes, selection, axis.id, dir);
             const model = currentCursorModel();
             if (model) selection = snapCombo(model, selection, axis.id);
+            // Mirror the new selection into the signal so the widget updates.
+            setSelSig({ ...selection });
             applySelection();
             api.ui.toast({
               variant: "info",
@@ -131,6 +146,18 @@ const tui: TuiPlugin = async (api) => {
   }
 
   refreshForModel();
+
+  // Register the status widget into the host's right-of-prompt slot. Renderers
+  // nest under a required `slots` key, keyed by host slot name; each value is a
+  // (ctx, props) => JSX.Element renderer (params unused here). No `id` — the
+  // host omits it. The widget reads the signals, so it re-renders on cycle.
+  api.slots.register({
+    slots: {
+      session_prompt_right: () => (
+        <StatusWidget axes={axesSig} selection={selSig} />
+      ),
+    },
+  });
 
   // Re-derive axes whenever a message updates: `message.updated` fires when an
   // assistant message is added/updated, i.e. exactly when the model in use may

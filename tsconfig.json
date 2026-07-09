@@ -7,6 +7,8 @@
     "lib": ["ES2023"],
     "strict": true,
     "noUncheckedIndexedAccess": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "@opentui/solid",
     "esModuleInterop": true,
     "skipLibCheck": true,
     "noEmit": true,
