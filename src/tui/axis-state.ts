@@ -12,6 +12,30 @@ export function seedSelection(axes: ModelAxis[]): AxisSelection {
 }
 
 /**
+ * Rebuild a selection for `axes` from a previously-persisted selection: carry
+ * over each axis value that is still valid for THIS model's axes, fall back to
+ * the axis default otherwise, and DROP any persisted keys that are not axes of
+ * this model (e.g. left over from a different model). Pure; never mutates input.
+ */
+export function reconcileSelection(
+  axes: ModelAxis[],
+  persisted: AxisSelection | undefined,
+): AxisSelection {
+  const sel = seedSelection(axes);
+  if (!persisted) return sel;
+  for (const a of axes) {
+    const v = persisted[a.id];
+    if (v !== undefined && a.values.includes(v)) sel[a.id] = v;
+  }
+  return sel;
+}
+
+/** Map a raw Cursor value to its display token (wire `extra-high` shows as `xhigh`). */
+export function axisValueLabel(value: string): string {
+  return value === "extra-high" ? "xhigh" : value;
+}
+
+/**
  * Advance `axisId` by `dir` (+1 next, -1 prev) with wraparound. Returns a NEW
  * selection object; never mutates the input. Unknown axis id -> input echoed.
  */
@@ -45,7 +69,7 @@ export function formatSelection(axes: ModelAxis[], sel: AxisSelection): string {
     if (a.kind === "toggle") {
       if (!TOGGLE_OFF.has(val)) parts.push(toggleWord(a.id, a.label));
     } else {
-      parts.push(val);
+      parts.push(axisValueLabel(val));
     }
   }
   return parts.join(" · ");

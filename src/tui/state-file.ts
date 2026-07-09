@@ -1,11 +1,11 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AxisSelection } from "./axis-state.js";
 
 /** Same base dir as model-cache.ts so both plugin halves agree. */
 function baseDir(): string {
-  const xdg = process.env.XDG_CACHE_HOME;
+  const xdg = process.env.XDG_CACHE_HOME?.trim();
   const home = homedir();
   const root = xdg ? xdg : home ? join(home, ".cache") : tmpdir();
   return join(root, "opencode-cursor");
@@ -60,7 +60,11 @@ export function writeSelection(sessionID: string, sel: AxisSelection): void {
   const file = stateFilePath();
   try {
     mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, JSON.stringify(states), "utf8");
+    // Atomic write: a concurrent server-side read must never observe a torn
+    // file, so write to a temp path and rename (atomic on the same fs).
+    const tmp = `${file}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(states), "utf8");
+    renameSync(tmp, file);
   } catch {
     // Non-fatal: the widget still reflects the selection in-memory.
   }

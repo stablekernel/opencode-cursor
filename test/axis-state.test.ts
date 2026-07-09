@@ -1,11 +1,20 @@
 import { describe, expect, it } from "vitest";
 import type { ModelAxis } from "../src/model-axes.js";
 import type { AxisSelection } from "../src/tui/axis-state.js";
-import { seedSelection, cycleAxis, formatSelection } from "../src/tui/axis-state.js";
+import {
+  seedSelection,
+  cycleAxis,
+  formatSelection,
+  reconcileSelection,
+} from "../src/tui/axis-state.js";
 
 const AXES: ModelAxis[] = [
   { id: "effort", label: "Effort", values: ["low", "medium", "high", "xhigh", "max"], default: "high", kind: "cycle" },
   { id: "fast", label: "Fast", values: ["false", "true"], default: "false", kind: "toggle" },
+];
+
+const REASONING_AXES: ModelAxis[] = [
+  { id: "reasoning", label: "Reasoning", values: ["none", "low", "medium", "high", "extra-high"], default: "medium", kind: "cycle" },
 ];
 
 describe("axis-state", () => {
@@ -44,5 +53,42 @@ describe("axis-state", () => {
   it("omits the OFF value of toggles from the label", () => {
     // fast=false is the off state -> not shown; effort always shown.
     expect(formatSelection(AXES, { effort: "low", fast: "false" })).toBe("low");
+  });
+
+  it("renders the wire value extra-high as its display token xhigh", () => {
+    expect(formatSelection(REASONING_AXES, { reasoning: "extra-high" })).toBe("xhigh");
+  });
+});
+
+describe("reconcileSelection", () => {
+  it("falls back to axis defaults when nothing is persisted", () => {
+    expect(reconcileSelection(AXES, undefined)).toEqual({ effort: "high", fast: "false" });
+  });
+
+  it("carries over valid persisted values", () => {
+    expect(reconcileSelection(AXES, { effort: "low", fast: "true" })).toEqual({
+      effort: "low",
+      fast: "true",
+    });
+  });
+
+  it("replaces a persisted value not offered by the axis with the axis default", () => {
+    expect(reconcileSelection(AXES, { effort: "bogus", fast: "true" })).toEqual({
+      effort: "high",
+      fast: "true",
+    });
+  });
+
+  it("drops persisted keys that are not axes of this model", () => {
+    expect(reconcileSelection(AXES, { effort: "low", reasoning: "high" })).toEqual({
+      effort: "low",
+      fast: "false",
+    });
+  });
+
+  it("does not mutate the persisted input", () => {
+    const persisted: AxisSelection = { effort: "low", fast: "true" };
+    reconcileSelection(AXES, persisted);
+    expect(persisted).toEqual({ effort: "low", fast: "true" });
   });
 });

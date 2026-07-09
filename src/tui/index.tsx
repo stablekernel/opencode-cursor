@@ -6,10 +6,16 @@
 // the filesystem is the only cross-half channel (verified against the SDK).
 import type { TuiPlugin } from "@opencode-ai/plugin/tui";
 import type { ModelListItem } from "@cursor/sdk";
-import { buildModelAxes, snapCombo, type ModelAxis } from "../model-axes.js";
+import { buildModelAxes, isValidCombo, snapCombo, type ModelAxis } from "../model-axes.js";
 import { cachedCatalog } from "../model-discovery.js";
-import { cycleAxis, seedSelection, type AxisSelection } from "./axis-state.js";
-import { writeSelection } from "./state-file.js";
+import {
+  axisValueLabel,
+  cycleAxis,
+  reconcileSelection,
+  seedSelection,
+  type AxisSelection,
+} from "./axis-state.js";
+import { readSelection, writeSelection } from "./state-file.js";
 import { createSignal } from "solid-js";
 import { StatusWidget } from "./status-widget.js";
 
@@ -30,6 +36,10 @@ const tui: TuiPlugin = async (api) => {
   // Per-model working state, rebuilt whenever the active Cursor model changes.
   let axes: ModelAxis[] = [];
   let selection: AxisSelection = {};
+  // Identity of the (session, model) pair the current axes/selection were built
+  // for. refreshForModel() no-ops until this key changes, so the many
+  // `message.updated` fires per turn don't reseed and desync the selection.
+  let lastKey: string | undefined;
   // Disposes the currently-registered keymap layer. Keymap auto-cleanup only
   // runs on plugin deactivation, not on our per-model re-registration, so we
   // dispose the old layer ourselves before creating a new one.
@@ -82,16 +92,36 @@ const tui: TuiPlugin = async (api) => {
     return cachedCatalog().find((m) => m.id === id);
   }
 
+  // Rebuild axes + reload the selection ONLY when the active (session, model)
+  // pair changes. `message.updated` fires many times per streaming turn; the
+  // key gate makes those repeat fires no-ops so the persisted selection is not
+  // reseeded to defaults mid-turn. On a real change we LOAD the persisted
+  // selection for the session and reconcile it to the current model's axes
+  // (dropping a previous model's stale params), then persist so the file, the
+  // status widget, and the server-side wire all agree.
   function refreshForModel() {
+    const sessionID = activeSessionID();
     const model = currentCursorModel();
+    const modelId = model?.id;
+    const key = `${sessionID ?? ""}|${modelId ?? ""}`;
+    if (key === lastKey) return;
+    lastKey = key;
+
     axes = model ? buildModelAxes(model) : [];
-    selection = seedSelection(axes);
+    const persisted = sessionID ? readSelection(sessionID) : undefined;
+    selection = reconcileSelection(axes, persisted);
+    // Asymmetric-combo safety: a reconciled combo that isn't offered by this
+    // model falls back to the always-valid per-axis defaults.
+    if (model && !isValidCombo(model, selection)) selection = seedSelection(axes);
     // Re-register the hotkey layer for the (possibly new) axis set.
     registerAxisLayer();
     // Push the fresh axis set + selection into the reactive signals so the
     // status widget re-renders for the new model.
     setAxesSig(axes);
     setSelSig({ ...selection });
+    // Persist the reconciled selection so file/widget/wire agree. No-op off a
+    // session route.
+    applySelection();
   }
 
   // Persist the composed selection for the active session. The server half
@@ -132,7 +162,7 @@ const tui: TuiPlugin = async (api) => {
             applySelection();
             api.ui.toast({
               variant: "info",
-              message: `${axis.label}: ${selection[axis.id] ?? ""}`,
+              message: `${axis.label}: ${axisValueLabel(selection[axis.id] ?? "")}`,
             });
           },
         });
@@ -161,7 +191,9 @@ const tui: TuiPlugin = async (api) => {
 
   // Re-derive axes whenever a message updates: `message.updated` fires when an
   // assistant message is added/updated, i.e. exactly when the model in use may
-  // have changed. Dispose the listener when the plugin unloads.
+  // have changed. It also fires repeatedly during streaming, but the
+  // (sessionID, modelId) gate in refreshForModel() makes those repeat fires
+  // no-ops until the model or session actually changes. Dispose on unload.
   const off = api.event.on("message.updated", () => refreshForModel());
   api.lifecycle.onDispose(off);
 };

@@ -15,6 +15,10 @@ export const FALLBACK_MODELS: ModelListItem[] = [
     parameters: [
       { id: "thinking", displayName: "Thinking", values: [{ value: "off" }, { value: "on" }] },
     ],
+    variants: [
+      { params: [{ id: "thinking", value: "off" }], displayName: "Composer 2.5", isDefault: true },
+      { params: [{ id: "thinking", value: "on" }], displayName: "Composer 2.5" },
+    ],
   },
   { id: "claude-opus-4-8", displayName: "Claude Opus 4.8 (via Cursor)" },
   { id: "claude-sonnet-4-6", displayName: "Claude Sonnet 4.6 (via Cursor)" },
