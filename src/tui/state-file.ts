@@ -36,6 +36,23 @@ export function readSelection(sessionID: string): AxisSelection | undefined {
   return states[sessionID];
 }
 
+/**
+ * Keep only string-valued entries. `readStates` shallowly validates the file
+ * (confirms it's an object) but does NOT check that each session's values are
+ * strings, so a hand-edited or corrupt file could carry non-string values.
+ * Cursor params MUST be strings, so the server half filters through this before
+ * merging the persisted selection into the request.
+ */
+export function filterStringParams(
+  input: Record<string, unknown>,
+): Record<string, string> {
+  const safe: Record<string, string> = {};
+  for (const [k, v] of Object.entries(input)) {
+    if (typeof v === "string") safe[k] = v;
+  }
+  return safe;
+}
+
 /** Persist one session's selection, preserving the others. Best-effort. */
 export function writeSelection(sessionID: string, sel: AxisSelection): void {
   const states = readStates();

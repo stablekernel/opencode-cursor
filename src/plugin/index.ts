@@ -12,6 +12,7 @@ import {
 import { buildCursorTools } from "./cursor-tools.js";
 import { warnIfStale } from "../version-check.js";
 import { removeSystemRule } from "../provider/system-rule.js";
+import { filterStringParams, readSelection } from "../tui/state-file.js";
 
 function apiKeyFromAuth(auth: Auth | undefined): string | undefined {
 	return auth?.type === "api" ? auth.key : undefined;
@@ -163,6 +164,22 @@ export const CursorPlugin: Plugin = async (input) => {
 			};
 			if (input.agent === "plan" && output.options["mode"] === undefined) {
 				output.options["mode"] = "plan";
+			}
+
+			// Merge the TUI-composed per-axis model state (persisted to the shared
+			// cursor-states.json by the tui plugin) into the request params. The
+			// provider's controls.ts turns output.options.params into the Cursor
+			// {id,params:[{id,value}]} wire shape — unchanged. The state file is only
+			// shallowly validated on read, so filter to string values here: Cursor
+			// params must be strings and a malformed file must never inject a
+			// non-string into the request.
+			const persisted = readSelection(input.sessionID);
+			if (persisted) {
+				const safe = filterStringParams(persisted);
+				const existingParams =
+					(output.options["params"] as Record<string, string> | undefined) ??
+					{};
+				output.options["params"] = { ...existingParams, ...safe };
 			}
 
 			// Dynamically re-forward MCP servers from opencode's *live* state so
