@@ -78,6 +78,15 @@ export async function discoverModels(options: DiscoverOptions = {}): Promise<Dis
   }
 }
 
+/**
+ * Latest cached raw Cursor catalog (with `variants[]`), or `[]` when nothing is
+ * cached yet. Synchronous, key-agnostic reader for the TUI half, which resolves
+ * the active model's `ModelListItem` without an async `discoverModels` round-trip.
+ */
+export function cachedCatalog(): ModelListItem[] {
+  return readLatestModelCache() ?? [];
+}
+
 /** True when a model exposes a thinking/reasoning parameter. */
 export function modelSupportsReasoning(item: ModelListItem): boolean {
   return (item.parameters ?? []).some((p) => /think|reason/i.test(p.id));
