@@ -12,6 +12,7 @@ export default defineConfig({
 	entry: {
 		"provider/index": "src/provider/index.ts",
 		"plugin/index": "src/plugin/index.ts",
+		"tui/index": "src/tui/index.tsx",
 		// Node sidecar hosting @cursor/sdk traffic when the plugin runs under Bun
 		// (Bun's node:http2 breaks Cursor's streaming RPC). Spawned, not imported.
 		"sidecar/agent-host": "src/sidecar/agent-host.mjs",
@@ -26,5 +27,11 @@ export default defineConfig({
 	// inlined at build time instead.
 	define: { __PKG_VERSION__: JSON.stringify(pkg.version) },
 	// @cursor/sdk is heavy and resolved at runtime; keep these external.
-	external: ["@cursor/sdk", "@ai-sdk/provider", "@opencode-ai/plugin"],
+	external: [
+		"@cursor/sdk",
+		"@ai-sdk/provider",
+		"@opencode-ai/plugin",
+		"@opentui/core",
+		"@opentui/solid",
+	],
 });

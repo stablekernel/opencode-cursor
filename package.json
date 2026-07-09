@@ -14,7 +14,8 @@
     "url": "https://github.com/stablekernel/opencode-cursor/issues"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.0.0",
+    "opencode": ">=0.4.0"
   },
   "keywords": [
     "opencode",
@@ -39,11 +40,16 @@
     },
     "./server": {
       "types": "./dist/plugin/index.d.ts",
-      "import": "./dist/plugin/index.js"
+      "import": "./dist/plugin/index.js",
+      "config": { "custom": true }
     },
     "./plugin": {
       "types": "./dist/plugin/index.d.ts",
       "import": "./dist/plugin/index.js"
+    },
+    "./tui": {
+      "types": "./dist/tui/index.d.ts",
+      "import": "./dist/tui/index.js"
     }
   },
   "scripts": {
@@ -66,7 +72,13 @@
     "node-gyp": "^12.4.0"
   },
   "peerDependencies": {
-    "@ai-sdk/provider": "^3.0.0"
+    "@ai-sdk/provider": "^3.0.0",
+    "@opentui/core": "*",
+    "@opentui/solid": "*"
+  },
+  "peerDependenciesMeta": {
+    "@opentui/core": { "optional": true },
+    "@opentui/solid": { "optional": true }
   },
   "devDependencies": {
     "@ai-sdk/provider": "^3.0.13",
