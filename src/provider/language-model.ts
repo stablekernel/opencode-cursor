@@ -164,6 +164,14 @@ export class CursorLanguageModel implements LanguageModelV3 {
 			typeof providerOptions?.["agentId"] === "string"
 				? (providerOptions["agentId"] as string)
 				: undefined;
+		const sandbox =
+			typeof providerOptions?.["sandbox"] === "boolean"
+				? providerOptions["sandbox"]
+				: this.config.sandbox;
+		const cwd =
+			typeof providerOptions?.["cwd"] === "string"
+				? providerOptions["cwd"]
+				: this.config.cwd;
 		// The plugin may mark opencode's non-chat side calls (e.g. title
 		// generation) so they never resume or disturb the pooled agent.
 		const ephemeral = providerOptions?.["ephemeral"] === true;
@@ -259,7 +267,7 @@ export class CursorLanguageModel implements LanguageModelV3 {
 		const delivery = resolveSystemDelivery({
 			mode: this.config.systemPrompt ?? "rules",
 			settingSources: this.config.settingSources,
-			cwd: this.config.cwd,
+			cwd,
 			systemText: extractSystemText(options.prompt),
 			warn: (message) => this.warnOnce(message),
 		});
@@ -273,10 +281,10 @@ export class CursorLanguageModel implements LanguageModelV3 {
 			apiKey: this.requireApiKey(),
 			modelSelection,
 			mode,
-			cwd: this.config.cwd,
+			cwd,
 			...(settingSources ? { settingSources } : {}),
-			...(this.config.sandbox !== undefined
-				? { sandbox: this.config.sandbox }
+			...(sandbox !== undefined
+				? { sandbox }
 				: {}),
 			...(mcpServers ? { mcpServers } : {}),
 			...(this.config.agents ? { agents: this.config.agents } : {}),

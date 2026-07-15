@@ -114,6 +114,38 @@ afterEach(() => {
 });
 
 describe("CursorLanguageModel doStream — resume-aware retry", () => {
+	it("forwards a per-turn sandbox override to Cursor agent creation", async () => {
+		const model = makeModel();
+		create.mockResolvedValueOnce(fakeAgent({ agentId: "sandboxed" }));
+
+		await collectStream(
+			streamCall(model, {
+				prompt: [sys("S"), user("run")],
+				providerOptions: { cursor: { sessionID: "sandbox-session", sandbox: true } },
+			} as never),
+		);
+
+		expect(create.mock.calls[0]![0]).toMatchObject({
+			local: { sandboxOptions: { enabled: true } },
+		});
+	});
+
+	it("forwards a per-turn cwd override to Cursor agent creation", async () => {
+		const model = makeModel();
+		create.mockResolvedValueOnce(fakeAgent({ agentId: "scoped" }));
+
+		await collectStream(
+			streamCall(model, {
+				prompt: [sys("S"), user("run")],
+				providerOptions: { cursor: { sessionID: "cwd-session", cwd: "/child/dir" } },
+			} as never),
+		);
+
+		expect(create.mock.calls[0]![0]).toMatchObject({
+			local: { cwd: "/child/dir" },
+		});
+	});
+
 	it("re-creates a fresh agent + full transcript when a resumed turn errors before emitting", async () => {
 		const model = makeModel();
 		const firstSent: SDKUserMessage[] = [];

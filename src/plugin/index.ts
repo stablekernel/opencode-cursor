@@ -9,7 +9,10 @@ import {
 	type McpStatusMap,
 	translateMcpServers,
 } from "./mcp-config.js";
-import { buildCursorTools } from "./cursor-tools.js";
+import {
+	buildCursorTools,
+	type CursorDelegateControls,
+} from "./cursor-tools.js";
 import { warnIfStale } from "../version-check.js";
 import { removeSystemRule } from "../provider/system-rule.js";
 
@@ -59,6 +62,9 @@ export const CursorPlugin: Plugin = async (input) => {
 	// OAuth servers we've already warned about, so the toast fires once per
 	// server rather than on every turn.
 	const warnedOAuth = new Set<string>();
+	// Controls for a cursor_delegate child are scoped to that child session and
+	// live only while its prompt is running.
+	const delegateControls = new Map<string, CursorDelegateControls>();
 
 	return {
 		auth: {
@@ -164,6 +170,17 @@ export const CursorPlugin: Plugin = async (input) => {
 			if (input.agent === "plan" && output.options["mode"] === undefined) {
 				output.options["mode"] = "plan";
 			}
+			const controls = delegateControls.get(input.sessionID);
+			if (controls) {
+				output.options = {
+					...(output.options ?? {}),
+					mode: controls.mode,
+					cwd: controls.cwd,
+					...(controls.thinking ? { thinking: controls.thinking } : {}),
+					...(controls.sandbox !== undefined ? { sandbox: controls.sandbox } : {}),
+					...(controls.agentId ? { agentId: controls.agentId } : {}),
+				};
+			}
 
 			// Dynamically re-forward MCP servers from opencode's *live* state so
 			// mid-session enable/disable reaches the Cursor agent (the config hook
@@ -239,8 +256,15 @@ export const CursorPlugin: Plugin = async (input) => {
 			// and a permission-gated local delegate. They resolve the Cursor key from
 			// the auth loader (captured above) or CURSOR_API_KEY.
 			...buildCursorTools({
+				client: input.client,
 				resolveApiKey: () => resolveCursorApiKey(capturedApiKey),
 				defaultCwd: () => input?.directory ?? process.cwd(),
+				setDelegateControls: (sessionID, controls) => {
+					delegateControls.set(sessionID, controls);
+				},
+				clearDelegateControls: (sessionID) => {
+					delegateControls.delete(sessionID);
+				},
 			}),
 		},
 
