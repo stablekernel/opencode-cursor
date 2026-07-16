@@ -34,6 +34,12 @@ export interface CursorProviderOptions {
 	/** Default Cursor model params (id -> value), e.g. { thinking: "high" }. */
 	params?: Record<string, string>;
 	/**
+	 * Per-model floor params keyed by model id, e.g. `{ "composer-2.5": { fast:
+	 * "false" } }`. Seeded by the plugin's `config` hook; applied under `params`
+	 * and per-request options.
+	 */
+	modelParamDefaults?: Record<string, Record<string, string>>;
+	/**
 	 * MCP servers to make available to the Cursor agent, keyed by name. The
 	 * plugin's `config` hook populates this by translating opencode's configured
 	 * `config.mcp` servers, so the agent can use the same MCP servers that
@@ -98,6 +104,9 @@ export function createCursor(options: CursorProviderOptions = {}): ProviderV3 {
 		cwd: options.cwd ?? process.cwd(),
 		mode: options.mode ?? "agent",
 		...(options.params ? { params: options.params } : {}),
+		...(options.modelParamDefaults
+			? { modelParamDefaults: options.modelParamDefaults }
+			: {}),
 		...(mcpServers ? { mcpServers } : {}),
 		...(options.settingSources
 			? { settingSources: options.settingSources }

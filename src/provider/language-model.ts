@@ -55,6 +55,11 @@ export interface CursorModelConfig {
 	mode: AgentModeOption;
 	/** Default Cursor model params (id -> value); overridable per-request. */
 	params?: Record<string, string>;
+	/**
+	 * Per-model floor params keyed by model id, seeded by the plugin's `config`
+	 * hook. Passed as {@link resolveControls}'s `defaults` for the active model.
+	 */
+	modelParamDefaults?: Record<string, Record<string, string>>;
 	/** MCP servers forwarded to the Cursor agent from opencode's config. */
 	mcpServers?: Record<string, McpServerConfig>;
 	/** Cursor settings layers to load from disk (skills, rules, .cursor/mcp.json). */
@@ -140,9 +145,18 @@ export class CursorLanguageModel implements LanguageModelV3 {
 			| undefined;
 		const { mode, modelSelection } = resolveControls(
 			this.modelId,
-			{ mode: this.config.mode, params: this.config.params },
+			{
+				mode: this.config.mode,
+				params: this.config.params,
+				defaults: this.config.modelParamDefaults?.[this.modelId],
+			},
 			providerOptions,
 		);
+		if (process.env["OPENCODE_CURSOR_DEBUG"] === "1") {
+			console.error(
+				`[cursor:debug] model=${this.modelId} selection=${JSON.stringify(modelSelection)}`,
+			);
+		}
 		const sessionID =
 			typeof providerOptions?.["sessionID"] === "string"
 				? (providerOptions["sessionID"] as string)

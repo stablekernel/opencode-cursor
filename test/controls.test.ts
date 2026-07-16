@@ -39,6 +39,36 @@ describe("resolveControls", () => {
     const r = resolveControls("m", { mode: "agent" }, { params: { budget: 1024 } });
     expect(r.modelSelection.params).toEqual([{ id: "budget", value: "1024" }]);
   });
+
+  it("applies per-model defaults as a floor when no params are supplied", () => {
+    // The subagent path: opencode hands the bare model id with no params, so the
+    // model's default `fast: "false"` must still be sent (otherwise Cursor's
+    // server-side `fast: true` default silently applies).
+    const r = resolveControls(
+      "composer-2.5",
+      { mode: "agent", defaults: { fast: "false" } },
+      undefined,
+    );
+    expect(r.modelSelection.params).toEqual([{ id: "fast", value: "false" }]);
+  });
+
+  it("lets a per-request param override the default floor (fast opt-in)", () => {
+    const r = resolveControls(
+      "composer-2.5",
+      { mode: "agent", defaults: { fast: "false" } },
+      { params: { fast: "true" } },
+    );
+    expect(r.modelSelection.params).toEqual([{ id: "fast", value: "true" }]);
+  });
+
+  it("lets static params override the default floor", () => {
+    const r = resolveControls(
+      "m",
+      { mode: "agent", defaults: { fast: "false" }, params: { fast: "true" } },
+      undefined,
+    );
+    expect(r.modelSelection.params).toEqual([{ id: "fast", value: "true" }]);
+  });
 });
 
 // buildModelVariants behavior is covered in test/model-variants.test.ts.

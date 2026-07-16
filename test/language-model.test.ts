@@ -322,6 +322,36 @@ describe("CursorLanguageModel doStream — resume-aware retry", () => {
 		expect(getPooledAgentId("s1")).toBeUndefined();
 	});
 
+	it("applies per-model default params (fast:false) when a turn arrives with no params", async () => {
+		// Simulates an opencode subagent that inherited its parent's model: the
+		// provider gets the bare model id with no per-request params. The
+		// modelParamDefaults floor must still pin fast:false so Cursor's
+		// server-side fast:true default never applies.
+		const model = new CursorLanguageModel("composer-2.5", {
+			providerName: "cursor",
+			cwd: "/tmp",
+			mode: "agent",
+			session: "auto",
+			modelParamDefaults: { "composer-2.5": { fast: "false" } },
+		});
+		create.mockResolvedValueOnce(fakeAgent({ agentId: "a1" }));
+
+		await collectStream(
+			streamCall(model, {
+				prompt: [sys("S"), user("hi")],
+				providerOptions: { cursor: { sessionID: "s1" } },
+			} as never),
+		);
+
+		const acquireArgs = create.mock.calls[0]?.[0] as {
+			model: { id: string; params?: Array<{ id: string; value: string }> };
+		};
+		expect(acquireArgs.model).toEqual({
+			id: "composer-2.5",
+			params: [{ id: "fast", value: "false" }],
+		});
+	});
+
 	it("chains the original resume failure as cause when re-acquire throws", async () => {
 		const model = makeModel();
 

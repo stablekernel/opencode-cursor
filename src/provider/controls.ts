@@ -5,6 +5,12 @@ export interface StaticControls {
   mode: AgentModeOption;
   /** Default Cursor model params (id -> value), e.g. { thinking: "high" }. */
   params?: Record<string, string>;
+  /**
+   * Per-model floor params, applied UNDER {@link params} and per-request options
+   * (an explicit param always wins). Pins Cursor's boolean toggles, e.g.
+   * `{ fast: "false" }`, when a turn arrives with no params of its own.
+   */
+  defaults?: Record<string, string>;
 }
 
 export interface ResolvedControls {
@@ -52,7 +58,10 @@ export function resolveControls(
 
   const mode: AgentModeOption = isMode(po["mode"]) ? po["mode"] : staticControls.mode;
 
-  const params: Record<string, string> = { ...(staticControls.params ?? {}) };
+  const params: Record<string, string> = {
+    ...(staticControls.defaults ?? {}),
+    ...(staticControls.params ?? {}),
+  };
   if (isRecord(po["params"])) {
     for (const [key, value] of Object.entries(po["params"])) {
       if (value != null) params[key] = String(value);
