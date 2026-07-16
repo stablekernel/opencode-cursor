@@ -3,6 +3,7 @@ import type { Auth } from "@opencode-ai/sdk/v2";
 import type { McpServerConfig } from "@cursor/sdk";
 import { resolveCursorApiKey } from "../api-key.js";
 import { discoverModels, toOpencodeModels } from "../model-discovery.js";
+import { defaultModelParams } from "../model-variants.js";
 import { buildModelV2Map, PROVIDER_ID, providerNpm } from "./model-v2.js";
 import {
 	findUnshareableOAuthServers,
@@ -117,6 +118,19 @@ export const CursorPlugin: Plugin = async (input) => {
 				? { ...userMcp, ...translateMcpServers(config.mcp) }
 				: userMcp;
 
+			// Per-model floor params (e.g. { "composer-2.5": { fast: "false" } }).
+			// opencode merges each model's own `options.params` on the normal chat
+			// path, but a subagent that inherits its parent agent's model can reach
+			// the provider with the bare model id and no params. Threading these
+			// defaults through the (per-provider, not per-request) provider options
+			// lets the provider re-apply them as a floor so `fast` never silently
+			// falls back to Cursor's server-side `true`.
+			const modelParamDefaults: Record<string, Record<string, string>> = {};
+			for (const item of models) {
+				const params = defaultModelParams(item);
+				if (Object.keys(params).length > 0) modelParamDefaults[item.id] = params;
+			}
+
 			// One canonical cwd for the provider's rule write and our dispose
 			// cleanup: an explicit user option wins, else the plugin directory.
 			const optionCwd = existingOptions["cwd"];
@@ -133,6 +147,9 @@ export const CursorPlugin: Plugin = async (input) => {
 					...existingOptions,
 					cwd: resolvedCwd,
 					...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
+					...(Object.keys(modelParamDefaults).length > 0
+						? { modelParamDefaults }
+						: {}),
 				},
 				models: { ...toOpencodeModels(models), ...(existing.models ?? {}) },
 			};

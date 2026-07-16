@@ -55,6 +55,16 @@ export interface CursorModelConfig {
 	mode: AgentModeOption;
 	/** Default Cursor model params (id -> value); overridable per-request. */
 	params?: Record<string, string>;
+	/**
+	 * Per-model floor params keyed by model id (e.g. `{ "composer-2.5": { fast:
+	 * "false" } }`). Applied under {@link params} and per-request options so a
+	 * call arriving with the bare model id and no params — notably an opencode
+	 * subagent that inherited its parent agent's model — still pins Cursor's
+	 * boolean toggles (like `fast`) to their opencode defaults instead of
+	 * silently inheriting Cursor's server-side `fast: true`. Seeded by the
+	 * plugin's `config` hook from the discovered catalog.
+	 */
+	modelParamDefaults?: Record<string, Record<string, string>>;
 	/** MCP servers forwarded to the Cursor agent from opencode's config. */
 	mcpServers?: Record<string, McpServerConfig>;
 	/** Cursor settings layers to load from disk (skills, rules, .cursor/mcp.json). */
@@ -140,9 +150,22 @@ export class CursorLanguageModel implements LanguageModelV3 {
 			| undefined;
 		const { mode, modelSelection } = resolveControls(
 			this.modelId,
-			{ mode: this.config.mode, params: this.config.params },
+			{
+				mode: this.config.mode,
+				params: this.config.params,
+				defaults: this.config.modelParamDefaults?.[this.modelId],
+			},
 			providerOptions,
 		);
+		if (process.env["OPENCODE_CURSOR_DEBUG"] === "1") {
+			// Root-cause instrument: shows the exact ModelSelection sent to Cursor.
+			// A subagent that inherited its parent's model with dropped params shows
+			// up here as a selection missing the `fast: "false"` floor before the
+			// modelParamDefaults guard re-applies it.
+			console.error(
+				`[cursor:debug] model=${this.modelId} selection=${JSON.stringify(modelSelection)}`,
+			);
+		}
 		const sessionID =
 			typeof providerOptions?.["sessionID"] === "string"
 				? (providerOptions["sessionID"] as string)
