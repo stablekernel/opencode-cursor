@@ -118,13 +118,11 @@ export const CursorPlugin: Plugin = async (input) => {
 				? { ...userMcp, ...translateMcpServers(config.mcp) }
 				: userMcp;
 
-			// Per-model floor params (e.g. { "composer-2.5": { fast: "false" } }).
-			// opencode merges each model's own `options.params` on the normal chat
-			// path, but a subagent that inherits its parent agent's model can reach
-			// the provider with the bare model id and no params. Threading these
-			// defaults through the (per-provider, not per-request) provider options
-			// lets the provider re-apply them as a floor so `fast` never silently
-			// falls back to Cursor's server-side `true`.
+			// opencode forwards a model's own options.params on the normal chat
+			// path, but a subagent inheriting its parent's model reaches the provider
+			// with them dropped — letting Cursor's server-side `fast: true` apply.
+			// Thread the defaults through provider options (per-provider, survives
+			// the drop) so the provider can re-apply them as a floor.
 			const modelParamDefaults: Record<string, Record<string, string>> = {};
 			for (const item of models) {
 				const params = defaultModelParams(item);

@@ -6,13 +6,9 @@ export interface StaticControls {
   /** Default Cursor model params (id -> value), e.g. { thinking: "high" }. */
   params?: Record<string, string>;
   /**
-   * Per-model floor params applied UNDER {@link params} and per-request options.
-   * Carries this model's non-reasoning boolean defaults (e.g. `{ fast: "false" }`)
-   * so a call that reaches the provider with the bare model id and no params —
-   * notably an opencode subagent inheriting its parent's model — still pins
-   * `fast` off instead of inheriting Cursor's server-side `fast: true` default.
-   * The normal chat path already carries these via the model's opencode
-   * `options.params`, so re-applying them here is a no-op there.
+   * Per-model floor params, applied UNDER {@link params} and per-request options
+   * (an explicit param always wins). Pins Cursor's boolean toggles, e.g.
+   * `{ fast: "false" }`, when a turn arrives with no params of its own.
    */
   defaults?: Record<string, string>;
 }

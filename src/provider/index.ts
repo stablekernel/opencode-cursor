@@ -34,11 +34,9 @@ export interface CursorProviderOptions {
 	/** Default Cursor model params (id -> value), e.g. { thinking: "high" }. */
 	params?: Record<string, string>;
 	/**
-	 * Per-model floor params keyed by model id (e.g. `{ "composer-2.5": { fast:
-	 * "false" } }`). Seeded by the plugin's `config` hook from the discovered
-	 * catalog so subagents that inherit a model without its options.params still
-	 * pin Cursor's boolean toggles to their opencode defaults. Applied under
-	 * `params` and per-request options.
+	 * Per-model floor params keyed by model id, e.g. `{ "composer-2.5": { fast:
+	 * "false" } }`. Seeded by the plugin's `config` hook; applied under `params`
+	 * and per-request options.
 	 */
 	modelParamDefaults?: Record<string, Record<string, string>>;
 	/**
