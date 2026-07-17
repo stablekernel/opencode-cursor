@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- **Improved `cursor_delegate` visibility.** Local Cursor delegation now runs in a
+  parent-linked opencode child session, so live Cursor tool activity is visible and
+  navigable in the subagent UI. Child sessions remain available after completion.
+
 ## [0.4.6] — 2026-07-08
 
 - **Fixed: newly released Cursor models didn't appear locally without a manual

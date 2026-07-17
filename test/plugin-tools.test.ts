@@ -1,11 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runCloudAgent = vi.fn();
-const runDelegate = vi.fn();
 
 // Mock the delegation runtimes so the tool hooks never touch the Cursor SDK.
 vi.mock("../src/provider/cloud-agent.js", () => ({ runCloudAgent }));
-vi.mock("../src/provider/delegate.js", () => ({ runDelegate }));
 
 const { default: plugin } = await import("../src/plugin/index.js");
 
@@ -22,6 +20,21 @@ function ctx(ask: ReturnType<typeof vi.fn>) {
   } as any;
 }
 
+function fakeClient() {
+	return {
+		session: {
+			create: vi.fn().mockResolvedValue({ data: { id: "child-1" } }),
+			prompt: vi.fn().mockResolvedValue({
+				data: { info: {}, parts: [{ type: "text", text: "done" }] },
+			}),
+			abort: vi.fn().mockResolvedValue({ data: {} }),
+		},
+		config: { get: vi.fn().mockResolvedValue({ data: { mcp: {} } }) },
+		mcp: { status: vi.fn().mockResolvedValue({ data: {} }) },
+		tui: { showToast: vi.fn() },
+	};
+}
+
 let savedEnvKey: string | undefined;
 
 beforeEach(() => {
@@ -33,8 +46,7 @@ beforeEach(() => {
 afterEach(() => {
   if (savedEnvKey === undefined) delete process.env.CURSOR_API_KEY;
   else process.env.CURSOR_API_KEY = savedEnvKey;
-  runCloudAgent.mockReset();
-  runDelegate.mockReset();
+	runCloudAgent.mockReset();
 });
 
 describe("CursorPlugin tool hook", () => {
@@ -53,18 +65,41 @@ describe("CursorPlugin tool hook", () => {
       ctx(vi.fn().mockResolvedValue(undefined)),
     );
     expect(String(out)).toContain("No Cursor API key");
-    expect(runDelegate).not.toHaveBeenCalled();
   });
 
   it("feeds the auth-loader-captured key into the delegation tools", async () => {
-    runDelegate.mockResolvedValue({
-      agentId: "a1",
-      text: "done",
-      reasoning: "",
-      toolActivity: [],
-      usage: undefined,
-    });
-    const hooks = await plugin({ directory: "/work" } as never);
+    const client = fakeClient();
+    const hooks = await plugin({ directory: "/work", client } as never);
+		let childOptions: Record<string, unknown> | undefined;
+		let siblingOptions: Record<string, unknown> | undefined;
+		client.session.prompt.mockImplementation(async ({ path }: any) => {
+			const output = { options: {} } as any;
+			await hooks["chat.params"]!(
+				{
+					sessionID: path.id,
+					agent: "build",
+					model: { providerID: "cursor", modelID: "m" },
+					provider: {},
+					message: {},
+				} as never,
+				output,
+			);
+			childOptions = output.options;
+			// A sibling session must NOT inherit the delegate controls.
+			const other = { options: {} } as any;
+			await hooks["chat.params"]!(
+				{
+					sessionID: "unrelated",
+					agent: "build",
+					model: { providerID: "cursor", modelID: "m" },
+					provider: {},
+					message: {},
+				} as never,
+				other,
+			);
+			siblingOptions = other.options;
+			return { data: { info: {}, parts: [{ type: "text", text: "done" }] } } as any;
+		});
 
     // Simulate opencode's auth loader running with a stored API key.
     const loaded = await hooks.auth!.loader!(async () => ({ type: "api", key: "sekret" }) as never, {
@@ -74,11 +109,22 @@ describe("CursorPlugin tool hook", () => {
 
     // The tool should now resolve the captured key rather than returning needs-auth.
     await hooks.tool!.cursor_delegate!.execute(
-      { prompt: "p", model: "m" } as any,
+      { prompt: "p", model: "m", thinking: "high", sandbox: true, agentId: "cursor-agent" } as any,
       ctx(vi.fn().mockResolvedValue(undefined)),
     );
-    expect(runDelegate).toHaveBeenCalledOnce();
-    expect(runDelegate.mock.calls[0]![0].apiKey).toBe("sekret");
+    expect(client.session.create).toHaveBeenCalledOnce();
+    expect(client.session.prompt).toHaveBeenCalledOnce();
+		expect(childOptions).toMatchObject({
+			mode: "agent",
+			thinking: "high",
+			sandbox: true,
+			agentId: "cursor-agent",
+			sessionID: "child-1",
+		});
+		// Controls are keyed per child session, so an unrelated session never
+		// inherits them (verified here while the child prompt is still pending).
+		expect(siblingOptions).not.toHaveProperty("thinking");
+		expect(siblingOptions).not.toHaveProperty("agentId");
   });
 
   it("falls back to CURSOR_API_KEY when the loader never captured a key", async () => {

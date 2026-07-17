@@ -1,10 +1,17 @@
-import { tool, type ToolContext, type ToolDefinition } from "@opencode-ai/plugin";
+import {
+  tool,
+  type PluginInput,
+  type ToolContext,
+  type ToolDefinition,
+} from "@opencode-ai/plugin";
 import { runCloudAgent } from "../provider/cloud-agent.js";
-import { runDelegate } from "../provider/delegate.js";
+import { PROVIDER_ID } from "./model-v2.js";
 
 const s = tool.schema;
 
 export interface CursorToolDeps {
+  /** opencode client used to create and prompt parent-linked child sessions. */
+  client: PluginInput["client"];
   /**
    * Resolve the Cursor API key (from opencode auth, captured by the plugin's
    * auth loader, or the CURSOR_API_KEY env var). Returns undefined when no key
@@ -13,6 +20,18 @@ export interface CursorToolDeps {
   resolveApiKey: () => string | undefined;
   /** Default working directory for local delegation (the session worktree/cwd). */
   defaultCwd: () => string;
+  /** Register Cursor controls for the next provider turn in a child session. */
+  setDelegateControls: (sessionID: string, controls: CursorDelegateControls) => void;
+  /** Remove controls after the child provider turn settles. */
+  clearDelegateControls: (sessionID: string) => void;
+}
+
+export interface CursorDelegateControls {
+  mode: "agent" | "plan";
+  cwd: string;
+  thinking?: string;
+  sandbox?: boolean;
+  agentId?: string;
 }
 
 const NEEDS_AUTH =
@@ -46,6 +65,63 @@ async function requestApproval(
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function delegateTitle(prompt: string): string {
+  const preview = prompt.replace(/\s+/g, " ").trim().slice(0, 80);
+  return `Cursor delegate: ${preview || "task"}`;
+}
+
+/**
+ * Await a promise but reject early if `signal` aborts. When abort wins the
+ * race, a value that arrives afterward is routed to `onLateValue` so the caller
+ * can dispose of a resource (e.g. abort a child session that was created after
+ * we already gave up waiting).
+ */
+function awaitWithAbort<T>(
+  promise: Promise<T>,
+  signal: AbortSignal,
+  onLateValue?: (value: T) => void,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error("Delegation aborted"));
+    };
+
+    if (signal.aborted) {
+      // Already aborted: reject now, but still consume the in-flight promise so
+      // a resource it produces is disposed and its rejection stays handled.
+      void promise.then(
+        (value) => onLateValue?.(value),
+        () => {},
+      );
+      onAbort();
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+    void promise.then(
+      (value) => {
+        if (settled) {
+          onLateValue?.(value);
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve(value);
+      },
+      (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      },
+    );
+  });
 }
 
 /**
@@ -145,7 +221,9 @@ export function buildCursorTools(deps: CursorToolDeps): Record<string, ToolDefin
 
     cursor_delegate: tool({
       description:
-        "Delegate a single subtask to a local Cursor agent and return its result. Use to hand " +
+        "Delegate a single subtask to a local Cursor agent and return its result. Runs in a " +
+        "parent-linked opencode child session, so Cursor's live tool activity is visible and " +
+        "navigable in the subagent UI and the session remains available afterward. Use to hand " +
         "off discrete work to Cursor while keeping your primary model in control. Permission-gated.",
       args: {
         prompt: s.string().describe("The subtask to delegate to Cursor."),
@@ -174,39 +252,89 @@ export function buildCursorTools(deps: CursorToolDeps): Record<string, ToolDefin
           return `Delegation to ${args.model} not approved${approval.reason ? `: ${approval.reason}` : "."}`;
         }
 
-        let result;
+        const directory = args.cwd ?? context.directory ?? deps.defaultCwd();
+        let childSessionID: string | undefined;
+        const onAbort = () => {
+          if (!childSessionID) return;
+          void Promise.resolve(
+            deps.client.session.abort({
+              path: { id: childSessionID },
+              query: { directory },
+            }),
+          ).catch(() => {});
+        };
+        context.abort.addEventListener("abort", onAbort);
+
         try {
-          result = await runDelegate({
-            apiKey,
-            prompt: args.prompt,
-            model: args.model,
-            cwd: args.cwd ?? context.directory ?? deps.defaultCwd(),
-            ...(args.mode ? { mode: args.mode } : {}),
+          if (context.abort.aborted) throw new Error("Delegation aborted");
+
+          const creating = deps.client.session.create({
+            body: {
+              parentID: context.sessionID,
+              title: delegateTitle(args.prompt),
+            },
+            query: { directory },
+          });
+          // If abort wins the race, the child may still be created after we
+          // reject. It was never prompted, so there is nothing to abort — delete
+          // it so no empty orphan session lingers in the parent's session tree.
+          const created = await awaitWithAbort(creating, context.abort, (late) => {
+            if (!late.data?.id) return;
+            void Promise.resolve(
+              deps.client.session.delete({
+                path: { id: late.data.id },
+                query: { directory },
+              }),
+            ).catch(() => {});
+          });
+          if (!created.data) {
+            throw new Error(`Could not create child session: ${errorMessage(created.error)}`);
+          }
+          childSessionID = created.data.id;
+          deps.setDelegateControls(childSessionID, {
+            mode: args.mode ?? "agent",
+            cwd: directory,
             ...(args.thinking ? { thinking: args.thinking } : {}),
             ...(args.sandbox !== undefined ? { sandbox: args.sandbox } : {}),
             ...(args.agentId ? { agentId: args.agentId } : {}),
-            abortSignal: context.abort,
           });
+
+          const prompting = deps.client.session.prompt({
+            path: { id: childSessionID },
+            query: { directory },
+            body: {
+              model: { providerID: PROVIDER_ID, modelID: args.model },
+              ...(args.mode === "plan" ? { agent: "plan" } : {}),
+              tools: { cursor_delegate: false },
+              parts: [{ type: "text", text: args.prompt }],
+            },
+          });
+          const prompted = await awaitWithAbort(prompting, context.abort);
+          if (!prompted.data) {
+            throw new Error(`Child session failed: ${errorMessage(prompted.error)}`);
+          }
+
+          const text = prompted.data.parts.reduce(
+            (output, part) => (part.type === "text" ? output + part.text : output),
+            "",
+          );
+
+          return {
+            title: `Cursor delegate (${args.model})`,
+            output: text || "(no text output)",
+            metadata: {
+              childSessionID,
+              model: args.model,
+              status: "finished",
+              usage: prompted.data.info.tokens ?? null,
+            },
+          };
         } catch (err) {
           return `Delegation failed: ${errorMessage(err)}`;
+        } finally {
+          context.abort.removeEventListener("abort", onAbort);
+          if (childSessionID) deps.clearDelegateControls(childSessionID);
         }
-
-        const toolNote =
-          result.toolActivity.length > 0
-            ? `\n\n(${result.toolActivity.length} tool call(s)` +
-              `${result.toolActivity.some((t) => t.isError) ? ", some failed" : ""})`
-            : "";
-
-        return {
-          title: `Cursor delegate (${args.model})`,
-          output: (result.text || "(no text output)") + toolNote,
-          metadata: {
-            agentId: result.agentId,
-            model: args.model,
-            toolCalls: result.toolActivity.length,
-            usage: result.usage ?? null,
-          },
-        };
       },
     }),
   };

@@ -106,8 +106,9 @@ The key is validated on first use (model discovery / first call), not at login t
 
 The plugin also registers two **delegation tools**:
 
-- `cursor_delegate` — hand a discrete subtask to a local Cursor agent as a permission-gated tool
-  call (your primary model stays in control).
+- `cursor_delegate` — hand a discrete subtask to a local Cursor agent in a permission-gated,
+  parent-linked child session. Cursor's live tool activity appears in opencode's subagent UI while
+  your primary model stays in control; the child session remains available after completion.
 - `cursor_cloud_agent` — launch a Cursor cloud agent on a remote repo that can run for minutes and
   optionally open a PR.
 
@@ -250,8 +251,9 @@ are gated by opencode's `permission` config:
 
 ### `cursor_delegate` (local)
 
-Runs one Cursor turn as a permission-gated tool call. Your primary opencode model hands off a
-discrete subtask and gets the result back.
+Runs one Cursor turn in a permission-gated, parent-linked opencode child session. Your primary
+opencode model hands off a discrete subtask and gets the result back while the child session
+shows Cursor's live tool activity and remains available for later inspection.
 
 | Arg | Required | Meaning |
 | --- | --- | --- |
