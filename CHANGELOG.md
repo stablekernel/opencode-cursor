@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.7-next.0] — 2026-07-17
+
+- **Fixed: subagents silently ran Cursor's server-side `fast` default (e.g.
+  `composer-2.5` in "fast" mode).** A subagent inherits its parent agent's
+  model but reached the provider with the model's `options.params` dropped, so
+  the `fast: "false"` opencode default was lost and Cursor's server-side
+  `fast: true` applied. Each model's default params are now threaded through the
+  provider options and re-applied as a lowest-precedence floor, so `fast` stays
+  off unless a variant or per-request param explicitly opts in. Set
+  `OPENCODE_CURSOR_DEBUG=1` to log the resolved model selection per turn (#71).
+
 ## [0.4.6] — 2026-07-08
 
 - **Fixed: newly released Cursor models didn't appear locally without a manual
