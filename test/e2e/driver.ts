@@ -31,6 +31,7 @@ interface RunSummary {
   ev: "run";
   firstDeltaMs?: number;
   deltaChars: number;
+  payloadChars: number;
   parts: Array<{ type: string; name?: string; id?: string; isError?: boolean }>;
   error?: string;
 }
@@ -39,6 +40,7 @@ async function runOnce(text: string, sessionID?: string, abortMs?: number): Prom
   const t0 = Date.now();
   let firstDeltaMs: number | undefined;
   let deltaChars = 0;
+  let payloadChars = 0;
   const parts: RunSummary["parts"] = [];
   const ac = new AbortController();
   if (abortMs) setTimeout(() => ac.abort(), abortMs);
@@ -58,20 +60,25 @@ async function runOnce(text: string, sessionID?: string, abortMs?: number): Prom
       ) {
         firstDeltaMs = Date.now() - t0;
       }
-      if (value.type === "text-delta") deltaChars += String(value.delta ?? "").length;
+      if (value.type === "text-delta") {
+        const len = String(value.delta ?? "").length;
+        deltaChars += len;
+        payloadChars += len;
+      }
       const part: RunSummary["parts"][number] = { type: value.type };
       if (value.type === "tool-call" || value.type === "tool-result") {
         part.name = value.toolName as string | undefined;
         part.id = value.toolCallId as string | undefined;
         part.isError = value.isError as boolean | undefined;
+        payloadChars += JSON.stringify(value).length;
       }
       if (value.type === "error") part.name = String(value.error ?? "");
       parts.push(part);
     }
   } catch (err) {
-    return { ev: "run", deltaChars, parts, error: err instanceof Error ? err.message : String(err) };
+    return { ev: "run", deltaChars, payloadChars, parts, error: err instanceof Error ? err.message : String(err) };
   }
-  const summary: RunSummary = { ev: "run", deltaChars, parts };
+  const summary: RunSummary = { ev: "run", deltaChars, payloadChars, parts };
   if (firstDeltaMs !== undefined) summary.firstDeltaMs = firstDeltaMs;
   return summary;
 }
@@ -89,12 +96,16 @@ switch (scenario) {
     break;
   }
   case "long-stream":
+    // NOTE: read tool paginates server-side (~100-338 lines/page, no offset/limit
+    // exposed to the model) so a single read of package-lock.json yields <13KB.
+    // `cat` via the bash tool returns the full 110KB file in one tool-result,
+    // which crosses the same HTTP stream (the #26915-class flow-control surface).
     emit(await runOnce(
-      "Output a numbered list from 1 to 400, each line being 'NNN: the quick brown fox jumps over the lazy dog'. No commentary, just the list.",
+      "Use your bash tool to run exactly this command: cat package-lock.json — then reply with exactly: DONE",
     ));
     break;
   case "web-search":
-    emit(await runOnce("Search the web for the current UTC date, then answer with just the date."));
+    emit(await runOnce("Use your web_search tool (do NOT answer from your own knowledge) to search for 'current UTC date', then reply with only the date."));
     break;
   case "stall-cancel": {
     const sessionID = `e2e-${Date.now()}`;
