@@ -1,5 +1,6 @@
 import type { AgentModeOption, SDKUserMessage } from "@cursor/sdk";
 import type { AgentLike, AgentRunLike, AgentSendOptions } from "./agent-backend.js";
+import { classifyError } from "./error-classify.js";
 
 /** Token usage as reported by Cursor's `turn-ended` update. */
 export interface CursorUsage {
@@ -114,7 +115,7 @@ export async function* streamAgentTurn(
   options.abortSignal?.addEventListener("abort", onAbort);
 
   const sendTurn = (): Promise<AgentRunLike> =>
-    sendWithBusyRetry(
+    sendWithRecovery(
       agent,
       message,
       { mode: options.mode, onDelta, ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}) },
@@ -171,27 +172,48 @@ export async function* streamAgentTurn(
   }
 }
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Bounded backoff for retryable send failures (ms per attempt). */
+const RETRY_BACKOFF_MS = [500, 1500] as const;
+
 /**
- * Send a message on an agent, retrying once with the SDK's documented recovery
- * path on `AgentBusyError`. A previous opencode/CLI crash (or a second instance
- * racing on the same agent store) can leave a persisted run wedged; the SDK then
- * rejects new sends with `AgentBusyError`. `local.force` expires the wedged run
- * instead of failing the turn. Shared by streaming and silent sends.
+ * Send a message on an agent with typed recovery (see error-classify.ts):
+ *  - agent-busy: a previous crash left a persisted run wedged — resend once
+ *    with `local.force` to expire it (SDK-documented recovery).
+ *  - rate-limit / network: bounded exponential backoff on the SAME agent; the
+ *    shared idempotencyKey makes the resend a server-side dedupe, not a dup.
+ *  - everything else: rethrow (auth/config fail fast upstream; unknown is
+ *    handled by the caller's fresh-replay path).
  */
-async function sendWithBusyRetry(
+export async function sendWithRecovery(
   agent: AgentLike,
   message: SDKUserMessage,
   sendOptions: AgentSendOptions,
   debug: boolean,
 ): Promise<AgentRunLike> {
-  try {
-    return await agent.send(message, sendOptions);
-  } catch (err) {
-    if (err instanceof Error && err.name === "AgentBusyError") {
-      if (debug) console.error("[cursor:debug] agent busy; retrying send with local.force");
-      return agent.send(message, { ...sendOptions, local: { force: true } });
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await agent.send(message, sendOptions);
+    } catch (err) {
+      const classified = classifyError(err);
+      if (classified.kind === "agent-busy") {
+        if (debug) console.error("[cursor:debug] agent busy; retrying send with local.force");
+        return agent.send(message, { ...sendOptions, local: { force: true } });
+      }
+      if (
+        (classified.kind === "rate-limit" || classified.kind === "network") &&
+        attempt < RETRY_BACKOFF_MS.length
+      ) {
+        if (debug)
+          console.error(
+            `[cursor:debug] ${classified.kind}; retrying send in ${RETRY_BACKOFF_MS[attempt]}ms`,
+          );
+        await sleep(RETRY_BACKOFF_MS[attempt]!);
+        continue;
+      }
+      throw err;
     }
-    throw err;
   }
 }
 
@@ -237,7 +259,7 @@ export async function sendAgentTurnSilently(
   };
   options.abortSignal?.addEventListener("abort", onAbort);
   try {
-    const run = await sendWithBusyRetry(
+    const run = await sendWithRecovery(
       agent,
       message,
       { mode: options.mode, ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}) },

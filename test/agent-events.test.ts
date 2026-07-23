@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Run, SDKUserMessage } from "@cursor/sdk";
 import {
 	sendAgentTurnSilently,
@@ -261,5 +261,47 @@ describe("streamAgentTurn idempotency key", () => {
 		const agent = fakeAgent({ sendCalls });
 		await collect(streamAgentTurn(agent, MESSAGE, { mode: "agent", idempotencyKey: "k-1" }));
 		expect(sendCalls[0]?.["idempotencyKey"]).toBe("k-1");
+	});
+});
+
+describe("sendWithRecovery typed retries", () => {
+	it("retries rate-limit with backoff on the same agent (no force)", async () => {
+		vi.useFakeTimers();
+		try {
+			const sendCalls: Array<Record<string, unknown> | undefined> = [];
+			const err = new Error("too many"); err.name = "RateLimitError";
+			const agent = fakeAgent({ rejectFirst: { error: err, times: 2 }, sendCalls });
+			const p = collect(streamAgentTurn(agent, MESSAGE, { mode: "agent" }));
+			await vi.advanceTimersByTimeAsync(2_000);
+			await p;
+			expect(sendCalls).toHaveLength(3);
+			expect(sendCalls.every((c) => c?.["local"] === undefined)).toBe(true);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("retries network errors once then surfaces", async () => {
+		vi.useFakeTimers();
+		try {
+			const sendCalls: Array<Record<string, unknown> | undefined> = [];
+			const err = new Error("gone"); err.name = "NetworkError";
+			const agent = fakeAgent({ rejectFirst: { error: err, times: 5 }, sendCalls });
+			const p = collect(streamAgentTurn(agent, MESSAGE, { mode: "agent" }));
+			const assertion = expect(p).rejects.toThrow("gone");
+			await vi.advanceTimersByTimeAsync(5_000);
+			await assertion;
+			expect(sendCalls).toHaveLength(3); // initial + 2 bounded retries
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not retry auth errors", async () => {
+		const sendCalls: Array<Record<string, unknown> | undefined> = [];
+		const err = new Error("bad key"); err.name = "AuthenticationError";
+		const agent = fakeAgent({ rejectFirst: { error: err, times: 5 }, sendCalls });
+		await expect(collect(streamAgentTurn(agent, MESSAGE, { mode: "agent" }))).rejects.toThrow("bad key");
+		expect(sendCalls).toHaveLength(1);
 	});
 });
