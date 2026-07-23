@@ -5,6 +5,7 @@
  *
  * Message-text driven behaviors:
  *   "busy"  -> send() rejects with AgentBusyError unless local.force is set
+ *   "rich"  -> send() rejects with an error carrying status/code/isRetryable/helpUrl
  *   "hang"  -> run.wait() never resolves (until cancel(), which resolves cancelled)
  *   other   -> emits one text-delta "echo:<text>" update, wait() -> done:<text>
  */
@@ -18,6 +19,15 @@ function makeAgent(agentId, options) {
       if (text === "busy" && !sendOptions?.local?.force) {
         const err = new Error("agent is busy");
         err.name = "AgentBusyError";
+        throw err;
+      }
+      if (text === "rich") {
+        const err = new Error("rate limited");
+        err.name = "RateLimitError";
+        err.status = 429;
+        err.code = "rate_limited";
+        err.isRetryable = true;
+        err.helpUrl = "https://example.com/rate-limits";
         throw err;
       }
       sendOptions?.onDelta?.({ update: { type: "text-delta", text: `echo:${text}` } });
