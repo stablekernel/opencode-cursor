@@ -305,3 +305,47 @@ describe("sendWithRecovery typed retries", () => {
 		expect(sendCalls).toHaveLength(1);
 	});
 });
+
+describe("stream watchdog", () => {
+	it("stall cancels and resends with local.force once", async () => {
+		vi.useFakeTimers();
+		try {
+			process.env.OPENCODE_CURSOR_STALL_MS = "1000";
+			const sendCalls: Array<Record<string, unknown> | undefined> = [];
+			let sends = 0;
+			const agent: AgentLike = {
+				agentId: "agent-wd",
+				send: async (_m: unknown, opts?: Record<string, unknown>) => {
+					sends++;
+					sendCalls.push(opts);
+					if (sends === 1) {
+						// Wedged: no deltas, wait() never settles until cancelled.
+						let cancelled = false;
+						return {
+							wait: () => new Promise<{ status: string; result?: string }>((resolve) => {
+								const t = setInterval(() => {
+									if (cancelled) { clearInterval(t); resolve({ status: "cancelled" }); }
+								}, 10);
+							}),
+							cancel: async () => { cancelled = true; },
+						} as never;
+					}
+					const onDelta = opts?.["onDelta"] as ((a: { update: { type: string; text?: string } }) => void) | undefined;
+					onDelta?.({ update: { type: "text-delta", text: "ok" } });
+					return { wait: async () => ({ status: "finished", result: "ok" }), cancel: async () => {} } as never;
+				},
+				close: () => {},
+			} as unknown as AgentLike;
+			const p = collect(streamAgentTurn(agent, MESSAGE, { mode: "agent", idempotencyKey: "k-wd" }));
+			await vi.advanceTimersByTimeAsync(1_500);
+			const events = await p;
+			expect(sendCalls).toHaveLength(2);
+			expect(sendCalls[1]?.["local"]).toEqual({ force: true });
+			expect(sendCalls[1]?.["idempotencyKey"]).toBe("k-wd");
+			expect(events.some((e) => e.type === "finish")).toBe(true);
+		} finally {
+			delete process.env.OPENCODE_CURSOR_STALL_MS;
+			vi.useRealTimers();
+		}
+	});
+});

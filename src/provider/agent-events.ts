@@ -64,10 +64,28 @@ export async function* streamAgentTurn(
   const debug = process.env.OPENCODE_CURSOR_DEBUG === "1";
   const counts: Record<string, number> = {};
 
+  // Stall watchdog: if no event arrives within stallMs, cancel the wedged run
+  // and force-resend once (pre-first-event only). `0` disables.
+  const stallMs = Number(process.env.OPENCODE_CURSOR_STALL_MS ?? 60_000);
+  let stallTimer: ReturnType<typeof setTimeout> | undefined;
+  let forced = false;
+  let anyEvent = false;
+
   const push = (event: CursorEvent) => {
+    anyEvent = true;
     queue.push(event);
     wake?.();
     wake = undefined;
+    armWatchdog();
+  };
+
+  const armWatchdog = () => {
+    if (stallMs <= 0 || finished) return;
+    if (stallTimer) clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => {
+      void onStall();
+    }, stallMs);
+    stallTimer.unref?.();
   };
 
   const onDelta = ({ update }: { update: { type: string } & Record<string, any> }) => {
@@ -114,44 +132,91 @@ export async function* streamAgentTurn(
   };
   options.abortSignal?.addEventListener("abort", onAbort);
 
-  const sendTurn = (): Promise<AgentRunLike> =>
-    sendWithRecovery(
+  // Kick off the turn. Resolve text from run.wait() for models that don't emit
+  // incremental text deltas. `runGen` disambiguates run invocations: when the
+  // watchdog cancels a wedged run and starts a fresh one, the stale run's
+  // completion handlers must NOT finish the stream (a new run is in flight).
+  let runGen = 0;
+  const startRun = (force: boolean): void => {
+    const gen = ++runGen;
+    void sendWithRecovery(
       agent,
       message,
-      { mode: options.mode, onDelta, ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}) },
+      {
+        mode: options.mode,
+        onDelta,
+        ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
+        ...(force ? { local: { force: true } } : {}),
+      },
       debug,
-    );
+    )
+      .then(async (run) => {
+        runHolder.run = run;
+        const result = await run.wait();
+        if (debug) {
+          console.error(
+            `[cursor:debug] updates=${JSON.stringify(counts)} status=${result.status} resultLen=${(result.result ?? "").length}`,
+          );
+        }
+        // Superseded by a watchdog force-resend: this run is abandoned.
+        if (gen !== runGen || finished) return;
+        if (result.status === "error") {
+          // Surface the failure instead of finishing silently — a silent stop
+          // leaves opencode showing dangling tool calls with no explanation.
+          throw new Error(
+            `Cursor run ended with status "error"${result.result ? `: ${result.result}` : ""}`,
+          );
+        }
+        // A cancelled run finishes without fabricating final text.
+        push({ type: "finish", ...(result.status === "cancelled" ? {} : { text: result.result }) });
+      })
+      .catch((err) => {
+        if (gen !== runGen) return;
+        failure = err;
+        if (debug) console.error(`[cursor:debug] send failed: ${err instanceof Error ? err.message : String(err)}`);
+      })
+      .finally(() => {
+        // Only the live run finishes the stream; a superseded (cancelled-for-
+        // resend) run leaves `finished` untouched so the resend can complete.
+        if (gen !== runGen) return;
+        finished = true;
+        if (stallTimer) clearTimeout(stallTimer);
+        wake?.();
+        wake = undefined;
+      });
+  };
 
-  // Kick off the turn. Resolve text from run.wait() for models that don't emit
-  // incremental text deltas.
-  void sendTurn()
-    .then(async (run) => {
-      runHolder.run = run;
-      const result = await run.wait();
-      if (debug) {
-        console.error(
-          `[cursor:debug] updates=${JSON.stringify(counts)} status=${result.status} resultLen=${(result.result ?? "").length}`,
-        );
-      }
-      if (result.status === "error") {
-        // Surface the failure instead of finishing silently — a silent stop
-        // leaves opencode showing dangling tool calls with no explanation.
-        throw new Error(
-          `Cursor run ended with status "error"${result.result ? `: ${result.result}` : ""}`,
-        );
-      }
-      // A cancelled run finishes without fabricating final text.
-      push({ type: "finish", ...(result.status === "cancelled" ? {} : { text: result.result }) });
-    })
-    .catch((err) => {
-      failure = err;
-      if (debug) console.error(`[cursor:debug] send failed: ${err instanceof Error ? err.message : String(err)}`);
-    })
-    .finally(() => {
+  const onStall = async (): Promise<void> => {
+    if (finished) return;
+    if (anyEvent) {
+      // A stall AFTER partial output is terminal: force-resending would
+      // re-emit the already-yielded prefix. Surface the stall instead.
+      failure = new Error(`Cursor run stalled (no events for ${stallMs}ms)`);
       finished = true;
       wake?.();
       wake = undefined;
-    });
+      return;
+    }
+    if (forced) {
+      failure = new Error(`Cursor run stalled twice (no events for ${stallMs}ms)`);
+      finished = true;
+      wake?.();
+      wake = undefined;
+      return;
+    }
+    forced = true;
+    if (debug) console.error("[cursor:debug] stream stalled; cancelling and resending with local.force");
+    try {
+      await runHolder.run?.cancel();
+    } catch {
+      /* best effort */
+    }
+    armWatchdog();
+    startRun(true);
+  };
+
+  armWatchdog();
+  startRun(false);
 
   try {
     while (true) {
@@ -168,6 +233,7 @@ export async function* streamAgentTurn(
     while (queue.length > 0) yield queue.shift()!;
     if (failure) throw failure;
   } finally {
+    if (stallTimer) clearTimeout(stallTimer);
     options.abortSignal?.removeEventListener("abort", onAbort);
   }
 }
