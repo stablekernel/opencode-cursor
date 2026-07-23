@@ -11,6 +11,7 @@ import type {
 	SettingSource,
 } from "@cursor/sdk";
 import { resolveCursorApiKey } from "../api-key.js";
+import { setPreferredTransport } from "./agent-backend.js";
 import {
 	CursorLanguageModel,
 	type CursorModelConfig,
@@ -83,6 +84,12 @@ export interface CursorProviderOptions {
 	 *  - "omit": not forwarded at all.
 	 */
 	systemPrompt?: SystemPromptMode;
+	/**
+	 * Transport for Cursor agent traffic: "http1" (in-process, Bun-safe),
+	 * "http2-direct" (in-process, Node only), "sidecar" (Node child, rollback).
+	 * Beats OPENCODE_CURSOR_TRANSPORT. Process-global: first provider wins.
+	 */
+	transport?: "http1" | "http2-direct" | "sidecar";
 }
 
 /**
@@ -94,6 +101,7 @@ export interface CursorProviderOptions {
  * and then calls `.languageModel(modelId)`.
  */
 export function createCursor(options: CursorProviderOptions = {}): ProviderV3 {
+	if (options.transport) setPreferredTransport(options.transport);
 	const mcpServers =
 		options.mcpServers && Object.keys(options.mcpServers).length > 0
 			? options.mcpServers
