@@ -12,7 +12,7 @@
  *
  * Resolution order: provider option (`transport`) -> OPENCODE_CURSOR_TRANSPORT
  * -> legacy OPENCODE_CURSOR_SIDECAR (1=sidecar, 0=http2-direct) -> default
- * (Bun: DEFAULT_BUN_TRANSPORT, pre-evidence-gate "sidecar"; Node: http2-direct).
+ * (Bun: DEFAULT_BUN_TRANSPORT, post-gate "http1"; Node: http2-direct).
  */
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -26,11 +26,10 @@ export type TransportKind = "http1" | "http2-direct" | "sidecar";
 export type BackendKind = "in-process" | "sidecar";
 
 /**
- * Bun default. Pre-evidence-gate this is "sidecar" (the proven path); the gate
- * task (Task 6) flips it to "http1" once the live matrix passes. Until then
- * HTTP/1.1 is opt-in via OPENCODE_CURSOR_TRANSPORT=http1.
+ * Bun default. Post-evidence-gate this is "http1" (Task 5/6 matrix green;
+ * TTFT ≤ 1.5× sidecar). Sidecar remains via OPENCODE_CURSOR_TRANSPORT=sidecar.
  */
-export const DEFAULT_BUN_TRANSPORT: TransportKind = "sidecar";
+export const DEFAULT_BUN_TRANSPORT: TransportKind = "http1";
 
 let preferredTransport: TransportKind | undefined;
 

@@ -22,12 +22,12 @@ const bunNoNode = { isBun: true, nodePath: undefined };
 const node = { isBun: false, nodePath: process.execPath };
 
 describe("resolveTransport", () => {
-	it("defaults: Bun -> sidecar (pre-gate), Node -> http2-direct", () => {
+	it("defaults: Bun -> http1 (post-gate), Node -> http2-direct", () => {
 		delete process.env.OPENCODE_CURSOR_TRANSPORT;
 		delete process.env.OPENCODE_CURSOR_SIDECAR;
-		expect(resolveTransport(bun)).toBe("sidecar");
+		expect(resolveTransport(bun)).toBe("http1");
 		expect(resolveTransport(node)).toBe("http2-direct");
-		expect(DEFAULT_BUN_TRANSPORT).toBe("sidecar");
+		expect(DEFAULT_BUN_TRANSPORT).toBe("http1");
 	});
 
 	it("explicit OPENCODE_CURSOR_TRANSPORT wins", () => {
