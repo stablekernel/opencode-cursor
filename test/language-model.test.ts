@@ -38,6 +38,8 @@ interface FakeAgentOpts {
 	result?: { status: string; result?: string };
 	/** Captures the message passed to send() for assertions. */
 	sentMessages?: SDKUserMessage[];
+	/** When set, send() rejects with this error (named class → classifyError). */
+	sendError?: Error;
 }
 
 /** Build a fake AgentLike whose send() drives onDelta and resolves wait(). */
@@ -49,6 +51,7 @@ function fakeAgent(opts: FakeAgentOpts) {
 			sendOptions?: Record<string, unknown>,
 		) => {
 			opts.sentMessages?.push(message);
+			if (opts.sendError) throw opts.sendError;
 			const onDelta = sendOptions?.["onDelta"] as OnDelta | undefined;
 			for (const update of opts.updates ?? []) onDelta?.({ update });
 			const run: Partial<Run> = {
@@ -320,6 +323,70 @@ describe("CursorLanguageModel doStream — resume-aware retry", () => {
 		expect(original.close).toHaveBeenCalled();
 		expect(fresh.close).toHaveBeenCalled();
 		expect(getPooledAgentId("s1")).toBeUndefined();
+	});
+
+	it("does NOT fresh-replay on auth errors (fail fast)", async () => {
+		const model = makeModel();
+
+		// Turn 1: pool a1.
+		create.mockResolvedValueOnce(fakeAgent({ agentId: "a1" }));
+		await collectStream(
+			streamCall(model, {
+				prompt: [sys("S"), user("hi")],
+				providerOptions: { cursor: { sessionID: "s1" } },
+			} as never),
+		);
+
+		// Turn 2: resumed send rejects with an auth error.
+		const err = new Error("bad key");
+		err.name = "AuthenticationError";
+		resume.mockResolvedValueOnce(fakeAgent({ agentId: "a1", sendError: err }));
+
+		const parts = await collectStream(
+			streamCall(model, {
+				prompt: [sys("S"), user("hi"), user("there")],
+				providerOptions: { cursor: { sessionID: "s1" } },
+			} as never),
+		);
+
+		expect(eventTypes(parts)).toContain("error");
+		// Fail fast: no fresh replay (create not called again).
+		expect(create).toHaveBeenCalledOnce(); // turn 1 only
+		expect(resume).toHaveBeenCalledOnce();
+	});
+
+	it("fresh-replays once on agent-not-found", async () => {
+		const model = makeModel();
+
+		// Turn 1: pool a1.
+		create.mockResolvedValueOnce(fakeAgent({ agentId: "a1" }));
+		await collectStream(
+			streamCall(model, {
+				prompt: [sys("S"), user("hi")],
+				providerOptions: { cursor: { sessionID: "s1" } },
+			} as never),
+		);
+
+		// Turn 2: resumed send rejects with agent-not-found → fresh replay.
+		const err = new Error("expired");
+		err.name = "AgentNotFoundError";
+		resume.mockResolvedValueOnce(fakeAgent({ agentId: "a1", sendError: err }));
+		create.mockResolvedValueOnce(fakeAgent({ agentId: "a2" }));
+
+		const parts = await collectStream(
+			streamCall(model, {
+				prompt: [sys("S"), user("hi"), user("there")],
+				providerOptions: { cursor: { sessionID: "s1" } },
+			} as never),
+		);
+
+		expect(eventTypes(parts)).not.toContain("error");
+		expect(eventTypes(parts)).toContain("finish");
+		// Fresh replay: create called twice; second acquire is a fresh create
+		// (via create(), not resume()) — resumeAgentId absent.
+		expect(create).toHaveBeenCalledTimes(2);
+		expect(resume).toHaveBeenCalledOnce();
+		expect(getPooledAgentId("s1")).toBe("a2");
 	});
 
 	it("applies per-model default params (fast:false) when a turn arrives with no params", async () => {

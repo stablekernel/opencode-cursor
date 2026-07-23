@@ -22,6 +22,7 @@ import {
 	type SystemPromptMode,
 } from "./message-map.js";
 import { extractSystemText, resolveSystemDelivery } from "./system-rule.js";
+import { classifyError } from "./error-classify.js";
 import {
 	sendAgentTurnSilently,
 	streamAgentTurn,
@@ -392,20 +393,45 @@ export class CursorLanguageModel implements LanguageModelV3 {
 						yield event;
 					}
 				} catch (err) {
-					// Resume-aware retry: a resumed agent can pass resume() yet fail the
+					const classified = classifyError(err);
+					// Auth/config: never a blind retry — replaying the transcript can't
+					// fix a bad key or misconfiguration. Fail fast with actionable
+					// guidance instead of burning a fresh create on a doomed resend.
+					if (classified.kind === "auth" || classified.kind === "config") {
+						throw classified.helpUrl
+							? new Error(
+									`${classified.message} (see ${classified.helpUrl})`,
+									{ cause: err },
+								)
+							: err;
+					}
+					// Resume-aware replay: a resumed agent can pass resume() yet fail the
 					// actual send when Cursor's server has already expired the agent (its
 					// server-side retention is shorter than our local 7-day reuse window,
-					// and not documented). If nothing has been emitted downstream yet and
-					// the user hasn't aborted, transparently re-create a fresh agent and
-					// replay the full transcript — self-healing, no context loss. The
-					// fresh agent re-pools under the same session (overwriting the dead
-					// agentId) via acquireAgent's existing pooling path.
+					// and not documented), or the send can die retryably before anything
+					// emitted. If nothing has been emitted downstream yet and the user
+					// hasn't aborted, transparently re-create a fresh agent and replay the
+					// full transcript — self-healing, no context loss. The fresh agent
+					// re-pools under the same session (overwriting the dead agentId) via
+					// acquireAgent's existing pooling path.
 					//
-					// Deliberate tradeoff: the retry fires on ANY error class (including
-					// rate-limit or network failures) because Cursor's status:"error"
-					// carries no machine-readable class to discriminate on. Bounded to a
-					// single attempt, so the worst case is one extra create.
-					if (acquired.resumed && !yielded && !options.abortSignal?.aborted) {
+					// Gated on a classified, replayable set — agent-not-found (expired
+					// resume), rate-limit, network, and unknown. auth/config fail fast
+					// above; agent-busy is recovered at the send layer (sendWithRecovery),
+					// so it never reaches here as a replay trigger. Bounded to a single
+					// attempt, and the turn's idempotencyKey makes resends server-side
+					// dedupes, so the worst case is one extra create.
+					const replayable =
+						classified.kind === "agent-not-found" ||
+						classified.kind === "rate-limit" ||
+						classified.kind === "network" ||
+						classified.kind === "unknown";
+					if (
+						replayable &&
+						acquired.resumed &&
+						!yielded &&
+						!options.abortSignal?.aborted
+					) {
 						if (process.env["OPENCODE_CURSOR_DEBUG"] === "1") {
 							console.error(
 								"[cursor:debug] resumed turn failed before emitting; retrying with a fresh agent",
