@@ -50,9 +50,20 @@ interface Pending {
 }
 
 function reviveError(error: unknown): Error {
-  const e = (error ?? {}) as { name?: string; message?: string };
+  const e = (error ?? {}) as {
+    name?: string;
+    message?: string;
+    status?: number;
+    code?: string;
+    isRetryable?: boolean;
+    helpUrl?: string;
+  };
   const err = new Error(e.message ?? "sidecar error");
   if (e.name) err.name = e.name;
+  if (e.status !== undefined) (err as { status?: number }).status = e.status;
+  if (e.code !== undefined) (err as { code?: string }).code = e.code;
+  if (e.isRetryable !== undefined) (err as { isRetryable?: boolean }).isRetryable = e.isRetryable;
+  if (e.helpUrl !== undefined) (err as { helpUrl?: string }).helpUrl = e.helpUrl;
   return err;
 }
 
