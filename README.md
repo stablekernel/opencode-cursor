@@ -315,6 +315,11 @@ sidecar remains as a rollback fallback.
 | `http2-direct` | in-process, SDK's default HTTP/2 | under Node (tests, scripts, non-Bun hosts) |
 | `sidecar` | spawned Node child hosting the SDK | never (rollback only) |
 
+When the `sidecar` transport is in use, its child is recycled after 10 minutes idle and after any
+turn that ends with a terminal error: the SDK's cached streaming connection does not recover once
+Cursor drops an idle session, so a fresh child (fresh connection) is the only reliable cure. Pooled
+agents resume from their checkpoint on the next turn, exactly as they do across an opencode restart.
+
 Resolution order: the `transport` provider option → `OPENCODE_CURSOR_TRANSPORT` →
 legacy `OPENCODE_CURSOR_SIDECAR` (`1`→`sidecar`, `0`→`http2-direct`) → the per-runtime default
 above.
@@ -351,6 +356,10 @@ already-yielded prefix. Set `OPENCODE_CURSOR_STALL_MS=0` to disable.
   `http2-direct` transport was forced under Bun. Unset `OPENCODE_CURSOR_TRANSPORT` (defaults to the
   Bun-safe `http1`), or roll back with `OPENCODE_CURSOR_TRANSPORT=sidecar` (needs Node.js 22.13+ on
   `PATH`).
+- **On `OPENCODE_CURSOR_TRANSPORT=sidecar`, every message fails with `Cursor run ended with status
+  "error"` after a long idle.** Cursor dropped the idle session and the sidecar's cached connection
+  couldn't recover. The sidecar now recycles its child after idle periods and terminal errors, so
+  this self-heals on the next turn; update to a release including that fix.
 - **Plugin enabled but no `cursor` provider/models appear, or you see a stale-version warning.**
   opencode caches the `@latest` plugin install on first use and never refreshes it.
   Exit opencode, delete `~/.cache/opencode/packages/@stablekernel/opencode-cursor@latest`

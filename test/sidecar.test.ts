@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { readFileSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { SidecarClient } from "../src/provider/sidecar-client.js";
 
@@ -7,10 +8,16 @@ const FAKE_SDK = fileURLToPath(new URL("./fixtures/fake-cursor-sdk.mjs", import.
 
 const clients: SidecarClient[] = [];
 
-function makeClient(): SidecarClient {
+function makeClient(options?: { idleRecycleMs?: number; loadLog?: string }): SidecarClient {
   const client = new SidecarClient({
     scriptPath: SCRIPT,
-    env: { OPENCODE_CURSOR_SDK_PATH: FAKE_SDK },
+    ...(options?.idleRecycleMs !== undefined
+      ? { idleRecycleMs: options.idleRecycleMs }
+      : {}),
+    env: {
+      OPENCODE_CURSOR_SDK_PATH: FAKE_SDK,
+      ...(options?.loadLog ? { FAKE_SDK_LOAD_LOG: options.loadLog } : {}),
+    },
   });
   clients.push(client);
   return client;
@@ -110,5 +117,88 @@ describe("SidecarClient", () => {
     const waited = run.wait();
     client.dispose();
     await expect(waited).rejects.toThrow(/sidecar/i);
+  });
+
+  describe("child recycling", () => {
+    let loadLog: string;
+    let logSeq = 0;
+
+    afterEach(() => {
+      rmSync(loadLog, { force: true });
+    });
+
+    /** Fresh per-test log path (avoids cross-test timing bleed). */
+    const nextLoadLog = (): string => {
+      logSeq += 1;
+      loadLog = fileURLToPath(
+        new URL(`./fixtures/.load-log-${process.pid}-${logSeq}`, import.meta.url),
+      );
+      rmSync(loadLog, { force: true });
+      return loadLog;
+    };
+
+    /** Distinct pids that loaded the fake SDK (one per spawned child). */
+    const spawnedPids = (): string[] => [
+      ...new Set(
+        readFileSync(loadLog, "utf8")
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => line.split(" ")[1]!),
+      ),
+    ];
+
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+    it("recycles the child after a run ends with status error", async () => {
+      const client = makeClient({ loadLog: nextLoadLog() });
+      const agent = await client.createAgent(CREATE_OPTIONS);
+      const run = await agent.send({ type: "user", text: "error" }, { mode: "agent" });
+      await expect(run.wait()).resolves.toMatchObject({ status: "error" });
+
+      // The next turn must run in a fresh child (fresh SDK transport state).
+      const next = await client.createAgent(CREATE_OPTIONS);
+      const run2 = await next.send({ type: "user", text: "ok" }, { mode: "agent" });
+      await expect(run2.wait()).resolves.toMatchObject({ status: "finished" });
+
+      expect(spawnedPids()).toHaveLength(2);
+    });
+
+    it("recycles the child after the idle timeout", async () => {
+      const client = makeClient({ loadLog: nextLoadLog(), idleRecycleMs: 50 });
+      await client.createAgent(CREATE_OPTIONS);
+      await sleep(150); // let the idle timer fire
+      await client.createAgent(CREATE_OPTIONS);
+      expect(spawnedPids()).toHaveLength(2);
+    });
+
+    it("keeps one child across healthy turns", async () => {
+      const client = makeClient({ loadLog: nextLoadLog(), idleRecycleMs: 60_000 });
+      const agent = await client.createAgent(CREATE_OPTIONS);
+      const run = await agent.send({ type: "user", text: "ok" }, { mode: "agent" });
+      await run.wait();
+      await client.createAgent(CREATE_OPTIONS);
+      expect(spawnedPids()).toHaveLength(1);
+    });
+
+    it("never recycles while a sibling request is still in flight", async () => {
+      const client = makeClient({ loadLog: nextLoadLog() });
+      const agent = await client.createAgent(CREATE_OPTIONS);
+      // A hung send keeps the child busy while another turn errors (stale).
+      const hung = await agent.send({ type: "user", text: "hang" }, { mode: "agent" });
+      const errored = await agent.send({ type: "user", text: "error" }, { mode: "agent" });
+      await expect(errored.wait()).resolves.toMatchObject({ status: "error" });
+
+      // Stale, but the hung send is still pending: no recycle yet.
+      await client.createAgent(CREATE_OPTIONS);
+      expect(spawnedPids()).toHaveLength(1);
+
+      // Once it settles, the next request lands on a fresh child.
+      await hung.cancel();
+      // Awaiting wait() guarantees the terminal event (and pending cleanup)
+      // has been processed before we assert the recycle.
+      await expect(hung.wait()).resolves.toMatchObject({ status: "cancelled" });
+      await client.createAgent(CREATE_OPTIONS);
+      expect(spawnedPids()).toHaveLength(2);
+    });
   });
 });

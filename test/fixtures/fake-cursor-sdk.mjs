@@ -7,8 +7,21 @@
  *   "busy"  -> send() rejects with AgentBusyError unless local.force is set
  *   "rich"  -> send() rejects with an error carrying status/code/isRetryable/helpUrl
  *   "hang"  -> run.wait() never resolves (until cancel(), which resolves cancelled)
+ *   "error" -> run.wait() resolves {status:"error"} (mimics a dead backend session)
  *   other   -> emits one text-delta "echo:<text>" update, wait() -> done:<text>
+ *
+ * When FAKE_SDK_LOAD_LOG is set, each loading child appends its pid so tests
+ * can detect client-side child recycles (a new pid = a respawned child).
  */
+import { appendFileSync } from "node:fs";
+
+if (process.env.FAKE_SDK_LOAD_LOG) {
+  try {
+    appendFileSync(process.env.FAKE_SDK_LOAD_LOG, `${Date.now()} ${process.pid}\n`);
+  } catch {
+    // best effort
+  }
+}
 
 function makeAgent(agentId, options) {
   return {
@@ -31,6 +44,12 @@ function makeAgent(agentId, options) {
         throw err;
       }
       sendOptions?.onDelta?.({ update: { type: "text-delta", text: `echo:${text}` } });
+      if (text === "error") {
+        return {
+          wait: async () => ({ status: "error" }),
+          cancel: () => {},
+        };
+      }
       if (text === "hang") {
         let resolveWait;
         const waited = new Promise((resolve) => {

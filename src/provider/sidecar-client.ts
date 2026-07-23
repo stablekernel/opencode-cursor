@@ -39,7 +39,24 @@ export interface SidecarClientOptions {
   env?: Record<string, string>;
   /** Mirror child stderr to this process (debug aid). */
   debug?: boolean;
+  /**
+   * Recycle the child after this much idle time (default
+   * {@link DEFAULT_IDLE_RECYCLE_MS}). See the field docs on `stale` for why.
+   */
+  idleRecycleMs?: number;
 }
+
+/**
+ * Idle lifetime after which the child is recycled. The SDK inside the child
+ * memoizes its streaming transport (and auth token) at module scope with no
+ * reconnect logic, so a backend session dropped while idle leaves every later
+ * run ending `status:"error"` until the process restarts. 10 minutes sits
+ * comfortably below the shortest reported failure onset (15-30min); the
+ * respawn cost is a cheap Node spawn paid only after an idle gap, and pooled
+ * agents resume from Cursor's checkpoint store exactly as they do across an
+ * opencode restart.
+ */
+const DEFAULT_IDLE_RECYCLE_MS = 10 * 60 * 1000;
 
 interface Pending {
   resolve: (msg: Record<string, unknown>) => void;
@@ -75,6 +92,14 @@ export class SidecarClient {
   private readonly pending = new Map<number, Pending>();
   private nextId = 1;
   private disposed = false;
+  /**
+   * Set when a run ends terminally bad (status:"error" or a stream error).
+   * The SDK's memoized transport does not recover from a dead backend
+   * session, so the child is recycled before the next request instead of
+   * failing every turn until the whole process is restarted.
+   */
+  private stale = false;
+  private idleTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(options: SidecarClientOptions) {
     this.options = options;
@@ -83,7 +108,9 @@ export class SidecarClient {
   /** Spawn (or reuse) the child process. */
   private ensureChild(): ChildProcessByStdio<Writable, Readable, Readable> {
     if (this.disposed) throw new Error("cursor sidecar client disposed");
+    if (this.child && this.stale && this.pending.size === 0) this.recycleChild();
     if (this.child) return this.child;
+    this.stale = false;
 
     const child = spawn(this.options.nodePath ?? "node", [this.options.scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
@@ -99,14 +126,20 @@ export class SidecarClient {
       }
     });
     child.on("exit", (code) => {
-      this.failAll(new Error(`cursor sidecar exited (code ${code ?? "unknown"})`));
+      // A recycled child's exit arrives after its replacement spawned; it
+      // must not clobber the new child or reject its in-flight requests.
+      if (this.child !== child) return;
+      // Clear before failAll so updateRefs doesn't arm the idle timer (or
+      // re-unref pipes) against a child that's already gone.
       this.child = undefined;
       this.reader?.close();
       this.reader = undefined;
+      this.failAll(new Error(`cursor sidecar exited (code ${code ?? "unknown"})`));
     });
     child.on("error", (err) => {
-      this.failAll(new Error(`cursor sidecar failed to start: ${err.message}`));
+      if (this.child !== child) return;
       this.child = undefined;
+      this.failAll(new Error(`cursor sidecar failed to start: ${err.message}`));
     });
     this.updateRefs();
     return child;
@@ -129,7 +162,42 @@ export class SidecarClient {
       for (const target of refable) target.ref?.();
     } else {
       for (const target of refable) target.unref?.();
+      this.armIdleTimer();
     }
+  }
+
+  /**
+   * Kill the child so the next request spawns a fresh one (fresh SDK module
+   * state). Only called with nothing in flight; pooled agents are resumable,
+   * so nothing is lost. The exit handler's failAll no-ops on an empty pending
+   * map.
+   */
+  private recycleChild(): void {
+    this.clearIdleTimer();
+    this.stale = false;
+    const child = this.child;
+    this.child = undefined;
+    this.reader?.close();
+    this.reader = undefined;
+    child?.kill();
+  }
+
+  /**
+   * Arm the idle-recycle timer. Unref'd like the child pipes so it can never
+   * hold the parent's event loop open (see updateRefs).
+   */
+  private armIdleTimer(): void {
+    this.clearIdleTimer();
+    if (this.disposed) return;
+    this.idleTimer = setTimeout(() => {
+      if (this.pending.size === 0) this.recycleChild();
+    }, this.options.idleRecycleMs ?? DEFAULT_IDLE_RECYCLE_MS);
+    this.idleTimer.unref?.();
+  }
+
+  private clearIdleTimer(): void {
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = undefined;
   }
 
   private failAll(err: Error): void {
@@ -162,12 +230,17 @@ export class SidecarClient {
     if (ev === "result") {
       this.pending.delete(id);
       this.updateRefs();
-      pending.onResult?.(msg["result"] as { status: string; result?: string });
+      const result = msg["result"] as { status: string; result?: string };
+      // A terminally errored run marks the child stale: the SDK's memoized
+      // transport can't be trusted after this, so recycle before next use.
+      if (result.status === "error") this.stale = true;
+      pending.onResult?.(result);
       return;
     }
     if (ev === "error") {
       this.pending.delete(id);
       this.updateRefs();
+      this.stale = true;
       pending.onStreamError?.(reviveError(msg["error"]));
       return;
     }
@@ -190,6 +263,7 @@ export class SidecarClient {
     payload: Record<string, unknown>,
     hooks?: Pick<Pending, "onUpdate" | "onResult" | "onStreamError">,
   ): Promise<Record<string, unknown>> {
+    this.clearIdleTimer();
     const child = this.ensureChild();
     const id = this.nextId++;
     return new Promise<Record<string, unknown>>((resolve, reject) => {
@@ -275,6 +349,7 @@ export class SidecarClient {
   /** Kill the child and reject anything in flight. */
   dispose(): void {
     this.disposed = true;
+    this.clearIdleTimer();
     this.failAll(new Error("cursor sidecar client disposed"));
     this.reader?.close();
     this.reader = undefined;
