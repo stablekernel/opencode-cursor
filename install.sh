@@ -28,6 +28,7 @@ PKG_NAME="@stablekernel/opencode-cursor"
 PKG="${PKG_NAME}@latest"
 REPO_URL="https://github.com/stablekernel/opencode-cursor"
 MIN_NODE_MAJOR=22
+MIN_NODE_MINOR=13
 
 SCOPE="global"
 ASSUME_YES=0
@@ -111,17 +112,19 @@ step "Checking Node.js (>= ${MIN_NODE_MAJOR}) on PATH"
 if command -v node >/dev/null 2>&1; then
 	NODE_VER="$(node --version 2>/dev/null | sed 's/^v//')"
 	NODE_MAJOR="${NODE_VER%%.*}"
-	if [ "${NODE_MAJOR:-0}" -ge "$MIN_NODE_MAJOR" ] 2>/dev/null; then
+	NODE_REST="${NODE_VER#*.}"
+	NODE_MINOR="${NODE_REST%%.*}"
+	if [ "${NODE_MAJOR:-0}" -gt "$MIN_NODE_MAJOR" ] ||
+		{ [ "${NODE_MAJOR:-0}" -eq "$MIN_NODE_MAJOR" ] && [ "${NODE_MINOR:-0}" -ge "$MIN_NODE_MINOR" ]; }; then
 		ok "node v${NODE_VER}"
 	else
-		warn "node v${NODE_VER} found, but the plugin needs Node ${MIN_NODE_MAJOR}+."
-		warn "opencode runs on Bun and spawns a Node sidecar for the Cursor SDK."
-		warn "Install Node ${MIN_NODE_MAJOR}+ (https://nodejs.org) and ensure it is on your PATH."
+		warn "node v${NODE_VER} found, but the plugin needs Node ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR}+."
+		warn "Install Node ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR}+ (https://nodejs.org) and ensure it is on your PATH."
 	fi
 else
 	warn "node not found on PATH."
-	warn "The plugin spawns a short-lived Node process to host the Cursor SDK."
-	warn "Install Node ${MIN_NODE_MAJOR}+ (https://nodejs.org) before using cursor/* models."
+	warn "The plugin may spawn a short-lived Node process to host the Cursor SDK."
+	warn "Install Node ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR}+ (https://nodejs.org) before using cursor/* models."
 fi
 
 # ---- 2. Add plugin to opencode.json ------------------------------------------

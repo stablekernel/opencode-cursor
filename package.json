@@ -14,7 +14,7 @@
     "url": "https://github.com/stablekernel/opencode-cursor/issues"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.13.0"
   },
   "keywords": [
     "opencode",
@@ -56,8 +56,8 @@
   },
   "dependencies": {
     "@connectrpc/connect-node": "^2.1.2",
-    "@cursor/sdk": "^1.0.23",
-    "@opencode-ai/plugin": "^1.17.14",
+    "@cursor/sdk": "^1.0.24",
+    "@opencode-ai/plugin": "^1.18.4",
     "semver": "^7.8.4"
   },
   "overrides": {
@@ -70,7 +70,7 @@
   },
   "devDependencies": {
     "@ai-sdk/provider": "^3.0.13",
-    "@opencode-ai/sdk": "^1.17.14",
+    "@opencode-ai/sdk": "^1.18.4",
     "@types/node": "^26.0.0",
     "@types/semver": "^7.7.1",
     "tsup": "^8.5.1",
