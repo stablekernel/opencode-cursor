@@ -20,6 +20,7 @@ export interface AgentSendOptions {
   mode?: string;
   onDelta?: (input: { update: Record<string, unknown> & { type: string } }) => void;
   local?: { force?: boolean };
+  idempotencyKey?: string;
 }
 
 /** Minimal agent surface the provider consumes (subset of the SDK's SDKAgent). */
@@ -249,6 +250,7 @@ export class SidecarClient {
         message,
         ...(options?.mode ? { mode: options.mode } : {}),
         ...(options?.local?.force ? { force: true } : {}),
+        ...(options?.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
       },
       {
         onUpdate: (update) => options?.onDelta?.({ update }),

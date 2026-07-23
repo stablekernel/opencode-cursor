@@ -254,3 +254,12 @@ describe("streamAgentTurn MCP error surfacing", () => {
 		expect(result).toMatchObject({ name: "myserver/find_symbol", isError: true });
 	});
 });
+
+describe("streamAgentTurn idempotency key", () => {
+	it("passes idempotencyKey through to agent.send", async () => {
+		const sendCalls: Array<Record<string, unknown> | undefined> = [];
+		const agent = fakeAgent({ sendCalls });
+		await collect(streamAgentTurn(agent, MESSAGE, { mode: "agent", idempotencyKey: "k-1" }));
+		expect(sendCalls[0]?.["idempotencyKey"]).toBe("k-1");
+	});
+});

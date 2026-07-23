@@ -4,6 +4,7 @@ import {
 	classifyTurn,
 	fingerprint,
 	mcpServersFingerprint,
+	sendIdempotencyKey,
 	type TranscriptRecord,
 } from "../src/provider/transcript-fingerprint.js";
 
@@ -160,5 +161,22 @@ describe("fingerprint", () => {
 		const a = fingerprint([sys("S"), user("hi")]);
 		const b = fingerprint([sys("S"), user("bye")]);
 		expect(a.userHashes).not.toEqual(b.userHashes);
+	});
+});
+
+describe("sendIdempotencyKey", () => {
+	it("is deterministic and distinct per transcript state", () => {
+		const a = sendIdempotencyKey("s1", { userHashes: ["h1", "h2"] }, "hello");
+		const b = sendIdempotencyKey("s1", { userHashes: ["h1", "h2"] }, "hello");
+		const c = sendIdempotencyKey("s1", { userHashes: ["h1", "h2", "h3"] }, "hello");
+		expect(a).toBe(b);
+		expect(a).not.toBe(c);
+		expect(a).toMatch(/^[0-9a-f]{32}$/);
+	});
+
+	it("distinct sessions never share a key", () => {
+		expect(sendIdempotencyKey("s1", undefined, "hi")).not.toBe(
+			sendIdempotencyKey("s2", undefined, "hi"),
+		);
 	});
 });

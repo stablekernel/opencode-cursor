@@ -1,5 +1,5 @@
 import type { AgentModeOption, SDKUserMessage } from "@cursor/sdk";
-import type { AgentLike, AgentRunLike } from "./agent-backend.js";
+import type { AgentLike, AgentRunLike, AgentSendOptions } from "./agent-backend.js";
 
 /** Token usage as reported by Cursor's `turn-ended` update. */
 export interface CursorUsage {
@@ -21,6 +21,8 @@ export type CursorEvent =
 export interface StreamAgentTurnOptions {
   mode: AgentModeOption;
   abortSignal?: AbortSignal;
+  /** Dedupe key forwarded to every (re)send of this turn. */
+  idempotencyKey?: string;
 }
 
 /**
@@ -112,7 +114,12 @@ export async function* streamAgentTurn(
   options.abortSignal?.addEventListener("abort", onAbort);
 
   const sendTurn = (): Promise<AgentRunLike> =>
-    sendWithBusyRetry(agent, message, { mode: options.mode, onDelta }, debug);
+    sendWithBusyRetry(
+      agent,
+      message,
+      { mode: options.mode, onDelta, ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}) },
+      debug,
+    );
 
   // Kick off the turn. Resolve text from run.wait() for models that don't emit
   // incremental text deltas.
@@ -174,10 +181,7 @@ export async function* streamAgentTurn(
 async function sendWithBusyRetry(
   agent: AgentLike,
   message: SDKUserMessage,
-  sendOptions: {
-    mode: AgentModeOption;
-    onDelta?: (args: { update: { type: string } & Record<string, any> }) => void;
-  },
+  sendOptions: AgentSendOptions,
   debug: boolean,
 ): Promise<AgentRunLike> {
   try {
@@ -233,7 +237,12 @@ export async function sendAgentTurnSilently(
   };
   options.abortSignal?.addEventListener("abort", onAbort);
   try {
-    const run = await sendWithBusyRetry(agent, message, { mode: options.mode }, debug);
+    const run = await sendWithBusyRetry(
+      agent,
+      message,
+      { mode: options.mode, ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}) },
+      debug,
+    );
     runHolder.run = run;
     // The signal may have fired while send() was in flight (before runHolder
     // was populated, so onAbort had nothing to cancel); cancel now.

@@ -74,6 +74,7 @@ async function handleRequest(req) {
       const sendOptions = {
         ...(req.mode ? { mode: req.mode } : {}),
         ...(req.force ? { local: { force: true } } : {}),
+        ...(req.idempotencyKey ? { idempotencyKey: req.idempotencyKey } : {}),
         onDelta: ({ update }) => write({ id, ev: "update", update }),
       };
       const run = await agent.send(req.message, sendOptions);

@@ -42,6 +42,7 @@ import {
 	classifyTurn,
 	fingerprint,
 	mcpServersFingerprint,
+	sendIdempotencyKey,
 } from "./transcript-fingerprint.js";
 
 export interface CursorModelConfig {
@@ -265,6 +266,13 @@ export class CursorLanguageModel implements LanguageModelV3 {
 			}
 		}
 
+		const latestUser = latestUserMessage(options.prompt);
+		const idempotencyKey = sendIdempotencyKey(
+			sessionID,
+			record,
+			latestUser?.text ?? JSON.stringify(options.prompt),
+		);
+
 		// In "rules" mode (default), deliver opencode's system prompt through
 		// Cursor's authoritative rules channel instead of the user transcript.
 		// Degrades to inline "message" delivery when the user explicitly opted
@@ -333,13 +341,31 @@ export class CursorLanguageModel implements LanguageModelV3 {
 						await sendAgentTurnSilently(acquired.agent, multiTurns[i]!, {
 							mode,
 							abortSignal: options.abortSignal,
+							idempotencyKey: sendIdempotencyKey(
+								sessionID,
+								{ userHashes: [...(record?.userHashes ?? []), String(i)] },
+								multiTurns[i]!.text,
+							),
 						});
 					}
 					if (!aborted && !options.abortSignal?.aborted) {
 						for await (const event of streamAgentTurn(
 							acquired.agent,
 							multiTurns[multiTurns.length - 1]!,
-							{ mode, abortSignal: options.abortSignal },
+							{
+								mode,
+								abortSignal: options.abortSignal,
+								idempotencyKey: sendIdempotencyKey(
+									sessionID,
+									{
+										userHashes: [
+											...(record?.userHashes ?? []),
+											String(multiTurns.length - 1),
+										],
+									},
+									multiTurns[multiTurns.length - 1]!.text,
+								),
+							},
 						)) {
 							yielded = true;
 							yield event;
@@ -360,6 +386,7 @@ export class CursorLanguageModel implements LanguageModelV3 {
 					for await (const event of streamAgentTurn(acquired.agent, message, {
 						mode,
 						abortSignal: options.abortSignal,
+						idempotencyKey,
 					})) {
 						yielded = true;
 						yield event;
@@ -412,6 +439,7 @@ export class CursorLanguageModel implements LanguageModelV3 {
 							yield* streamAgentTurn(retry.agent, replay, {
 								mode,
 								abortSignal: options.abortSignal,
+								idempotencyKey,
 							});
 						} finally {
 							retry.release();
