@@ -183,4 +183,16 @@ describe("acquireAgent", () => {
 		await acquireAgent({ ...base });
 		expect(getPooledAgentId("s1")).toBe("a1");
 	});
+
+	it("passes autoReview through to the agent's local options", async () => {
+		const created: unknown[] = [];
+		create.mockImplementation(async (opts) => {
+			created.push(opts);
+			return fakeAgent("a1");
+		});
+		await acquireAgent({ ...base, autoReview: true });
+		expect(
+			(created[0] as { local?: { autoReview?: boolean } }).local?.autoReview,
+		).toBe(true);
+	});
 });

@@ -75,6 +75,7 @@ export interface AcquireAgentParams {
 	cwd: string;
 	settingSources?: SettingSource[];
 	sandbox?: boolean;
+	autoReview?: boolean;
 	mcpServers?: Record<string, McpServerConfig>;
 	agents?: Record<string, AgentDefinition>;
 	name?: string;
@@ -126,6 +127,9 @@ export async function acquireAgent(
 				: {}),
 			...(params.sandbox !== undefined
 				? { sandboxOptions: { enabled: params.sandbox } }
+				: {}),
+			...(params.autoReview !== undefined
+				? { autoReview: params.autoReview }
 				: {}),
 		},
 		...(params.mcpServers ? { mcpServers: params.mcpServers } : {}),

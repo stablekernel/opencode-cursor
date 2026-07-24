@@ -55,6 +55,12 @@ export interface CursorProviderOptions {
 	settingSources?: SettingSource[];
 	/** Run the agent's tools inside Cursor's sandbox. */
 	sandbox?: boolean;
+	/**
+	 * Cursor's classifier-backed Auto review mode: gates tool calls through a
+	 * classifier instead of running them unconditionally. Defaults to `false`.
+	 * Best-effort tool-call gating, not a security boundary.
+	 */
+	autoReview?: boolean;
 	/** Cursor subagent definitions (`{ description, prompt, model?, mcpServers? }`). */
 	agents?: Record<string, AgentDefinition>;
 	/**
@@ -120,6 +126,9 @@ export function createCursor(options: CursorProviderOptions = {}): ProviderV3 {
 			? { settingSources: options.settingSources }
 			: {}),
 		...(options.sandbox !== undefined ? { sandbox: options.sandbox } : {}),
+		...(options.autoReview !== undefined
+			? { autoReview: options.autoReview }
+			: {}),
 		...(options.agents ? { agents: options.agents } : {}),
 		session: options.session ?? "auto",
 		toolDisplay: options.toolDisplay ?? "blocks",

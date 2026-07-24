@@ -70,6 +70,8 @@ export interface CursorModelConfig {
 	settingSources?: SettingSource[];
 	/** Run the agent's tools inside Cursor's sandbox. */
 	sandbox?: boolean;
+	/** Cursor's classifier-backed Auto review mode (tool-call gating). */
+	autoReview?: boolean;
 	/** Cursor subagent definitions made available to the agent. */
 	agents?: Record<string, AgentDefinition>;
 	/**
@@ -302,6 +304,9 @@ export class CursorLanguageModel implements LanguageModelV3 {
 			...(settingSources ? { settingSources } : {}),
 			...(this.config.sandbox !== undefined
 				? { sandbox: this.config.sandbox }
+				: {}),
+			...(this.config.autoReview !== undefined
+				? { autoReview: this.config.autoReview }
 				: {}),
 			...(mcpServers ? { mcpServers } : {}),
 			...(this.config.agents ? { agents: this.config.agents } : {}),
