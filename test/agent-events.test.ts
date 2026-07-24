@@ -348,4 +348,100 @@ describe("stream watchdog", () => {
 			vi.useRealTimers();
 		}
 	});
+
+	it("abort during pre-first-event wait does not trigger a resend", async () => {
+		vi.useFakeTimers();
+		try {
+			process.env.OPENCODE_CURSOR_STALL_MS = "1000";
+			const sendCalls: Array<Record<string, unknown> | undefined> = [];
+			const controller = new AbortController();
+			const agent: AgentLike = {
+				agentId: "agent-wd-abort",
+				send: async (_m: unknown, opts?: Record<string, unknown>) => {
+					sendCalls.push(opts);
+					// Wedged pre-first-event: no deltas; wait() settles only on cancel.
+					let cancelled = false;
+					return {
+						wait: () =>
+							new Promise<{ status: string; result?: string }>((resolve) => {
+								const t = setInterval(() => {
+									if (cancelled) {
+										clearInterval(t);
+										resolve({ status: "cancelled" });
+									}
+								}, 10);
+							}),
+						cancel: async () => {
+							cancelled = true;
+						},
+					} as never;
+				},
+				close: () => {},
+			} as unknown as AgentLike;
+			const p = collect(
+				streamAgentTurn(agent, MESSAGE, { mode: "agent", abortSignal: controller.signal }),
+			);
+			// Let send() resolve so runHolder.run is populated, then abort before
+			// the stall fires and let time pass well past stallMs.
+			await vi.advanceTimersByTimeAsync(0);
+			controller.abort();
+			await vi.advanceTimersByTimeAsync(2_000);
+			const events = await p;
+			// No resend: the aborted turn's stall timer was cleared.
+			expect(sendCalls).toHaveLength(1);
+			// No spurious stall error surfaced; generator ended cleanly.
+			expect(events.every((e) => e.type !== "text-delta")).toBe(true);
+		} finally {
+			delete process.env.OPENCODE_CURSOR_STALL_MS;
+			vi.useRealTimers();
+		}
+	});
+
+	it("mid-stream stall cancels the wedged run and surfaces an error (no resend)", async () => {
+		vi.useFakeTimers();
+		try {
+			process.env.OPENCODE_CURSOR_STALL_MS = "1000";
+			const sendCalls: Array<Record<string, unknown> | undefined> = [];
+			let cancelCalls = 0;
+			const agent: AgentLike = {
+				agentId: "agent-wd-mid",
+				send: async (_m: unknown, opts?: Record<string, unknown>) => {
+					sendCalls.push(opts);
+					// Emit one delta, then wedge: wait() settles only on cancel().
+					const onDelta = opts?.["onDelta"] as
+						| ((a: { update: { type: string; text?: string } }) => void)
+						| undefined;
+					onDelta?.({ update: { type: "text-delta", text: "partial" } });
+					let cancelled = false;
+					return {
+						wait: () =>
+							new Promise<{ status: string; result?: string }>((resolve) => {
+								const t = setInterval(() => {
+									if (cancelled) {
+										clearInterval(t);
+										resolve({ status: "cancelled" });
+									}
+								}, 10);
+							}),
+						cancel: async () => {
+							cancelCalls++;
+							cancelled = true;
+						},
+					} as never;
+				},
+				close: () => {},
+			} as unknown as AgentLike;
+			const p = collect(streamAgentTurn(agent, MESSAGE, { mode: "agent" }));
+			const assertion = expect(p).rejects.toThrow(/stalled/i);
+			await vi.advanceTimersByTimeAsync(2_000);
+			await assertion;
+			// Wedged run cancelled, not orphaned.
+			expect(cancelCalls).toBeGreaterThanOrEqual(1);
+			// No force-resend for a mid-stream stall.
+			expect(sendCalls).toHaveLength(1);
+		} finally {
+			delete process.env.OPENCODE_CURSOR_STALL_MS;
+			vi.useRealTimers();
+		}
+	});
 });

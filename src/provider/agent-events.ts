@@ -128,6 +128,11 @@ export async function* streamAgentTurn(
 
   const runHolder: { run?: AgentRunLike } = {};
   const onAbort = () => {
+    // Clear the stall timer so an armed watchdog can't fire a force-resend of
+    // an aborted turn (abort during the pre-first-event wait would otherwise
+    // still trip onStall).
+    if (stallTimer) clearTimeout(stallTimer);
+    stallTimer = undefined;
     void Promise.resolve(runHolder.run?.cancel()).catch(() => {});
   };
   options.abortSignal?.addEventListener("abort", onAbort);
@@ -188,20 +193,32 @@ export async function* streamAgentTurn(
 
   const onStall = async (): Promise<void> => {
     if (finished) return;
-    if (anyEvent) {
-      // A stall AFTER partial output is terminal: force-resending would
-      // re-emit the already-yielded prefix. Surface the stall instead.
-      failure = new Error(`Cursor run stalled (no events for ${stallMs}ms)`);
+    // The turn was aborted: don't resend or surface a spurious stall error.
+    if (options.abortSignal?.aborted) return;
+    const failTerminal = async (message: string): Promise<void> => {
+      // Cancel the wedged server run (best-effort) so it isn't orphaned in a
+      // RUNNING state, then surface the stall as a terminal failure.
+      try {
+        await runHolder.run?.cancel();
+      } catch {
+        /* best effort */
+      }
+      failure = new Error(message);
       finished = true;
+      if (stallTimer) clearTimeout(stallTimer);
+      stallTimer = undefined;
       wake?.();
       wake = undefined;
+    };
+    if (anyEvent) {
+      // A stall AFTER partial output is terminal: force-resending would
+      // re-emit the already-yielded prefix. Cancel the wedged run and surface
+      // the stall instead.
+      await failTerminal(`Cursor run stalled (no events for ${stallMs}ms)`);
       return;
     }
     if (forced) {
-      failure = new Error(`Cursor run stalled twice (no events for ${stallMs}ms)`);
-      finished = true;
-      wake?.();
-      wake = undefined;
+      await failTerminal(`Cursor run stalled twice (no events for ${stallMs}ms)`);
       return;
     }
     forced = true;
