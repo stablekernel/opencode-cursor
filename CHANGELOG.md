@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [0.5.0-next.0] — 2026-07-23
+## [0.5.0] — 2026-07-24
 
 Native-experience overhaul: in-process HTTP/1.1 transport under Bun, typed-error
 reliability, and full streaming fidelity.
