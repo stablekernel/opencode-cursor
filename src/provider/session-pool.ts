@@ -72,7 +72,8 @@ export interface AcquireAgentParams {
 	apiKey: string;
 	modelSelection: ModelSelection;
 	mode: AgentModeOption;
-	cwd: string;
+	/** SDK `local.cwd` accepts a single root or several (multi-root workspace). */
+	cwd: string | string[];
 	settingSources?: SettingSource[];
 	sandbox?: boolean;
 	autoReview?: boolean;
