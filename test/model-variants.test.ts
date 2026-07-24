@@ -238,6 +238,34 @@ describe("buildModelVariants", () => {
   it("returns no variants for a model without parameters", () => {
     expect(buildModelVariants(model(undefined))).toEqual({});
   });
+
+  it("uses SDK-authoritative variants when present", () => {
+    const item = {
+      id: "composer-2.5",
+      displayName: "Composer 2.5",
+      parameters: [
+        { id: "fast", values: [{ value: "false" }, { value: "true" }] },
+        { id: "thinking", values: [{ value: "low" }, { value: "high" }] },
+      ],
+      variants: [
+        { params: [{ id: "thinking", value: "low" }], displayName: "Thinking Low" },
+        { params: [{ id: "thinking", value: "high" }, { id: "fast", value: "true" }], displayName: "Turbo" },
+        { params: [], displayName: "Standard", isDefault: true },
+      ],
+    } as unknown as ModelListItem;
+    const variants = buildModelVariants(item);
+    expect(Object.keys(variants).sort()).toEqual(["thinking-low", "turbo"]);
+    expect(variants["thinking-low"]?.params).toEqual({ fast: "false", thinking: "low" });
+    expect(variants["turbo"]?.params).toEqual({ fast: "true", thinking: "high" });
+  });
+
+  it("falls back to generated variants when SDK variants absent", () => {
+    const item = {
+      id: "m", displayName: "m",
+      parameters: [{ id: "thinking", values: [{ value: "low" }, { value: "high" }] }],
+    } as unknown as ModelListItem;
+    expect(Object.keys(buildModelVariants(item))).toEqual(["low", "high"]);
+  });
 });
 
 describe("defaultModelParams", () => {
