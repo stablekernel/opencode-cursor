@@ -24,6 +24,24 @@ export interface StreamAgentTurnOptions {
   abortSignal?: AbortSignal;
   /** Dedupe key forwarded to every (re)send of this turn. */
   idempotencyKey?: string;
+  /**
+   * Usage accumulated by preceding silent replay turns. When set, yielded
+   * `usage` events carry `usageBase + turn-ended` sums so the visible turn's
+   * reported usage includes everything spent replaying earlier messages.
+   */
+  usageBase?: CursorUsage;
+}
+
+/** Sum two usage reports (either may be absent). */
+export function addUsage(a?: CursorUsage, b?: CursorUsage): CursorUsage | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    cacheReadTokens: a.cacheReadTokens + b.cacheReadTokens,
+    cacheWriteTokens: a.cacheWriteTokens + b.cacheWriteTokens,
+  };
 }
 
 /**
@@ -121,7 +139,10 @@ export async function* streamAgentTurn(
         break;
       }
       case "turn-ended":
-        if (update.usage) push({ type: "usage", usage: update.usage as CursorUsage });
+        if (update.usage) {
+          const summed = addUsage(options.usageBase, update.usage as CursorUsage);
+          if (summed) push({ type: "usage", usage: summed });
+        }
         break;
     }
   };
@@ -319,8 +340,6 @@ export async function sendWithRecovery(
  *    interjected messages into one visible turn.
  *  - Serial latency: each silent turn is awaited to completion before the next
  *    send, so an N-message interjection costs N sequential agent runs.
- *  - Usage undercount: no onDelta means the `turn-ended` usage update is never
- *    observed, so opencode slightly undercounts tokens on multi-message turns.
  *
  * Concatenating the queued messages into one Cursor message was rejected for
  * message fidelity: each interjection must land as a distinct user turn in the
@@ -332,11 +351,16 @@ export async function sendAgentTurnSilently(
   agent: AgentLike,
   message: SDKUserMessage,
   options: StreamAgentTurnOptions,
-): Promise<void> {
+): Promise<CursorUsage | undefined> {
   // Already aborted: don't start a turn just to cancel it.
-  if (options.abortSignal?.aborted) return;
+  if (options.abortSignal?.aborted) return undefined;
   const debug = process.env.OPENCODE_CURSOR_DEBUG === "1";
   const runHolder: { run?: AgentRunLike } = {};
+  // Capture only the turn-ended usage; a silent turn streams nothing else.
+  let usage: CursorUsage | undefined;
+  const onDelta = ({ update }: { update: { type: string } & Record<string, any> }) => {
+    if (update.type === "turn-ended" && update.usage) usage = update.usage as CursorUsage;
+  };
   const onAbort = () => {
     void Promise.resolve(runHolder.run?.cancel()).catch(() => {});
   };
@@ -345,7 +369,7 @@ export async function sendAgentTurnSilently(
     const run = await sendWithRecovery(
       agent,
       message,
-      { mode: options.mode, ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}) },
+      { mode: options.mode, onDelta, ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}) },
       debug,
     );
     runHolder.run = run;
@@ -357,7 +381,7 @@ export async function sendAgentTurnSilently(
       // Our own abort cancelled the run mid-flight: expected, not a failure.
       // The caller's abort check stops the multi-send sequence and drops the
       // session record, so this partial turn is never counted as delivered.
-      if (options.abortSignal?.aborted) return;
+      if (options.abortSignal?.aborted) return undefined;
       // Anything else ("error", an external "cancelled", unknown states) means
       // the message was NOT delivered; treating it as success would leave the
       // session record claiming the agent saw a message it never received.
@@ -365,6 +389,7 @@ export async function sendAgentTurnSilently(
         `Cursor run ended with status "${result.status}"${result.result ? `: ${result.result}` : ""}`,
       );
     }
+    return usage;
   } finally {
     options.abortSignal?.removeEventListener("abort", onAbort);
   }

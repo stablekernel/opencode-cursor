@@ -118,8 +118,33 @@ describe("streamAgentTurn busy-agent recovery", () => {
 	});
 });
 
+describe("silent-turn usage capture", () => {
+	it("sendAgentTurnSilently captures turn-ended usage", async () => {
+		const agent = fakeAgent({
+			updates: [{ type: "turn-ended", usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 1, cacheWriteTokens: 2 } }],
+		});
+		const usage = await sendAgentTurnSilently(agent, MESSAGE, { mode: "agent" });
+		expect(usage).toEqual({ inputTokens: 10, outputTokens: 5, cacheReadTokens: 1, cacheWriteTokens: 2 });
+	});
+
+	it("streamAgentTurn adds usageBase to turn-ended usage", async () => {
+		const agent = fakeAgent({
+			updates: [{ type: "turn-ended", usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 } }],
+		});
+		const events = await collect(streamAgentTurn(agent, MESSAGE, {
+			mode: "agent",
+			usageBase: { inputTokens: 100, outputTokens: 50, cacheReadTokens: 3, cacheWriteTokens: 4 },
+		}));
+		const usage = events.find((e) => e.type === "usage");
+		expect(usage).toEqual({
+			type: "usage",
+			usage: { inputTokens: 110, outputTokens: 55, cacheReadTokens: 3, cacheWriteTokens: 4 },
+		});
+	});
+});
+
 describe("sendAgentTurnSilently", () => {
-	it("sends the message with no onDelta and awaits completion", async () => {
+	it("sends the message and awaits completion without returning text usage", async () => {
 		const sendCalls: Array<Record<string, unknown> | undefined> = [];
 		const agent = fakeAgent({
 			updates: [{ type: "text-delta", text: "should-not-surface" }],
@@ -127,10 +152,12 @@ describe("sendAgentTurnSilently", () => {
 			sendCalls,
 		});
 
-		await sendAgentTurnSilently(agent, MESSAGE, { mode: "agent" });
+		// A turn with no turn-ended usage returns undefined; text deltas never
+		// surface (the onDelta only captures usage).
+		const usage = await sendAgentTurnSilently(agent, MESSAGE, { mode: "agent" });
 
 		expect(sendCalls).toHaveLength(1);
-		expect(sendCalls[0]?.["onDelta"]).toBeUndefined();
+		expect(usage).toBeUndefined();
 	});
 
 	it("throws when the run ends with status 'error'", async () => {

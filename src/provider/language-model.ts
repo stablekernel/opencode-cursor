@@ -24,9 +24,11 @@ import {
 import { extractSystemText, resolveSystemDelivery } from "./system-rule.js";
 import { classifyError } from "./error-classify.js";
 import {
+	addUsage,
 	sendAgentTurnSilently,
 	streamAgentTurn,
 	type CursorEvent,
+	type CursorUsage,
 } from "./agent-events.js";
 import {
 	cursorEventsToContent,
@@ -334,20 +336,26 @@ export class CursorLanguageModel implements LanguageModelV3 {
 				let delivered = false;
 				try {
 					let aborted = false;
+					// Accumulate usage across silent replay turns so the final
+					// streamed turn's reported usage includes the replay cost.
+					let replayUsage: CursorUsage | undefined;
 					for (let i = 0; i < multiTurns.length - 1; i++) {
 						if (options.abortSignal?.aborted) {
 							aborted = true;
 							break;
 						}
-						await sendAgentTurnSilently(acquired.agent, multiTurns[i]!, {
-							mode,
-							abortSignal: options.abortSignal,
-							idempotencyKey: sendIdempotencyKey(
-								sessionID,
-								{ userHashes: [...(record?.userHashes ?? []), String(i)] },
-								multiTurns[i]!.text,
-							),
-						});
+						replayUsage = addUsage(
+							replayUsage,
+							await sendAgentTurnSilently(acquired.agent, multiTurns[i]!, {
+								mode,
+								abortSignal: options.abortSignal,
+								idempotencyKey: sendIdempotencyKey(
+									sessionID,
+									{ userHashes: [...(record?.userHashes ?? []), String(i)] },
+									multiTurns[i]!.text,
+								),
+							}),
+						);
 					}
 					if (!aborted && !options.abortSignal?.aborted) {
 						for await (const event of streamAgentTurn(
@@ -366,6 +374,7 @@ export class CursorLanguageModel implements LanguageModelV3 {
 									},
 									multiTurns[multiTurns.length - 1]!.text,
 								),
+								...(replayUsage ? { usageBase: replayUsage } : {}),
 							},
 						)) {
 							yielded = true;
