@@ -11,8 +11,8 @@
 #      startup; @latest makes it re-resolve to the newest release). Reuses an
 #      existing opencode.jsonc or opencode.json if present (comments preserved),
 #      else creates opencode.json. An older/pinned entry is upgraded in place.
-#   2. Verifies Node.js 22+ is on your PATH — the plugin spawns a short-lived
-#      Node sidecar to host the Cursor SDK (opencode itself runs on Bun).
+#   2. Verifies Node.js 22.13+ is on your PATH — the plugin can spawn a
+#      short-lived Node sidecar to host the Cursor SDK (opencode runs on Bun).
 #   3. Offers to set CURSOR_API_KEY in your shell profile if it is not set.
 #
 # Flags:
@@ -107,8 +107,8 @@ info "${DIM}${REPO_URL}${RESET}"
 info "Scope:  $SCOPE"
 info "Config: $CONFIG_PATH"
 
-# ---- 1. Node.js 22+ check ----------------------------------------------------
-step "Checking Node.js (>= ${MIN_NODE_MAJOR}) on PATH"
+# ---- 1. Node.js 22.13+ check -------------------------------------------------
+step "Checking Node.js (>= ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR}) on PATH"
 if command -v node >/dev/null 2>&1; then
 	NODE_VER="$(node --version 2>/dev/null | sed 's/^v//')"
 	NODE_MAJOR="${NODE_VER%%.*}"

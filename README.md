@@ -15,8 +15,9 @@ It uses the [official Cursor SDK](https://cursor.com/docs/sdk/typescript) (`@cur
 ## Requirements
 
 - **opencode 1.17+**
-- **Node.js 22+ on your `PATH`** — opencode runs on [Bun](https://bun.sh); the plugin needs a
-  Node sidecar to host the Cursor SDK (see [Runtime](#runtime-bun-and-the-node-sidecar)).
+- **Node.js 22.13+ on your `PATH`** (optional) — opencode runs on [Bun](https://bun.sh) and the
+  plugin runs the Cursor SDK in-process by default; Node is only needed for the `sidecar`
+  transport fallback (see [Transport](#transport)).
 - A **Cursor account and API key** (from the Cursor dashboard).
 
 ## Install
@@ -28,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/stablekernel/opencode-cursor/main/i
 ```
 
 Registers the plugin in your global `opencode.json` (`~/.config/opencode/opencode.json`), checks
-for Node.js 22+, and offers to set `CURSOR_API_KEY`. Flags:
+for Node.js 22.13+, and offers to set `CURSOR_API_KEY`. Flags:
 
 - `--project` — write `./opencode.json` in the current directory instead.
 - `--yes` / `-y` — non-interactive.
@@ -137,20 +138,24 @@ See [SECURITY.md](./SECURITY.md) for the full threat model.
 | `mode` | `"agent"` | Default conversation mode (`"agent"` or `"plan"`) |
 | `params` | — | Default model params, e.g. `{ thinking: "high" }` |
 | `settingSources` | — | Cursor settings layers to load: `["project","user","all",...]` — pulls in your Cursor skills, rules, and `.cursor/mcp.json` |
-| `sandbox` | — | Run the agent's tools in Cursor's sandbox |
+| `sandbox` | — | Run the agent's tools in [Cursor's sandbox](https://cursor.com/docs/agent/sandbox) |
+| `autoReview` | `false` | Gate tool calls through Cursor's classifier-backed Auto review (best-effort, not a security boundary) |
 | `agents` | — | Cursor subagent definitions |
 | `session` | `"auto"` | Session reuse strategy — see [Session reuse](#session-reuse-session) |
 | `forwardMcp` | `true` | Forward opencode's configured MCP servers to the Cursor agent |
 | `mcpServers` | — | Extra MCP servers (Cursor `McpServerConfig` shape); merged with forwarded ones |
 | `toolDisplay` | `"blocks"` | How Cursor's internal tool activity is shown — see [Tool display](#tool-display) |
 | `systemPrompt` | `"rules"` | How opencode's system prompt reaches the agent — see [System prompt](#system-prompt) |
+| `transport` | — | Cursor agent transport (`"http1"` \| `"http2-direct"` \| `"sidecar"`) — see [Transport](#transport) |
 
 | Environment variable | Default | Meaning |
 | --- | --- | --- |
 | `CURSOR_API_KEY` | — | API key fallback |
 | `OPENCODE_CURSOR_MODEL_CACHE_TTL_MS` | `86400000` | Model-list cache lifetime (ms) |
 | `OPENCODE_CURSOR_DEBUG` | — | Set to `1` for trace logging on stderr |
-| `OPENCODE_CURSOR_SIDECAR` | — | `1` = always use Node sidecar; `0` = never |
+| `OPENCODE_CURSOR_TRANSPORT` | — | Force a transport: `http1` \| `http2-direct` \| `sidecar` — see [Transport](#transport) |
+| `OPENCODE_CURSOR_STALL_MS` | `60000` | Stream watchdog timeout (ms); `0` disables — see [Reliability](#reliability) |
+| `OPENCODE_CURSOR_SIDECAR` | — | Legacy: `1` maps to `sidecar`, `0` maps to `http2-direct` (superseded by `OPENCODE_CURSOR_TRANSPORT`) |
 
 ### Session reuse (`session`)
 
@@ -295,23 +300,56 @@ To force the fallback:
 { "provider": { "cursor": { "options": { "toolDisplay": "reasoning" } } } }
 ```
 
-## Runtime: Bun and the Node sidecar
+## Transport
 
-opencode runs on [Bun](https://bun.sh), which has an `node:http2` incompatibility with the Cursor
-SDK's streaming RPC. The plugin transparently hosts the Cursor SDK in a short-lived **Node child
-process** when running under Bun. Under Node it runs in-process.
+opencode runs on [Bun](https://bun.sh), whose `node:http2` client is incompatible with the Cursor
+SDK's long-lived streaming RPC (`NGHTTP2_FRAME_SIZE_ERROR`; see
+[oven-sh/bun#31499](https://github.com/oven-sh/bun/issues/31499)). The plugin works around this by
+running the SDK over HTTP/1.1 in-process — no Node child process required. The historical Node
+sidecar remains as a rollback fallback.
 
-This is why **Node.js 22+ on your `PATH`** is required. If Node isn't found, the plugin warns once
-and falls back to in-process (native Cursor tools will misbehave until Node is available).
+| Transport | Where it runs | When it's the default |
+| --- | --- | --- |
+| `http1` | in-process, HTTP/1.1 + SSE (Bun-safe) | under Bun |
+| `http2-direct` | in-process, SDK's default HTTP/2 | under Node (tests, scripts, non-Bun hosts) |
+| `sidecar` | spawned Node child hosting the SDK | never (rollback only) |
 
-Override with `OPENCODE_CURSOR_SIDECAR=1` (always sidecar) or `OPENCODE_CURSOR_SIDECAR=0` (never).
+Resolution order: the `transport` provider option → `OPENCODE_CURSOR_TRANSPORT` →
+legacy `OPENCODE_CURSOR_SIDECAR` (`1`→`sidecar`, `0`→`http2-direct`) → the per-runtime default
+above.
+
+If you hit a regression on the in-process path, roll back to the sidecar:
+
+```bash
+export OPENCODE_CURSOR_TRANSPORT=sidecar   # requires Node.js 22.13+ on PATH
+```
+
+An explicit `sidecar` request with no Node on `PATH` falls back to `http1` (Bun) or `http2-direct`
+(Node) with a stderr notice.
+
+## Reliability
+
+The provider classifies Cursor SDK errors into typed kinds (`agent-not-found`, `agent-busy`,
+`rate-limit`, `network`, `auth`, `config`, `unknown`) and recovers per kind:
+
+- **agent-busy** — a previous crash left a run wedged; the send is retried once with the SDK's
+  `local.force` escape hatch.
+- **rate-limit / network** — bounded exponential backoff on the same agent.
+- **auth / config** — fail fast (not retried).
+
+Sends carry an idempotency key so a retry is a server-side dedupe, not a duplicate turn.
+
+A **stream watchdog** guards against a wedged run that streams nothing: if no event arrives within
+`OPENCODE_CURSOR_STALL_MS` (default `60000`), a pre-first-event stall cancels and force-resends
+once; a stall after partial output is surfaced as a terminal error rather than re-emitting the
+already-yielded prefix. Set `OPENCODE_CURSOR_STALL_MS=0` to disable.
 
 ## Troubleshooting
 
-- **Native Cursor tools hang / "Tool execution aborted" (`NGHTTP2_FRAME_SIZE_ERROR`).** Node isn't
-  on your `PATH`. Install Node.js 22+, or force the sidecar with `OPENCODE_CURSOR_SIDECAR=1`.
-- **"Running under Bun without a usable Node sidecar" warning.** Install Node.js 22+, or set
-  `OPENCODE_CURSOR_SIDECAR=0` to accept in-process behavior and silence the warning.
+- **Native Cursor tools hang / "Tool execution aborted" (`NGHTTP2_FRAME_SIZE_ERROR`).** A
+  `http2-direct` transport was forced under Bun. Unset `OPENCODE_CURSOR_TRANSPORT` (defaults to the
+  Bun-safe `http1`), or roll back with `OPENCODE_CURSOR_TRANSPORT=sidecar` (needs Node.js 22.13+ on
+  `PATH`).
 - **Plugin enabled but no `cursor` provider/models appear, or you see a stale-version warning.**
   opencode caches the `@latest` plugin install on first use and never refreshes it.
   Exit opencode, delete `~/.cache/opencode/packages/@stablekernel/opencode-cursor@latest`
