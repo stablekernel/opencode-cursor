@@ -17,6 +17,8 @@ export type CursorEvent =
   | { type: "tool-call"; id: string; name: string; input: unknown }
   | { type: "tool-result"; id: string; name: string; result: unknown; isError: boolean }
   | { type: "usage"; usage: CursorUsage }
+  | { type: "reasoning-complete"; durationMs?: number }
+  | { type: "compaction" }
   | { type: "finish"; text?: string };
 
 export interface StreamAgentTurnOptions {
@@ -114,6 +116,14 @@ export async function* streamAgentTurn(
         break;
       case "thinking-delta":
         push({ type: "reasoning-delta", text: update.text });
+        break;
+      case "thinking-completed":
+        push({ type: "reasoning-complete", durationMs: update.thinkingDurationMs as number | undefined });
+        break;
+      case "summary-started":
+      case "summary":
+      case "summary-completed":
+        push({ type: "compaction" });
         break;
       case "tool-call-started":
         push({

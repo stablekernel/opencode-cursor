@@ -942,6 +942,8 @@ export function cursorEventsToStream(
 			let reasoningCount = 0;
 			let usage: LanguageModelV3Usage | undefined;
 			let streamedText = false;
+			let thinkingMs = 0;
+			let compactions = 0;
 			// Blocks-mode tool bookkeeping (open non-edit calls + buffered edits).
 			const toolState = newBlockToolState();
 			const closeDanglingToolCalls = () => {
@@ -1065,6 +1067,14 @@ export function cursorEventsToStream(
 						case "usage":
 							usage = mapUsage(event.usage);
 							break;
+						case "reasoning-complete":
+							closeReasoning();
+							if (typeof event.durationMs === "number")
+								thinkingMs += event.durationMs;
+							break;
+						case "compaction":
+							compactions++;
+							break;
 						case "finish":
 							if (!streamedText && event.text) {
 								controller.enqueue({
@@ -1080,22 +1090,38 @@ export function cursorEventsToStream(
 				closeDanglingToolCalls();
 				closeReasoning();
 				closeText();
-				controller.enqueue({
-					type: "finish",
-					usage: usage ?? EMPTY_USAGE,
-					finishReason: FINISH_STOP,
-				});
+				{
+					const cursorMeta: Record<string, number> = {};
+					if (thinkingMs > 0) cursorMeta["thinkingDurationMs"] = thinkingMs;
+					if (compactions > 0) cursorMeta["compactions"] = compactions;
+					controller.enqueue({
+						type: "finish",
+						usage: usage ?? EMPTY_USAGE,
+						finishReason: FINISH_STOP,
+						...(Object.keys(cursorMeta).length > 0
+							? { providerMetadata: { cursor: cursorMeta } }
+							: {}),
+					});
+				}
 				controller.close();
 			} catch (err) {
 				controller.enqueue({ type: "error", error: err });
 				closeDanglingToolCalls();
 				closeReasoning();
 				closeText();
-				controller.enqueue({
-					type: "finish",
-					usage: usage ?? EMPTY_USAGE,
-					finishReason: FINISH_ERROR,
-				});
+				{
+					const cursorMeta: Record<string, number> = {};
+					if (thinkingMs > 0) cursorMeta["thinkingDurationMs"] = thinkingMs;
+					if (compactions > 0) cursorMeta["compactions"] = compactions;
+					controller.enqueue({
+						type: "finish",
+						usage: usage ?? EMPTY_USAGE,
+						finishReason: FINISH_ERROR,
+						...(Object.keys(cursorMeta).length > 0
+							? { providerMetadata: { cursor: cursorMeta } }
+							: {}),
+					});
+				}
 				controller.close();
 			}
 		},
@@ -1174,6 +1200,10 @@ export async function cursorEventsToContent(
 					break;
 				case "usage":
 					usage = mapUsage(event.usage);
+					break;
+				case "reasoning-complete":
+					break;
+				case "compaction":
 					break;
 				case "finish":
 					if (!text && event.text) text = event.text;

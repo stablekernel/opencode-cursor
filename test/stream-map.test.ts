@@ -1378,3 +1378,38 @@ describe("mapUsage", () => {
 		});
 	});
 });
+
+describe("finish providerMetadata", () => {
+	it("attaches thinking duration + compaction count to finish providerMetadata", async () => {
+		const events: CursorEvent[] = [
+			{ type: "reasoning-delta", text: "thinking…" },
+			{ type: "reasoning-complete", durationMs: 1234 },
+			{ type: "compaction" },
+			{ type: "text-delta", text: "answer" },
+			{ type: "finish", text: "answer" },
+		];
+		const parts = await collect(cursorEventsToStream(gen(events)));
+		const finish = parts.find((p) => p.type === "finish") as {
+			providerMetadata?: Record<string, Record<string, unknown>>;
+		};
+		expect(finish.providerMetadata?.["cursor"]?.["thinkingDurationMs"]).toBe(
+			1234,
+		);
+		expect(finish.providerMetadata?.["cursor"]?.["compactions"]).toBe(1);
+	});
+
+	it("omits providerMetadata when nothing to report", async () => {
+		const parts = await collect(
+			cursorEventsToStream(
+				gen([
+					{ type: "text-delta", text: "hi" },
+					{ type: "finish", text: "hi" },
+				]),
+			),
+		);
+		const finish = parts.find((p) => p.type === "finish") as {
+			providerMetadata?: unknown;
+		};
+		expect(finish.providerMetadata).toBeUndefined();
+	});
+});

@@ -99,6 +99,9 @@ export async function runDelegate(
 				case "usage":
 					usage = event.usage;
 					break;
+				case "reasoning-complete":
+				case "compaction":
+					break;
 				case "finish":
 					// The aggregated result text; prefer it when deltas were absent.
 					if (event.text && text.length === 0) text.push(event.text);
