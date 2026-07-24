@@ -296,8 +296,9 @@ function mapTodos(args: unknown): Array<{ content: string; status: string }> {
 /**
  * Cursor tool name → opencode native tool adapter. Cursor tools without a
  * natural opencode counterpart (`delete`, `mcp`, `semSearch`, `readLints`,
- * `generateImage`, `recordScreen`) are intentionally absent and fall through
- * to generic `cursor_*` blocks. `edit` and `createPlan` are handled separately
+ * `generateImage`, `recordScreen`) keep their generic `cursor_*` block (no
+ * native `tool` remap) but may still supply a `result` formatter to fold their
+ * raw JSON into readable output. `edit` and `createPlan` are handled separately
  * (edit: native call input depends on the diff in the result; createPlan:
  * emitted as assistant markdown text so opencode renders it like a normal plan).
  */
@@ -482,6 +483,26 @@ const NATIVE_ADAPTERS: Record<string, NativeToolAdapter> = {
 								...lines,
 							].join("\n")
 						: "No matches found",
+			};
+		},
+	},
+	// Cursor `semSearch` has no opencode counterpart — format-only: query title
+	// + results body instead of the raw `{results}` JSON.
+	semSearch: {
+		input: (args) => {
+			const out: Record<string, unknown> = { query: strField(args, "query") ?? "" };
+			const dirs = isRecord(args) && Array.isArray(args["targetDirectories"]) ? args["targetDirectories"] : undefined;
+			if (dirs && dirs.length > 0) out["targetDirectories"] = dirs;
+			return out;
+		},
+		result: (value, args) => {
+			const query = strField(args, "query") ?? "";
+			const results = strField(value, "results") ?? "";
+			const count = results ? results.split("\n").filter((l) => l.trim().length > 0).length : 0;
+			return {
+				title: query,
+				metadata: { matches: count, truncated: false },
+				output: results || "No results",
 			};
 		},
 	},

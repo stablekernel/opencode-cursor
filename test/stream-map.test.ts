@@ -1186,6 +1186,27 @@ describe("native tool mapping (blocks)", () => {
 		});
 	});
 
+	it("folds semSearch results into readable output", async () => {
+		const { call, result } = await mapTool(
+			"semSearch",
+			{ query: "auth middleware" },
+			{
+				status: "success",
+				value: {
+					results: "src/auth.ts: middleware()\nsrc/web.ts: use(auth)",
+				},
+			},
+		);
+		// No native counterpart — stays a prefixed `cursor_semSearch` block.
+		expect(call).toMatchObject({ toolName: "cursor_semSearch" });
+		expect(result).toMatchObject({ toolName: "cursor_semSearch" });
+		expect(foldedResult(result)).toMatchObject({
+			title: "auth middleware",
+			metadata: { matches: 2, truncated: false },
+		});
+		expect(foldedResult(result).output).toContain("middleware()");
+	});
+
 	it("formats Cursor `delete` as a one-line `cursor_delete` confirmation", async () => {
 		const { call, result } = await mapTool(
 			"delete",
