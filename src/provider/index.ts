@@ -11,6 +11,7 @@ import type {
 	SettingSource,
 } from "@cursor/sdk";
 import { resolveCursorApiKey } from "../api-key.js";
+import { setPreferredTransport } from "./agent-backend.js";
 import {
 	CursorLanguageModel,
 	type CursorModelConfig,
@@ -54,6 +55,12 @@ export interface CursorProviderOptions {
 	settingSources?: SettingSource[];
 	/** Run the agent's tools inside Cursor's sandbox. */
 	sandbox?: boolean;
+	/**
+	 * Cursor's classifier-backed Auto review mode: gates tool calls through a
+	 * classifier instead of running them unconditionally. Defaults to `false`.
+	 * Best-effort tool-call gating, not a security boundary.
+	 */
+	autoReview?: boolean;
 	/** Cursor subagent definitions (`{ description, prompt, model?, mcpServers? }`). */
 	agents?: Record<string, AgentDefinition>;
 	/**
@@ -83,6 +90,12 @@ export interface CursorProviderOptions {
 	 *  - "omit": not forwarded at all.
 	 */
 	systemPrompt?: SystemPromptMode;
+	/**
+	 * Transport for Cursor agent traffic: "http1" (in-process, Bun-safe),
+	 * "http2-direct" (in-process, Node only), "sidecar" (Node child, rollback).
+	 * Beats OPENCODE_CURSOR_TRANSPORT. Process-global: last provider to set it wins.
+	 */
+	transport?: "http1" | "http2-direct" | "sidecar";
 }
 
 /**
@@ -94,6 +107,7 @@ export interface CursorProviderOptions {
  * and then calls `.languageModel(modelId)`.
  */
 export function createCursor(options: CursorProviderOptions = {}): ProviderV3 {
+	if (options.transport) setPreferredTransport(options.transport);
 	const mcpServers =
 		options.mcpServers && Object.keys(options.mcpServers).length > 0
 			? options.mcpServers
@@ -112,6 +126,9 @@ export function createCursor(options: CursorProviderOptions = {}): ProviderV3 {
 			? { settingSources: options.settingSources }
 			: {}),
 		...(options.sandbox !== undefined ? { sandbox: options.sandbox } : {}),
+		...(options.autoReview !== undefined
+			? { autoReview: options.autoReview }
+			: {}),
 		...(options.agents ? { agents: options.agents } : {}),
 		session: options.session ?? "auto",
 		toolDisplay: options.toolDisplay ?? "blocks",

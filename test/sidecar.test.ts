@@ -65,6 +65,21 @@ describe("SidecarClient", () => {
     await expect(run.wait()).resolves.toMatchObject({ status: "finished" });
   });
 
+  it("preserves error classification fields across the process boundary", async () => {
+    const client = makeClient();
+    const agent = await client.createAgent(CREATE_OPTIONS);
+    await expect(agent.send({ type: "user", text: "rich" }, { mode: "agent" })).rejects.toMatchObject(
+      {
+        name: "RateLimitError",
+        message: "rate limited",
+        status: 429,
+        code: "rate_limited",
+        isRetryable: true,
+        helpUrl: "https://example.com/rate-limits",
+      },
+    );
+  });
+
   it("multiplexes concurrent sends over one child", async () => {
     const client = makeClient();
     const [a, b] = await Promise.all([

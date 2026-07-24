@@ -1,6 +1,6 @@
 {
   "name": "@stablekernel/opencode-cursor",
-  "version": "0.4.7-next.0",
+  "version": "0.5.0-next.0",
   "description": "opencode provider plugin backed by the official Cursor SDK (@cursor/sdk) — adds a Cursor provider and lists its models",
   "type": "module",
   "license": "MIT",
@@ -14,7 +14,7 @@
     "url": "https://github.com/stablekernel/opencode-cursor/issues"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.13.0"
   },
   "keywords": [
     "opencode",
@@ -52,12 +52,13 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts --passWithNoTests",
     "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
     "@connectrpc/connect-node": "^2.1.2",
-    "@cursor/sdk": "^1.0.23",
-    "@opencode-ai/plugin": "^1.17.14",
+    "@cursor/sdk": "^1.0.24",
+    "@opencode-ai/plugin": "^1.18.4",
     "semver": "^7.8.4"
   },
   "overrides": {
@@ -70,7 +71,7 @@
   },
   "devDependencies": {
     "@ai-sdk/provider": "^3.0.13",
-    "@opencode-ai/sdk": "^1.17.14",
+    "@opencode-ai/sdk": "^1.18.4",
     "@types/node": "^26.0.0",
     "@types/semver": "^7.7.1",
     "tsup": "^8.5.1",

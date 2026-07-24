@@ -52,11 +52,34 @@ export function defaultModelParams(item: ModelListItem): Record<string, string> 
  * variant turns it ON) so a selection never depends on Cursor's server-side
  * default for an omitted param.
  */
+/** Slugify an SDK variant displayName for the opencode variant picker key. */
+function variantKey(displayName: string): string {
+  return displayName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "variant";
+}
+
 export function buildModelVariants(item: ModelListItem): Record<string, CursorVariant> {
-  const out: Record<string, CursorVariant> = {};
   // Non-reasoning boolean defaults (e.g. { fast: "false" }), pinned into every
   // reasoning variant so picking a reasoning level never re-enables fast.
   const defaults = defaultModelParams(item);
+
+  const sdkVariants = item.variants ?? [];
+  if (sdkVariants.length > 0) {
+    // Cursor-authoritative presets win: displayName + isDefault are curated
+    // upstream; we only pin the non-reasoning boolean floors underneath.
+    const out: Record<string, CursorVariant> = {};
+    for (const v of sdkVariants) {
+      if (v.isDefault === true) continue; // the base model entry IS this variant
+      const params: Record<string, string> = { ...defaults };
+      for (const p of v.params ?? []) params[p.id] = p.value;
+      const key = variantKey(v.displayName);
+      let candidate = key;
+      for (let n = 2; out[candidate] !== undefined; n++) candidate = `${key}-${n}`;
+      out[candidate] = { params };
+    }
+    return out;
+  }
+
+  const out: Record<string, CursorVariant> = {};
 
   // Pre-pass: does any reasoning param expose a non-boolean effort enum (e.g.
   // ["low","medium","high","xhigh","max"])? When it does, a coexisting boolean

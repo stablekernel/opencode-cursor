@@ -18,7 +18,7 @@ When reporting a runtime bug, please include:
 
 ## Development setup
 
-Requires **Node.js 22+**.
+Requires **Node.js 22.13+**.
 
 ```bash
 npm install

@@ -189,6 +189,29 @@ describe("buildCursorTools", () => {
     expect(runDelegate.mock.calls[0]![0].cwd).toBe("/explicit");
   });
 
+  it("passes a multi-root cwd when additionalCwds are given (else a plain string)", async () => {
+    runDelegate.mockResolvedValue({
+      agentId: "a1",
+      text: "x",
+      reasoning: "",
+      toolActivity: [],
+      usage: undefined,
+    });
+    const tools = buildCursorTools(withKey);
+
+    await tools.cursor_delegate!.execute(
+      { prompt: "p", model: "m", cwd: "/base", additionalCwds: ["/extra"] } as any,
+      ctx(vi.fn().mockResolvedValue(undefined)),
+    );
+    expect(runDelegate.mock.calls[0]![0].cwd).toEqual(["/base", "/extra"]);
+
+    await tools.cursor_delegate!.execute(
+      { prompt: "p", model: "m", cwd: "/base" } as any,
+      ctx(vi.fn().mockResolvedValue(undefined)),
+    );
+    expect(runDelegate.mock.calls[1]![0].cwd).toBe("/base");
+  });
+
   it("formats the cloud output with branches and progress when no PR is opened", async () => {
     runCloudAgent.mockResolvedValue({
       agentId: "bc-9",

@@ -20,10 +20,16 @@
  */
 import { createInterface } from "node:readline";
 
-/** Plain-data error shape that survives JSON; name preserved for retry logic. */
+/** Plain-data error shape that survives JSON; name + classification fields
+ * preserved so the Bun side can discriminate (see error-classify.ts). */
 function serializeError(err) {
   if (err instanceof Error) {
-    return { name: err.name, message: err.message };
+    const out = { name: err.name, message: err.message };
+    for (const k of ["status", "code", "isRetryable", "helpUrl"]) {
+      const v = err[k];
+      if (typeof v === "number" || typeof v === "string" || typeof v === "boolean") out[k] = v;
+    }
+    return out;
   }
   return { name: "Error", message: String(err) };
 }
@@ -68,6 +74,7 @@ async function handleRequest(req) {
       const sendOptions = {
         ...(req.mode ? { mode: req.mode } : {}),
         ...(req.force ? { local: { force: true } } : {}),
+        ...(req.idempotencyKey ? { idempotencyKey: req.idempotencyKey } : {}),
         onDelta: ({ update }) => write({ id, ev: "update", update }),
       };
       const run = await agent.send(req.message, sendOptions);

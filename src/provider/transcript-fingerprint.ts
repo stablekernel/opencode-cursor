@@ -156,3 +156,20 @@ export function classifyTurn(
 	}
 	return { kind: "divergence", fingerprint: fp };
 }
+
+/**
+ * Stable idempotency key for one turn's send: identical for retries of the
+ * SAME logical turn (same session, same transcript prefix, same message), so
+ * Cursor's server dedupes resends; distinct as soon as the transcript grows,
+ * so a later identical user message is never swallowed.
+ */
+export function sendIdempotencyKey(
+	sessionID: string | undefined,
+	record: { userHashes: string[] } | undefined,
+	messageText: string,
+): string {
+	return createHash("sha256")
+		.update(`${sessionID ?? "ephemeral"}|${record?.userHashes.join(",") ?? ""}|${messageText}`)
+		.digest("hex")
+		.slice(0, 32);
+}

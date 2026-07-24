@@ -22,10 +22,13 @@ import {
 	type SystemPromptMode,
 } from "./message-map.js";
 import { extractSystemText, resolveSystemDelivery } from "./system-rule.js";
+import { classifyError } from "./error-classify.js";
 import {
+	addUsage,
 	sendAgentTurnSilently,
 	streamAgentTurn,
 	type CursorEvent,
+	type CursorUsage,
 } from "./agent-events.js";
 import {
 	cursorEventsToContent,
@@ -42,6 +45,7 @@ import {
 	classifyTurn,
 	fingerprint,
 	mcpServersFingerprint,
+	sendIdempotencyKey,
 } from "./transcript-fingerprint.js";
 
 export interface CursorModelConfig {
@@ -66,6 +70,8 @@ export interface CursorModelConfig {
 	settingSources?: SettingSource[];
 	/** Run the agent's tools inside Cursor's sandbox. */
 	sandbox?: boolean;
+	/** Cursor's classifier-backed Auto review mode (tool-call gating). */
+	autoReview?: boolean;
 	/** Cursor subagent definitions made available to the agent. */
 	agents?: Record<string, AgentDefinition>;
 	/**
@@ -265,6 +271,13 @@ export class CursorLanguageModel implements LanguageModelV3 {
 			}
 		}
 
+		const latestUser = latestUserMessage(options.prompt);
+		const idempotencyKey = sendIdempotencyKey(
+			sessionID,
+			record,
+			latestUser?.text ?? JSON.stringify(options.prompt),
+		);
+
 		// In "rules" mode (default), deliver opencode's system prompt through
 		// Cursor's authoritative rules channel instead of the user transcript.
 		// Degrades to inline "message" delivery when the user explicitly opted
@@ -291,6 +304,9 @@ export class CursorLanguageModel implements LanguageModelV3 {
 			...(settingSources ? { settingSources } : {}),
 			...(this.config.sandbox !== undefined
 				? { sandbox: this.config.sandbox }
+				: {}),
+			...(this.config.autoReview !== undefined
+				? { autoReview: this.config.autoReview }
 				: {}),
 			...(mcpServers ? { mcpServers } : {}),
 			...(this.config.agents ? { agents: this.config.agents } : {}),
@@ -325,21 +341,47 @@ export class CursorLanguageModel implements LanguageModelV3 {
 				let delivered = false;
 				try {
 					let aborted = false;
+					// Accumulate usage across silent replay turns so the final
+					// streamed turn's reported usage includes the replay cost.
+					let replayUsage: CursorUsage | undefined;
 					for (let i = 0; i < multiTurns.length - 1; i++) {
 						if (options.abortSignal?.aborted) {
 							aborted = true;
 							break;
 						}
-						await sendAgentTurnSilently(acquired.agent, multiTurns[i]!, {
-							mode,
-							abortSignal: options.abortSignal,
-						});
+						replayUsage = addUsage(
+							replayUsage,
+							await sendAgentTurnSilently(acquired.agent, multiTurns[i]!, {
+								mode,
+								abortSignal: options.abortSignal,
+								idempotencyKey: sendIdempotencyKey(
+									sessionID,
+									{ userHashes: [...(record?.userHashes ?? []), String(i)] },
+									multiTurns[i]!.text,
+								),
+							}),
+						);
 					}
 					if (!aborted && !options.abortSignal?.aborted) {
 						for await (const event of streamAgentTurn(
 							acquired.agent,
 							multiTurns[multiTurns.length - 1]!,
-							{ mode, abortSignal: options.abortSignal },
+							{
+								mode,
+								abortSignal: options.abortSignal,
+								// Key intentionally diverges from the single-turn key: the multi-replay and single-turn branches are mutually exclusive.
+								idempotencyKey: sendIdempotencyKey(
+									sessionID,
+									{
+										userHashes: [
+											...(record?.userHashes ?? []),
+											String(multiTurns.length - 1),
+										],
+									},
+									multiTurns[multiTurns.length - 1]!.text,
+								),
+								...(replayUsage ? { usageBase: replayUsage } : {}),
+							},
 						)) {
 							yielded = true;
 							yield event;
@@ -360,25 +402,51 @@ export class CursorLanguageModel implements LanguageModelV3 {
 					for await (const event of streamAgentTurn(acquired.agent, message, {
 						mode,
 						abortSignal: options.abortSignal,
+						idempotencyKey,
 					})) {
 						yielded = true;
 						yield event;
 					}
 				} catch (err) {
-					// Resume-aware retry: a resumed agent can pass resume() yet fail the
+					const classified = classifyError(err);
+					// Auth/config: never a blind retry — replaying the transcript can't
+					// fix a bad key or misconfiguration. Fail fast with actionable
+					// guidance instead of burning a fresh create on a doomed resend.
+					if (classified.kind === "auth" || classified.kind === "config") {
+						throw classified.helpUrl
+							? new Error(
+									`${classified.message} (see ${classified.helpUrl})`,
+									{ cause: err },
+								)
+							: err;
+					}
+					// Resume-aware replay: a resumed agent can pass resume() yet fail the
 					// actual send when Cursor's server has already expired the agent (its
 					// server-side retention is shorter than our local 7-day reuse window,
-					// and not documented). If nothing has been emitted downstream yet and
-					// the user hasn't aborted, transparently re-create a fresh agent and
-					// replay the full transcript — self-healing, no context loss. The
-					// fresh agent re-pools under the same session (overwriting the dead
-					// agentId) via acquireAgent's existing pooling path.
+					// and not documented), or the send can die retryably before anything
+					// emitted. If nothing has been emitted downstream yet and the user
+					// hasn't aborted, transparently re-create a fresh agent and replay the
+					// full transcript — self-healing, no context loss. The fresh agent
+					// re-pools under the same session (overwriting the dead agentId) via
+					// acquireAgent's existing pooling path.
 					//
-					// Deliberate tradeoff: the retry fires on ANY error class (including
-					// rate-limit or network failures) because Cursor's status:"error"
-					// carries no machine-readable class to discriminate on. Bounded to a
-					// single attempt, so the worst case is one extra create.
-					if (acquired.resumed && !yielded && !options.abortSignal?.aborted) {
+					// Gated on a classified, replayable set — agent-not-found (expired
+					// resume), rate-limit, network, and unknown. auth/config fail fast
+					// above; agent-busy is recovered at the send layer (sendWithRecovery),
+					// so it never reaches here as a replay trigger. Bounded to a single
+					// attempt, and the turn's idempotencyKey makes resends server-side
+					// dedupes, so the worst case is one extra create.
+					const replayable =
+						classified.kind === "agent-not-found" ||
+						classified.kind === "rate-limit" ||
+						classified.kind === "network" ||
+						classified.kind === "unknown";
+					if (
+						replayable &&
+						acquired.resumed &&
+						!yielded &&
+						!options.abortSignal?.aborted
+					) {
 						if (process.env["OPENCODE_CURSOR_DEBUG"] === "1") {
 							console.error(
 								"[cursor:debug] resumed turn failed before emitting; retrying with a fresh agent",
@@ -412,6 +480,7 @@ export class CursorLanguageModel implements LanguageModelV3 {
 							yield* streamAgentTurn(retry.agent, replay, {
 								mode,
 								abortSignal: options.abortSignal,
+								idempotencyKey,
 							});
 						} finally {
 							retry.release();

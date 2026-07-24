@@ -1,14 +1,18 @@
 /**
- * Selects where Cursor agents run:
+ * Selects where Cursor agents run — three transports:
  *
- * - "in-process": straight through `@cursor/sdk` in this process (Node — the
- *   normal path for tests, scripts, and any non-Bun host).
- * - "sidecar": a spawned Node child hosting the SDK (Bun — opencode's runtime —
- *   has a `node:http2` bug that kills Cursor's streaming RPC with
- *   NGHTTP2_FRAME_SIZE_ERROR, losing tool-completion updates; see
- *   src/sidecar/agent-host.mjs).
+ * - "http1": in-process via `@cursor/sdk` with
+ *   `Cursor.configure({ local: { useHttp1ForAgent: true } })` — HTTP/1.1 + SSE,
+ *   the Bun-safe path (Bun's `node:http2` bug kills Cursor's streaming RPC with
+ *   NGHTTP2_FRAME_SIZE_ERROR; see oven-sh/bun#31499).
+ * - "http2-direct": in-process via `@cursor/sdk` default HTTP/2 transport
+ *   (Node — the normal path for tests, scripts, and any non-Bun host).
+ * - "sidecar": a spawned Node child hosting the SDK (the historical Bun
+ *   workaround; see src/sidecar/agent-host.mjs).
  *
- * Override with OPENCODE_CURSOR_SIDECAR=1/0 (force on/off).
+ * Resolution order: provider option (`transport`) -> OPENCODE_CURSOR_TRANSPORT
+ * -> legacy OPENCODE_CURSOR_SIDECAR (1=sidecar, 0=http2-direct) -> default
+ * (Bun: DEFAULT_BUN_TRANSPORT, post-gate "http1"; Node: http2-direct).
  */
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -18,7 +22,25 @@ import { SidecarClient, type AgentLike } from "./sidecar-client.js";
 
 export type { AgentLike, AgentRunLike, AgentSendOptions } from "./sidecar-client.js";
 
+export type TransportKind = "http1" | "http2-direct" | "sidecar";
 export type BackendKind = "in-process" | "sidecar";
+
+/**
+ * Bun default. Post-evidence-gate this is "http1" (Task 5/6 matrix green;
+ * TTFT ≤ 1.5× sidecar). Sidecar remains via OPENCODE_CURSOR_TRANSPORT=sidecar.
+ */
+export const DEFAULT_BUN_TRANSPORT: TransportKind = "http1";
+
+let preferredTransport: TransportKind | undefined;
+
+/** Provider-option override (createCursor({transport})); beats env. Process-global. */
+export function setPreferredTransport(t: TransportKind | undefined): void {
+  preferredTransport = t;
+}
+
+function isTransportKind(v: string | undefined): v is TransportKind {
+  return v === "http1" || v === "http2-direct" || v === "sidecar";
+}
 
 export interface AgentBackend {
   kind: BackendKind;
@@ -32,12 +54,29 @@ export interface BackendEnvironment {
   nodePath: string | undefined;
 }
 
-/** Pure selection logic (unit-testable without spawning anything). */
-export function resolveBackendKind(env: BackendEnvironment): BackendKind {
-  const override = process.env["OPENCODE_CURSOR_SIDECAR"];
-  if (override === "0" || override === "false") return "in-process";
-  if (override === "1" || override === "true") return env.nodePath ? "sidecar" : "in-process";
-  return env.isBun && env.nodePath ? "sidecar" : "in-process";
+/**
+ * Where Cursor agents run. Resolution: provider option -> OPENCODE_CURSOR_TRANSPORT
+ * -> legacy OPENCODE_CURSOR_SIDECAR (1=sidecar, 0=http2-direct) -> default
+ * (Bun: DEFAULT_BUN_TRANSPORT; Node: http2-direct, today's in-process path).
+ */
+export function resolveTransport(env: BackendEnvironment): TransportKind {
+  const requested =
+    preferredTransport ??
+    (isTransportKind(process.env["OPENCODE_CURSOR_TRANSPORT"])
+      ? (process.env["OPENCODE_CURSOR_TRANSPORT"] as TransportKind)
+      : undefined);
+  if (requested) {
+    if (requested === "sidecar" && !env.nodePath) {
+      return env.isBun ? "http1" : "http2-direct";
+    }
+    return requested;
+  }
+  const legacy = process.env["OPENCODE_CURSOR_SIDECAR"];
+  if (legacy === "1" || legacy === "true") {
+    return env.nodePath ? "sidecar" : env.isBun ? "http1" : "http2-direct";
+  }
+  if (legacy === "0" || legacy === "false") return env.isBun ? "http1" : "http2-direct";
+  return env.isBun ? DEFAULT_BUN_TRANSPORT : "http2-direct";
 }
 
 function detectNode(): string | undefined {
@@ -59,15 +98,27 @@ function detectEnvironment(): BackendEnvironment {
   return { isBun, nodePath: needsNode ? detectNode() : process.execPath };
 }
 
-function inProcessBackend(): AgentBackend {
+let http1Configured = false;
+
+/** Idempotent: enable the SDK's HTTP/1.1 agent transport (Bun-sanctioned path). */
+async function ensureHttp1Configured(): Promise<void> {
+  if (http1Configured) return;
+  const { Cursor } = await loadCursorSdk();
+  Cursor.configure({ local: { useHttp1ForAgent: true } });
+  http1Configured = true;
+}
+
+function inProcessBackend(useHttp1: boolean): AgentBackend {
   return {
     kind: "in-process",
     createAgent: async (options) => {
       const { Agent } = await loadCursorSdk();
+      if (useHttp1) await ensureHttp1Configured();
       return (await Agent.create(options as never)) as unknown as AgentLike;
     },
     resumeAgent: async (agentId, options) => {
       const { Agent } = await loadCursorSdk();
+      if (useHttp1) await ensureHttp1Configured();
       return (await Agent.resume(agentId, options as never)) as unknown as AgentLike;
     },
   };
@@ -106,25 +157,29 @@ let cached: AgentBackend | undefined;
 export function loadAgentBackend(): AgentBackend {
   if (!cached) {
     const env = detectEnvironment();
-    const kind = resolveBackendKind(env);
-    const scriptPath = kind === "sidecar" ? resolveSidecarScript() : undefined;
-    // A user who explicitly opted out (OPENCODE_CURSOR_SIDECAR=0/false) has
-    // accepted the in-process behavior and should not be warned.
-    const override = process.env["OPENCODE_CURSOR_SIDECAR"];
-    const optedOut = override === "0" || override === "false";
-    if (env.isBun && !optedOut && (kind === "in-process" || !scriptPath)) {
+    const transport = resolveTransport(env);
+    const scriptPath = transport === "sidecar" ? resolveSidecarScript() : undefined;
+    if (transport === "sidecar" && (!env.nodePath || !scriptPath)) {
+      // Explicit sidecar request we can't satisfy: fall back loudly.
       console.error(
-        "[opencode-cursor] Running under Bun without a usable Node sidecar " +
-          `(node: ${env.nodePath ?? "not found"}, script: ${scriptPath ?? "not found"}): ` +
-          "Cursor native tool calls may fail (Bun node:http2 incompatibility). " +
-          "Install Node.js to enable the sidecar, or set OPENCODE_CURSOR_SIDECAR=0 " +
-          "to silence this warning.",
+        "[opencode-cursor] Node sidecar requested but unavailable " +
+          `(node: ${env.nodePath ?? "not found"}, script: ${scriptPath ?? "not found"}); ` +
+          "falling back to in-process HTTP/1.1 transport.",
+      );
+      cached = inProcessBackend(true);
+      return cached;
+    }
+    if (transport === "http2-direct" && env.isBun) {
+      console.error(
+        "[opencode-cursor] http2-direct under Bun: Cursor streams may fail " +
+          "(Bun node:http2 incompatibility, oven-sh/bun#31499). " +
+          "Set OPENCODE_CURSOR_TRANSPORT=http1 (recommended) or sidecar.",
       );
     }
     cached =
-      kind === "sidecar" && env.nodePath && scriptPath
+      transport === "sidecar" && env.nodePath && scriptPath
         ? sidecarBackend(env.nodePath, scriptPath)
-        : inProcessBackend();
+        : inProcessBackend(transport === "http1");
   }
   return cached;
 }

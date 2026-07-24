@@ -14,8 +14,11 @@ export interface DelegateParams {
 	mode?: AgentModeOption;
 	/** Convenience for the Cursor `thinking` model param (e.g. "high"). */
 	thinking?: string;
-	/** Working directory the local agent operates in. */
-	cwd: string;
+	/**
+	 * Working directory the local agent operates in. An array supplies
+	 * additional workspace roots, giving the agent multi-root access.
+	 */
+	cwd: string | string[];
 	/** Run the agent's tools inside Cursor's sandbox. */
 	sandbox?: boolean;
 	/** Resume a specific Cursor agent by id instead of creating a fresh one. */
@@ -89,6 +92,8 @@ export async function runDelegate(
 				case "reasoning-delta":
 					reasoning.push(event.text);
 					break;
+				case "tool-input-partial":
+					break;
 				case "tool-call":
 					toolActivity.push({ name: event.name, isError: false });
 					break;
@@ -98,6 +103,9 @@ export async function runDelegate(
 					break;
 				case "usage":
 					usage = event.usage;
+					break;
+				case "reasoning-complete":
+				case "compaction":
 					break;
 				case "finish":
 					// The aggregated result text; prefer it when deltas were absent.

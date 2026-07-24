@@ -486,6 +486,7 @@ describe("cursorEventsToStream", () => {
 		expect(types(parts)).toContain("text-end");
 		const finish = parts.find((p) => p.type === "finish");
 		expect(finish).toMatchObject({ finishReason: { unified: "error" } });
+		expect(parts.filter((p) => p.type === "finish")).toHaveLength(1);
 	});
 
 	it("uses empty usage when no usage event arrives", async () => {
@@ -1186,6 +1187,27 @@ describe("native tool mapping (blocks)", () => {
 		});
 	});
 
+	it("folds semSearch results into readable output", async () => {
+		const { call, result } = await mapTool(
+			"semSearch",
+			{ query: "auth middleware" },
+			{
+				status: "success",
+				value: {
+					results: "src/auth.ts: middleware()\nsrc/web.ts: use(auth)",
+				},
+			},
+		);
+		// No native counterpart — stays a prefixed `cursor_semSearch` block.
+		expect(call).toMatchObject({ toolName: "cursor_semSearch" });
+		expect(result).toMatchObject({ toolName: "cursor_semSearch" });
+		expect(foldedResult(result)).toMatchObject({
+			title: "auth middleware",
+			metadata: { matches: 2, truncated: false },
+		});
+		expect(foldedResult(result).output).toContain("middleware()");
+	});
+
 	it("formats Cursor `delete` as a one-line `cursor_delete` confirmation", async () => {
 		const { call, result } = await mapTool(
 			"delete",
@@ -1358,6 +1380,120 @@ describe("createPlan mapping", () => {
 	});
 });
 
+describe("tool-input streaming (partial-tool-call)", () => {
+	it("streams tool-input partials then closes before tool-call", async () => {
+		const events: CursorEvent[] = [
+			{
+				type: "tool-input-partial",
+				id: "c1",
+				name: "shell",
+				input: { command: "ls" },
+			},
+			{
+				type: "tool-input-partial",
+				id: "c1",
+				name: "shell",
+				input: { command: "ls -la" },
+			},
+			{
+				type: "tool-call",
+				id: "c1",
+				name: "shell",
+				input: { command: "ls -la" },
+			},
+			{
+				type: "tool-result",
+				id: "c1",
+				name: "shell",
+				result: {
+					status: "success",
+					value: {
+						exitCode: 0,
+						stdout: "ok",
+						stderr: "",
+						signal: "",
+						executionTime: 1,
+					},
+				},
+				isError: false,
+			},
+			{ type: "finish", text: "done" },
+		];
+		const typeList = types(await collect(cursorEventsToStream(gen(events))));
+		const start = typeList.indexOf("tool-input-start");
+		const end = typeList.indexOf("tool-input-end");
+		const call = typeList.indexOf("tool-call");
+		expect(start).toBeGreaterThanOrEqual(0);
+		expect(end).toBeGreaterThan(start);
+		expect(call).toBeGreaterThan(end);
+		// deltas carry the arg-JSON suffix, not the full payload twice
+		const deltas = (await collect(cursorEventsToStream(gen(events)))).filter(
+			(p) => p.type === "tool-input-delta",
+		);
+		const joined = deltas.map((d) => (d as { delta: string }).delta).join("");
+		expect(joined).toContain("ls -la");
+	});
+
+	it("streams createPlan partials as live text suffixes", async () => {
+		const events: CursorEvent[] = [
+			{
+				type: "tool-input-partial",
+				id: "p1",
+				name: "createPlan",
+				input: { plan: "# Plan\nstep 1" },
+			},
+			{
+				type: "tool-call",
+				id: "p1",
+				name: "createPlan",
+				input: { plan: "# Plan\nstep 1\nstep 2" },
+			},
+			{
+				type: "tool-result",
+				id: "p1",
+				name: "createPlan",
+				result: { status: "success", value: {} },
+				isError: false,
+			},
+			{ type: "finish", text: "# Plan\nstep 1\nstep 2" },
+		];
+		const parts = await collect(cursorEventsToStream(gen(events)));
+		const text = parts
+			.filter((p) => p.type === "text-delta")
+			.map((p) => (p as { delta: string }).delta)
+			.join("");
+		expect(text).toContain("step 1");
+		expect(text).toContain("step 2");
+		// plan tool itself never becomes a block
+		expect(
+			parts.some(
+				(p) =>
+					(p.type === "tool-call" || p.type === "tool-result") &&
+					(p as { toolName?: string }).toolName?.includes("createPlan"),
+			),
+		).toBe(false);
+	});
+
+	it("dangling partial input streams are closed with a synthetic error", async () => {
+		const events: CursorEvent[] = [
+			{
+				type: "tool-input-partial",
+				id: "c9",
+				name: "shell",
+				input: { command: "ls" },
+			},
+			{ type: "finish" },
+		];
+		const parts = await collect(cursorEventsToStream(gen(events)));
+		const typeList = types(parts);
+		expect(typeList).toContain("tool-input-end");
+		const result = parts.find((p) => p.type === "tool-result") as
+			| { isError?: boolean }
+			| undefined;
+		expect(result?.isError).toBe(true);
+	});
+});
+
 describe("mapUsage", () => {
 	it("maps Cursor usage into the V3 nested shape", () => {
 		expect(
@@ -1376,5 +1512,40 @@ describe("mapUsage", () => {
 			},
 			outputTokens: { total: 20, text: undefined, reasoning: undefined },
 		});
+	});
+});
+
+describe("finish providerMetadata", () => {
+	it("attaches thinking duration + compaction count to finish providerMetadata", async () => {
+		const events: CursorEvent[] = [
+			{ type: "reasoning-delta", text: "thinking…" },
+			{ type: "reasoning-complete", durationMs: 1234 },
+			{ type: "compaction" },
+			{ type: "text-delta", text: "answer" },
+			{ type: "finish", text: "answer" },
+		];
+		const parts = await collect(cursorEventsToStream(gen(events)));
+		const finish = parts.find((p) => p.type === "finish") as {
+			providerMetadata?: Record<string, Record<string, unknown>>;
+		};
+		expect(finish.providerMetadata?.["cursor"]?.["thinkingDurationMs"]).toBe(
+			1234,
+		);
+		expect(finish.providerMetadata?.["cursor"]?.["compactions"]).toBe(1);
+	});
+
+	it("omits providerMetadata when nothing to report", async () => {
+		const parts = await collect(
+			cursorEventsToStream(
+				gen([
+					{ type: "text-delta", text: "hi" },
+					{ type: "finish", text: "hi" },
+				]),
+			),
+		);
+		const finish = parts.find((p) => p.type === "finish") as {
+			providerMetadata?: unknown;
+		};
+		expect(finish.providerMetadata).toBeUndefined();
 	});
 });

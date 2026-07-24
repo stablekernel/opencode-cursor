@@ -20,6 +20,7 @@ export interface AgentSendOptions {
   mode?: string;
   onDelta?: (input: { update: Record<string, unknown> & { type: string } }) => void;
   local?: { force?: boolean };
+  idempotencyKey?: string;
 }
 
 /** Minimal agent surface the provider consumes (subset of the SDK's SDKAgent). */
@@ -50,9 +51,20 @@ interface Pending {
 }
 
 function reviveError(error: unknown): Error {
-  const e = (error ?? {}) as { name?: string; message?: string };
+  const e = (error ?? {}) as {
+    name?: string;
+    message?: string;
+    status?: number;
+    code?: string;
+    isRetryable?: boolean;
+    helpUrl?: string;
+  };
   const err = new Error(e.message ?? "sidecar error");
   if (e.name) err.name = e.name;
+  if (e.status !== undefined) (err as { status?: number }).status = e.status;
+  if (e.code !== undefined) (err as { code?: string }).code = e.code;
+  if (e.isRetryable !== undefined) (err as { isRetryable?: boolean }).isRetryable = e.isRetryable;
+  if (e.helpUrl !== undefined) (err as { helpUrl?: string }).helpUrl = e.helpUrl;
   return err;
 }
 
@@ -238,6 +250,7 @@ export class SidecarClient {
         message,
         ...(options?.mode ? { mode: options.mode } : {}),
         ...(options?.local?.force ? { force: true } : {}),
+        ...(options?.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
       },
       {
         onUpdate: (update) => options?.onDelta?.({ update }),

@@ -4,6 +4,56 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.0-next.0] — 2026-07-23
+
+Native-experience overhaul: in-process HTTP/1.1 transport under Bun, typed-error
+reliability, and full streaming fidelity.
+
+- **HTTP/1.1 in-process transport is now the default under Bun; the Node sidecar
+  is a fallback.** opencode runs on Bun, whose `node:http2` client breaks the
+  Cursor SDK's streaming RPC (`NGHTTP2_FRAME_SIZE_ERROR`; oven-sh/bun#31499).
+  The SDK now runs in-process over HTTP/1.1 + SSE
+  (`Cursor.configure({ local: { useHttp1ForAgent: true } })`) — no Node child
+  process required. Three transports are selectable via the `transport` provider
+  option or `OPENCODE_CURSOR_TRANSPORT`: `http1` (Bun default), `http2-direct`
+  (Node default), and `sidecar` (rollback). Resolution order is option →
+  `OPENCODE_CURSOR_TRANSPORT` → legacy `OPENCODE_CURSOR_SIDECAR`
+  (`1`→`sidecar`, `0`→`http2-direct`) → per-runtime default. Roll back with
+  `OPENCODE_CURSOR_TRANSPORT=sidecar`.
+- **Typed error classification with per-kind recovery.** SDK errors are
+  classified into `agent-not-found`, `agent-busy`, `rate-limit`, `network`,
+  `auth`, `config`, and `unknown` (by error `name`/`status`/`code`, never
+  `instanceof` — sidecar-forwarded errors arrive as plain objects). `agent-busy`
+  resends once with `local.force`; `rate-limit`/`network` retry with bounded
+  backoff on the same agent; `auth`/`config` fail fast.
+- **Idempotent resends.** Every (re)send of a turn carries an idempotency key so
+  a retry is a server-side dedupe, not a duplicate turn.
+- **Stream watchdog.** A wedged run that streams nothing is bounded by
+  `OPENCODE_CURSOR_STALL_MS` (default `60000`): a pre-first-event stall cancels
+  and force-resends once; a stall after partial output surfaces a terminal error
+  rather than re-emitting the already-yielded prefix. Set to `0` to disable.
+- **Fixed: silent-replay turns dropped their token usage.** A multi-message
+  interjection replays leading messages silently and streams only the last; the
+  usage from the silent turns is now summed into the visible turn's reported
+  usage instead of being lost.
+- **Live tool-input streaming.** Cursor's `partial-tool-call` updates are bridged
+  to incremental tool-input parts, so tool arguments stream as they arrive
+  instead of appearing all at once when the call completes.
+- **Thinking duration and compaction metadata.** `thinking-completed` carries the
+  reasoning duration, and Cursor's summary/compaction updates are surfaced as
+  compaction events in the stream.
+- **SDK-authoritative model variants.** Variant construction prefers the SDK's
+  own `displayName`/`isDefault` metadata rather than deriving it locally.
+- **`autoReview` option and multi-root delegation.** New `autoReview` provider
+  option gates tool calls through Cursor's classifier-backed Auto review
+  (best-effort, not a security boundary). `cursor_delegate` gains
+  `additionalCwds` to combine extra workspace roots into a multi-root agent
+  workspace.
+- **Node floor raised to >=22.13** (`engines.node`, from >=22.0), and only
+  needed for the `sidecar` fallback transport.
+- **Dependency bumps.** `@cursor/sdk` 1.0.23→1.0.24, `@opencode-ai/plugin`
+  1.17.14→1.18.4, `@opencode-ai/sdk` 1.17.14→1.18.4.
+
 ## [0.4.7-next.0] — 2026-07-17
 
 - **Fixed: subagents silently ran Cursor's server-side `fast` default (e.g.

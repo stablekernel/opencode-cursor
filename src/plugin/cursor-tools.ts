@@ -156,6 +156,10 @@ export function buildCursorTools(deps: CursorToolDeps): Record<string, ToolDefin
           .string()
           .optional()
           .describe("Working directory (defaults to the session directory)."),
+        additionalCwds: s
+          .array(s.string())
+          .optional()
+          .describe("Extra workspace roots; combined with cwd into a multi-root agent workspace."),
         sandbox: s.boolean().optional().describe("Run the agent's tools in Cursor's sandbox."),
         agentId: s
           .string()
@@ -176,11 +180,12 @@ export function buildCursorTools(deps: CursorToolDeps): Record<string, ToolDefin
 
         let result;
         try {
+          const baseCwd = args.cwd ?? context.directory ?? deps.defaultCwd();
           result = await runDelegate({
             apiKey,
             prompt: args.prompt,
             model: args.model,
-            cwd: args.cwd ?? context.directory ?? deps.defaultCwd(),
+            cwd: args.additionalCwds?.length ? [baseCwd, ...args.additionalCwds] : baseCwd,
             ...(args.mode ? { mode: args.mode } : {}),
             ...(args.thinking ? { thinking: args.thinking } : {}),
             ...(args.sandbox !== undefined ? { sandbox: args.sandbox } : {}),
