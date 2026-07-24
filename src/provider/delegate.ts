@@ -89,6 +89,8 @@ export async function runDelegate(
 				case "reasoning-delta":
 					reasoning.push(event.text);
 					break;
+				case "tool-input-partial":
+					break;
 				case "tool-call":
 					toolActivity.push({ name: event.name, isError: false });
 					break;

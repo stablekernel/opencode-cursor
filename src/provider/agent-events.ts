@@ -14,6 +14,7 @@ export interface CursorUsage {
 export type CursorEvent =
   | { type: "text-delta"; text: string }
   | { type: "reasoning-delta"; text: string }
+  | { type: "tool-input-partial"; id: string; name: string; input: unknown }
   | { type: "tool-call"; id: string; name: string; input: unknown }
   | { type: "tool-result"; id: string; name: string; result: unknown; isError: boolean }
   | { type: "usage"; usage: CursorUsage }
@@ -124,6 +125,14 @@ export async function* streamAgentTurn(
       case "summary":
       case "summary-completed":
         push({ type: "compaction" });
+        break;
+      case "partial-tool-call":
+        push({
+          type: "tool-input-partial",
+          id: String(update.callId),
+          name: toolDisplayName(update.toolCall),
+          input: update.toolCall?.args ?? {},
+        });
         break;
       case "tool-call-started":
         push({

@@ -756,10 +756,70 @@ interface BlockToolState {
 	open: Map<string, OpenToolCall>;
 	pendingEdits: Map<string, string>;
 	dropped: Set<string>;
+	partials: Map<string, { toolName: string; serialized: string }>;
+	planText: Map<string, string>;
 }
 
 function newBlockToolState(): BlockToolState {
-	return { open: new Map(), pendingEdits: new Map(), dropped: new Set() };
+	return {
+		open: new Map(),
+		pendingEdits: new Map(),
+		dropped: new Set(),
+		partials: new Map(),
+		planText: new Map(),
+	};
+}
+
+/**
+ * Resolve a Cursor tool name (+ call args) to the FINAL emitted tool name
+ * (native registered tool via adapter, or `cursor_*` generic) plus the adapter
+ * used. Factored out of {@link blockToolCallParts} so the live-input streaming
+ * path can start a `tool-input-start` under the same name the eventual
+ * `tool-call` will use.
+ */
+function resolveToolName(
+	name: string,
+	input: unknown,
+): { toolName: string; adapter?: NativeToolAdapter } {
+	const adapter = resolveAdapter(name, input);
+	return {
+		toolName: adapter?.tool ?? blockToolName(name),
+		...(adapter ? { adapter } : {}),
+	};
+}
+
+/**
+ * Parts to emit for a blocks-mode `tool-input-partial` event: a
+ * `tool-input-start` on the first partial for an id, then a `tool-input-delta`
+ * carrying the JSON-suffix beyond what was already streamed. Kill-switch:
+ * `OPENCODE_CURSOR_TOOL_INPUT_STREAM=0` disables live input streaming entirely.
+ */
+function blockToolInputPartialParts(
+	id: string,
+	name: string,
+	input: unknown,
+	state: BlockToolState,
+): BlockToolPart[] {
+	if (process.env["OPENCODE_CURSOR_TOOL_INPUT_STREAM"] === "0") return [];
+	const serialized = safeJsonString(input);
+	const prev = state.partials.get(id);
+	const toolName = prev?.toolName ?? resolveToolName(name, input).toolName;
+	state.partials.set(id, { toolName, serialized });
+	const parts: BlockToolPart[] = [];
+	if (!prev)
+		parts.push({
+			type: "tool-input-start",
+			id,
+			toolName,
+			providerExecuted: true,
+			dynamic: true,
+		} as BlockToolPart);
+	const delta =
+		prev && serialized.startsWith(prev.serialized)
+			? serialized.slice(prev.serialized.length)
+			: serialized;
+	if (delta) parts.push({ type: "tool-input-delta", id, delta } as BlockToolPart);
+	return parts;
 }
 
 /** Parts to emit for a blocks-mode `tool-call` event (edits are buffered). */
@@ -853,6 +913,23 @@ function blockDanglingParts(state: BlockToolState): BlockToolPart[] {
 		parts.push(toolResultObj(id, EDIT_TOOL_NAME, DANGLING_TOOL_RESULT, true));
 	}
 	state.pendingEdits.clear();
+	// Partial input streams whose tool-call never arrived (run died mid-stream):
+	// close the started input, then emit a valid call+result pair so the block
+	// isn't left dangling (invariant: exactly one terminal per started call).
+	for (const [id, partial] of state.partials) {
+		parts.push({ type: "tool-input-end", id } as BlockToolPart);
+		let args: unknown = {};
+		try {
+			args = JSON.parse(partial.serialized);
+		} catch {
+			args = {};
+		}
+		parts.push(nativeToolCall(id, partial.toolName, args));
+		parts.push(
+			nativeToolResult(id, partial.toolName, DANGLING_TOOL_RESULT, true),
+		);
+	}
+	state.partials.clear();
 	return parts;
 }
 
@@ -1005,22 +1082,61 @@ export function cursorEventsToStream(
 						case "reasoning-delta":
 							reasoningLine(event.text);
 							break;
-						case "tool-call":
+						case "tool-input-partial":
 							if (isCreatePlanTool(event.name)) {
-								const plan = createPlanContent(event.input);
-								if (plan) {
+								const plan = createPlanContent(event.input) ?? "";
+								const prevPlan = toolState.planText.get(event.id) ?? "";
+								if (plan.length > prevPlan.length) {
 									closeReasoning();
 									streamedText = true;
 									controller.enqueue({
 										type: "text-delta",
 										id: ensureText(),
-										delta: plan,
+										delta: plan.slice(prevPlan.length),
 									});
 								}
+								toolState.planText.set(event.id, plan);
+								toolState.dropped.add(event.id);
+								break;
+							}
+							if (toolDisplay === "blocks" && event.name !== EDIT_TOOL_NAME) {
+								const parts = blockToolInputPartialParts(
+									event.id,
+									event.name,
+									event.input,
+									toolState,
+								);
+								if (parts.length > 0) {
+									closeText();
+									closeReasoning();
+								}
+								for (const part of parts) controller.enqueue(part);
+							}
+							break;
+						case "tool-call":
+							if (isCreatePlanTool(event.name)) {
+								const plan = createPlanContent(event.input) ?? "";
+								const prevPlan = toolState.planText.get(event.id) ?? "";
+								if (plan.length > prevPlan.length) {
+									closeReasoning();
+									streamedText = true;
+									controller.enqueue({
+										type: "text-delta",
+										id: ensureText(),
+										delta: plan.slice(prevPlan.length),
+									});
+								}
+								toolState.planText.set(event.id, plan);
 								toolState.dropped.add(event.id);
 								break;
 							}
 							if (toolDisplay === "blocks") {
+								if (toolState.partials.delete(event.id)) {
+									controller.enqueue({
+										type: "tool-input-end",
+										id: event.id,
+									} as LanguageModelV3StreamPart);
+								}
 								const parts = blockToolCallParts(
 									event.id,
 									event.name,
@@ -1161,6 +1277,10 @@ export async function cursorEventsToContent(
 					break;
 				case "reasoning-delta":
 					reasoning += event.text;
+					break;
+				case "tool-input-partial":
+					// Non-streaming path ignores partials; the final tool-call carries
+					// the full args.
 					break;
 				case "tool-call":
 					if (isCreatePlanTool(event.name)) {
