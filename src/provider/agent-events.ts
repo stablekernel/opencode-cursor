@@ -197,6 +197,9 @@ export async function* streamAgentTurn(
     )
       .then(async (run) => {
         runHolder.run = run;
+        // The signal may have fired while send() was in flight (before runHolder
+        // was populated, so onAbort had nothing to cancel); cancel now.
+        if (options.abortSignal?.aborted) void Promise.resolve(run.cancel()).catch(() => {});
         const result = await run.wait();
         if (debug) {
           console.error(

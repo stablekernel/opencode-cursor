@@ -259,6 +259,22 @@ describe("buildModelVariants", () => {
     expect(variants["turbo"]?.params).toEqual({ fast: "true", thinking: "high" });
   });
 
+  it("assigns distinct keys when three SDK variants slug to the same key", () => {
+    // Three displayNames that slugify identically must yield three distinct
+    // keys (key, key-2, key-3) via the collision counter — no variant lost.
+    const item = {
+      id: "m", displayName: "m",
+      parameters: [{ id: "thinking", values: [{ value: "low" }, { value: "high" }] }],
+      variants: [
+        { params: [{ id: "thinking", value: "low" }], displayName: "Deep Think" },
+        { params: [{ id: "thinking", value: "high" }], displayName: "Deep-Think" },
+        { params: [{ id: "thinking", value: "low" }], displayName: "Deep  Think!" },
+      ],
+    } as unknown as ModelListItem;
+    const variants = buildModelVariants(item);
+    expect(Object.keys(variants).sort()).toEqual(["deep-think", "deep-think-2", "deep-think-3"]);
+  });
+
   it("falls back to generated variants when SDK variants absent", () => {
     const item = {
       id: "m", displayName: "m",

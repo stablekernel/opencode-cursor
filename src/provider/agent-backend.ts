@@ -75,7 +75,7 @@ export function resolveTransport(env: BackendEnvironment): TransportKind {
   if (legacy === "1" || legacy === "true") {
     return env.nodePath ? "sidecar" : env.isBun ? "http1" : "http2-direct";
   }
-  if (legacy === "0" || legacy === "false") return "http2-direct";
+  if (legacy === "0" || legacy === "false") return env.isBun ? "http1" : "http2-direct";
   return env.isBun ? DEFAULT_BUN_TRANSPORT : "http2-direct";
 }
 

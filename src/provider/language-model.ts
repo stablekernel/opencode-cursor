@@ -369,6 +369,7 @@ export class CursorLanguageModel implements LanguageModelV3 {
 							{
 								mode,
 								abortSignal: options.abortSignal,
+								// Key intentionally diverges from the single-turn key: the multi-replay and single-turn branches are mutually exclusive.
 								idempotencyKey: sendIdempotencyKey(
 									sessionID,
 									{

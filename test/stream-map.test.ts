@@ -486,6 +486,7 @@ describe("cursorEventsToStream", () => {
 		expect(types(parts)).toContain("text-end");
 		const finish = parts.find((p) => p.type === "finish");
 		expect(finish).toMatchObject({ finishReason: { unified: "error" } });
+		expect(parts.filter((p) => p.type === "finish")).toHaveLength(1);
 	});
 
 	it("uses empty usage when no usage event arrives", async () => {

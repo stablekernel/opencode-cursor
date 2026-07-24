@@ -45,12 +45,13 @@ describe("resolveTransport", () => {
 		expect(resolveTransport(bunNoNode)).toBe("http1");
 	});
 
-	it("legacy OPENCODE_CURSOR_SIDECAR maps: 1 -> sidecar, 0 -> http2-direct", () => {
+	it("legacy OPENCODE_CURSOR_SIDECAR maps: 1 -> sidecar, 0 -> Bun http1 / Node http2-direct", () => {
 		delete process.env.OPENCODE_CURSOR_TRANSPORT;
 		process.env.OPENCODE_CURSOR_SIDECAR = "1";
 		expect(resolveTransport(bun)).toBe("sidecar");
 		process.env.OPENCODE_CURSOR_SIDECAR = "0";
-		expect(resolveTransport(bun)).toBe("http2-direct");
+		expect(resolveTransport(bun)).toBe("http1");
+		expect(resolveTransport(node)).toBe("http2-direct");
 	});
 
 	it("provider option setPreferredTransport beats env", () => {

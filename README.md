@@ -156,6 +156,7 @@ See [SECURITY.md](./SECURITY.md) for the full threat model.
 | `OPENCODE_CURSOR_TRANSPORT` | — | Force a transport: `http1` \| `http2-direct` \| `sidecar` — see [Transport](#transport) |
 | `OPENCODE_CURSOR_STALL_MS` | `60000` | Stream watchdog timeout (ms); `0` disables — see [Reliability](#reliability) |
 | `OPENCODE_CURSOR_SIDECAR` | — | Legacy: `1` maps to `sidecar`, `0` maps to `http2-direct` (superseded by `OPENCODE_CURSOR_TRANSPORT`) |
+| `OPENCODE_CURSOR_TOOL_INPUT_STREAM` | on | Set to `0` to disable live tool-input streaming (`tool-input-start`/`-delta`/`-end` parts) |
 
 ### Session reuse (`session`)
 

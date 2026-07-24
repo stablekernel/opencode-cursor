@@ -72,7 +72,9 @@ export function buildModelVariants(item: ModelListItem): Record<string, CursorVa
       const params: Record<string, string> = { ...defaults };
       for (const p of v.params ?? []) params[p.id] = p.value;
       const key = variantKey(v.displayName);
-      out[out[key] === undefined ? key : `${key}-2`] = { params };
+      let candidate = key;
+      for (let n = 2; out[candidate] !== undefined; n++) candidate = `${key}-${n}`;
+      out[candidate] = { params };
     }
     return out;
   }

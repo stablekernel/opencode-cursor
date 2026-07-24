@@ -93,7 +93,7 @@ export interface CursorProviderOptions {
 	/**
 	 * Transport for Cursor agent traffic: "http1" (in-process, Bun-safe),
 	 * "http2-direct" (in-process, Node only), "sidecar" (Node child, rollback).
-	 * Beats OPENCODE_CURSOR_TRANSPORT. Process-global: first provider wins.
+	 * Beats OPENCODE_CURSOR_TRANSPORT. Process-global: last provider to set it wins.
 	 */
 	transport?: "http1" | "http2-direct" | "sidecar";
 }

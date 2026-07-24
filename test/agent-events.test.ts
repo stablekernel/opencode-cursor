@@ -252,6 +252,47 @@ describe("sendAgentTurnSilently", () => {
 		await promise;
 		expect(cancelled).toBe(true);
 	});
+
+	it("streamAgentTurn cancels the run when abort fires during the in-flight send", async () => {
+		// Abort lands after send() is called but before runHolder.run is
+		// populated (onAbort has nothing to cancel). The post-assignment guard
+		// in startRun must still cancel the resolved run.
+		let cancelled = false;
+		const controller = new AbortController();
+		let releaseSend: (() => void) | undefined;
+		const agent = {
+			agentId: "agent-inflight-abort",
+			send: async (
+				_message: SDKUserMessage,
+				_sendOptions?: Record<string, unknown>,
+			) => {
+				// Hold send() in flight until the caller releases it (post-abort).
+				await new Promise<void>((resolve) => {
+					releaseSend = resolve;
+				});
+				const run: Partial<Run> = {
+					wait: async () => ({ status: "cancelled" }) as never,
+					cancel: async () => {
+						cancelled = true;
+					},
+				};
+				return run as Run;
+			},
+		} as unknown as AgentLike;
+
+		const promise = collect(
+			streamAgentTurn(agent, MESSAGE, {
+				mode: "agent",
+				abortSignal: controller.signal,
+			}),
+		);
+		// Abort while send() is still in flight, then let send() resolve.
+		await new Promise((r) => setTimeout(r, 5));
+		controller.abort();
+		releaseSend?.();
+		await promise;
+		expect(cancelled).toBe(true);
+	});
 });
 
 describe("streamAgentTurn MCP error surfacing", () => {
