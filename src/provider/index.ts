@@ -96,6 +96,13 @@ export interface CursorProviderOptions {
 	 * Beats OPENCODE_CURSOR_TRANSPORT. Process-global: last provider to set it wins.
 	 */
 	transport?: "http1" | "http2-direct" | "sidecar";
+	/**
+	 * `<available_skills>` catalogue text appended to the generated system rule,
+	 * listing mirrored skills so the Cursor agent can discover and load them on
+	 * demand. Seeded by the plugin's `config` hook from the resolved skill set.
+	 * When undefined, no skills section is appended.
+	 */
+	skillsCatalogue?: string;
 }
 
 /**
@@ -133,6 +140,9 @@ export function createCursor(options: CursorProviderOptions = {}): ProviderV3 {
 		session: options.session ?? "auto",
 		toolDisplay: options.toolDisplay ?? "blocks",
 		systemPrompt: options.systemPrompt ?? "rules",
+		...(options.skillsCatalogue
+			? { skillsCatalogue: options.skillsCatalogue }
+			: {}),
 	};
 
 	const notImplemented = (kind: string, modelId: string): never => {

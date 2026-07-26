@@ -10,6 +10,7 @@ coverage/
 # Local editor / agent tooling
 .opencode/
 .claude/
+.cursor/
 
 # Local-only dev config (never commit)
 opencode.json

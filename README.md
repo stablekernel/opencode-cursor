@@ -144,6 +144,8 @@ See [SECURITY.md](./SECURITY.md) for the full threat model.
 | `session` | `"auto"` | Session reuse strategy — see [Session reuse](#session-reuse-session) |
 | `forwardMcp` | `true` | Forward opencode's configured MCP servers to the Cursor agent |
 | `mcpServers` | — | Extra MCP servers (Cursor `McpServerConfig` shape); merged with forwarded ones |
+| `forwardSkills` | `true` | Mirror opencode's resolved skills into `.cursor/skills/` — see [Skills](#skills) |
+| `skills` | — | Manual skill override: `{ include?: string[], exclude?: string[] }` — see [Skills](#skills) |
 | `toolDisplay` | `"blocks"` | How Cursor's internal tool activity is shown — see [Tool display](#tool-display) |
 | `systemPrompt` | `"rules"` | How opencode's system prompt reaches the agent — see [System prompt](#system-prompt) |
 | `transport` | — | Cursor agent transport (`"http1"` \| `"http2-direct"` \| `"sidecar"`) — see [Transport](#transport) |
@@ -241,9 +243,77 @@ Disabled entries (`enabled: false`) are skipped. Remote servers requiring OAuth 
 shareable `clientId` are also skipped (a one-time toast says which). Disable forwarding with
 `forwardMcp: false`.
 
-> **Note:** This forwards MCP **servers**. opencode's own skills and subagents are not exposed to
-> the Cursor agent. To load your local Cursor skills/rules, use
-> `settingSources: ["project","user"]`.
+> **Note:** This forwards MCP **servers**. opencode's skills are mirrored into
+> `.cursor/skills/` automatically — see [Skills](#skills).
+
+## Skills
+
+With `forwardSkills: true` (default), the plugin mirrors opencode's resolved
+skills into `<cwd>/.cursor/skills/` — a git-ignored directory that Cursor
+discovers natively when the `project` settings layer is loaded. This works for
+both the primary agent and any Cursor sub-agent, because the mirror is written
+at plugin init (before any turn) and `settingSources` lives on the provider
+config (which survives the sub-agent model-options drop).
+
+The mirror includes:
+
+- **Project skills** from `.opencode/skills/`, `.opencode/skill/`,
+  `.claude/skills/`, `.agents/skills/` (walked up to the git worktree root).
+- **Global skills** from `~/.config/opencode/skills/` and `~/.config/opencode/skill/`,
+  `~/.claude/skills/`, `~/.agents/skills/`, `~/.opencode/skills/` and `~/.opencode/skill/`.
+- **Configured paths** from `config.skills.paths` in your `opencode.json` — additional
+  directories scanned at the lowest priority (project and standard global locations
+  win on duplicate ids). `~/` prefixes are expanded to your home directory; relative
+  paths are resolved against the project directory.
+- **Supporting files** alongside each `SKILL.md` (preserving relative paths).
+- An `<available_skills>` catalogue appended to the generated system rule,
+  listing each skill's id and description so the Cursor agent can load them on
+  demand.
+
+> **Note:** `config.skills.urls` (HTTP skill catalogs) are not yet supported by
+> the mirror. If you rely on URL-sourced skills, they will not appear in
+> `.cursor/skills/`.
+
+### Permission filtering
+
+Skills are filtered through opencode's live `permission` config before
+mirroring:
+
+- **`allow`** (default): included in the mirror.
+- **`deny`**: excluded entirely.
+- **`ask`**: excluded — the ask prompt can't be enforced across the Cursor
+  boundary. The plugin logs which skills were withheld and why.
+
+### Manual override
+
+```json
+{
+  "provider": {
+    "cursor": {
+      "options": {
+        "skills": {
+          "include": ["my-skill", "other-skill"],
+          "exclude": ["internal-*"]
+        }
+      }
+    }
+  }
+}
+```
+
+`include` keeps only the listed skills (and overrides `deny` permission — the
+user explicitly asked for them). `exclude` always drops the listed skills.
+
+### Limitations
+
+- A user-owned `.cursor/skills/<id>/SKILL.md` (without the `generated:
+  opencode-cursor` sentinel) is never overwritten or deleted.
+- Individual files larger than 1 MB are skipped (the rest of the skill is still
+  mirrored). Total mirror size is capped at 10 MB.
+- `cursor_delegate` with a `cwd` different from the session directory does not
+  mirror skills into that cwd (but does pass `settingSources: ["project"]` so
+  any pre-existing `.cursor/skills/` there still loads).
+- `cursor_cloud_agent` targets a remote repo and does not inherit skills.
 
 ## Delegation tools
 
@@ -257,7 +327,9 @@ are gated by opencode's `permission` config:
 ### `cursor_delegate` (local)
 
 Runs one Cursor turn as a permission-gated tool call. Your primary opencode model hands off a
-discrete subtask and gets the result back.
+discrete subtask and gets the result back. The delegate passes `settingSources: ["project"]` so
+any pre-existing `.cursor/skills/` in the delegate's cwd loads (skills are not mirrored into a
+non-session cwd — see [Skills limitations](#limitations)).
 
 | Arg | Required | Meaning |
 | --- | --- | --- |

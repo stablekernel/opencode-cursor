@@ -57,6 +57,10 @@ function isGenerated(content: string): boolean {
  * instructions reach the agent without being flattened into the untrusted
  * user-message transcript (which injection-hardened models reject).
  *
+ * When `skillsCatalogue` is provided, it is appended to the rule body as an
+ * `<available_skills>` section so the Cursor agent knows which skills are
+ * mirrored on disk and can load them on demand.
+ *
  * The file carries a generated-by sentinel; a pre-existing sentinel-less file
  * is treated as user-owned and never overwritten ("blocked"). An existing
  * generated rule with identical content is left as-is ("unchanged") to keep
@@ -66,11 +70,13 @@ function isGenerated(content: string): boolean {
 export function writeSystemRule(
 	cwd: string,
 	systemText: string,
+	skillsCatalogue?: string,
 ): SystemRuleWrite {
-	if (!systemText) return "empty";
+	if (!systemText && !skillsCatalogue) return "empty";
 	const dir = join(cwd, RULES_DIR);
 	const path = join(dir, RULE_FILE);
-	const body = `---\nalwaysApply: true\n${SENTINEL}\n---\n\n${systemText}\n`;
+	const sections = [systemText, skillsCatalogue].filter(Boolean).join("\n\n");
+	const body = `---\nalwaysApply: true\n${SENTINEL}\n---\n\n${sections}\n`;
 	const existing = existsSync(path) ? readFileSync(path, "utf8") : undefined;
 	if (existing !== undefined) {
 		if (!isGenerated(existing)) return "blocked";
@@ -135,9 +141,10 @@ export function resolveSystemDelivery(options: {
 	settingSources: SettingSource[] | undefined;
 	cwd: string;
 	systemText: string;
+	skillsCatalogue?: string;
 	warn: (message: string) => void;
 }): SystemDelivery {
-	const { mode, settingSources, cwd, systemText, warn } = options;
+	const { mode, settingSources, cwd, systemText, skillsCatalogue, warn } = options;
 	if (mode !== "rules") return { mode, settingSources };
 	if (settingSources && !settingSources.includes("project")) {
 		warn(
@@ -147,7 +154,7 @@ export function resolveSystemDelivery(options: {
 	}
 	let result: SystemRuleWrite;
 	try {
-		result = writeSystemRule(cwd, systemText);
+		result = writeSystemRule(cwd, systemText, skillsCatalogue);
 	} catch (error) {
 		warn(
 			`failed to write .cursor/rules/${RULE_FILE} (${error instanceof Error ? error.message : String(error)}); delivering the system prompt inline ("message" mode) for this turn.`,

@@ -14,6 +14,16 @@ import { buildCursorTools } from "./cursor-tools.js";
 import { warnIfStale } from "../version-check.js";
 import { removeSystemRule } from "../provider/system-rule.js";
 import {
+	writeSkillMirror,
+	removeSkillMirror,
+	buildSkillsCatalogue,
+} from "../provider/skill-mirror.js";
+import {
+	resolveSkills,
+	skillSetHash,
+	type SkillFilterOptions,
+} from "../plugin/skill-discovery.js";
+import {
 	clearSubagentBridge,
 	setSubagentBridge,
 } from "../provider/subagent-bridge.js";
@@ -66,6 +76,11 @@ export const CursorPlugin: Plugin = async (input) => {
 	let resolvedCwd = directory ?? process.cwd();
 	let forwardMcp = true;
 	let userMcp: Record<string, McpServerConfig> = {};
+	// Skill forwarding state, mirroring the MCP forwarding pattern.
+	let forwardSkills = true;
+	let skillFilterOptions: SkillFilterOptions | undefined;
+	let lastSkillHash = "";
+	let currentSkillsCatalogue = "";
 	// OAuth servers we've already warned about, so the toast fires once per
 	// server rather than on every turn.
 	const warnedOAuth = new Set<string>();
@@ -138,13 +153,51 @@ export const CursorPlugin: Plugin = async (input) => {
 				if (Object.keys(params).length > 0) modelParamDefaults[item.id] = params;
 			}
 
-			// One canonical cwd for the provider's rule write and our dispose
-			// cleanup: an explicit user option wins, else the plugin directory.
-			const optionCwd = existingOptions["cwd"];
-			resolvedCwd =
-				(typeof optionCwd === "string" ? optionCwd : undefined) ??
-				directory ??
-				process.cwd();
+		// One canonical cwd for the provider's rule write and our dispose
+		// cleanup: an explicit user option wins, else the plugin directory.
+		const optionCwd = existingOptions["cwd"];
+		resolvedCwd =
+			(typeof optionCwd === "string" ? optionCwd : undefined) ??
+			directory ??
+			process.cwd();
+
+		// Forward opencode's resolved skills (both project and global scope) to
+		// the Cursor agent by mirroring them into `<cwd>/.cursor/skills/`. Cursor
+		// discovers these natively when the `project` settings layer is loaded.
+		// Opt out via `provider.cursor.options.forwardSkills: false`. Manual
+		// include/exclude override via `provider.cursor.options.skills`.
+		forwardSkills = existingOptions["forwardSkills"] !== false;
+		const skillsOpt = existingOptions["skills"] as
+			| { include?: string[]; exclude?: string[] }
+			| undefined;
+		skillFilterOptions = skillsOpt;
+
+		if (forwardSkills) {
+			try {
+				const resolved = resolveSkills(
+					resolvedCwd,
+					config as Config | undefined,
+					skillFilterOptions,
+				);
+				writeSkillMirror(resolvedCwd, resolved.skills, (msg) =>
+					console.warn(`[cursor] ${msg}`),
+				);
+				currentSkillsCatalogue = buildSkillsCatalogue(resolved.skills) ?? "";
+				lastSkillHash = skillSetHash(resolved.skills);
+				if (resolved.withheld.length > 0) {
+					const summary = resolved.withheld
+						.map((w) => `${w.id} (${w.reason})`)
+						.join(", ");
+					console.warn(
+						`[cursor] Skills withheld from mirror: ${summary}`,
+					);
+				}
+			} catch (error) {
+				console.warn(
+					`[cursor] Skill mirror failed: ${error instanceof Error ? error.message : String(error)}. Skills will not be available to the Cursor agent this session.`,
+				);
+			}
+		}
 
 			config.provider[PROVIDER_ID] = {
 				name: "Cursor",
@@ -156,6 +209,9 @@ export const CursorPlugin: Plugin = async (input) => {
 					...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
 					...(Object.keys(modelParamDefaults).length > 0
 						? { modelParamDefaults }
+						: {}),
+					...(currentSkillsCatalogue
+						? { skillsCatalogue: currentSkillsCatalogue }
 						: {}),
 				},
 				models: { ...toOpencodeModels(models), ...(existing.models ?? {}) },
@@ -234,7 +290,39 @@ export const CursorPlugin: Plugin = async (input) => {
 					}
 				} catch {
 					// Keep the static snapshot; live forwarding is best-effort.
+			}
+		}
+
+			// Re-sync the skill mirror from opencode's *live* state so skills
+			// added/removed mid-session reach the Cursor agent on the next turn.
+			// Hash the resolved skill set and skip the write when unchanged.
+			if (forwardSkills) {
+				if (client) {
+					try {
+						const query = directory ? { query: { directory } } : undefined;
+						const cfgRes = await client.config.get(query);
+						const liveConfig = cfgRes?.data as Config | undefined;
+						const resolved = resolveSkills(
+							resolvedCwd,
+							liveConfig,
+							skillFilterOptions,
+						);
+						const hash = skillSetHash(resolved.skills);
+						if (hash !== lastSkillHash) {
+							writeSkillMirror(resolvedCwd, resolved.skills, (msg) =>
+								console.warn(`[cursor] ${msg}`),
+							);
+							currentSkillsCatalogue =
+								buildSkillsCatalogue(resolved.skills) ?? "";
+							lastSkillHash = hash;
+						}
+					} catch {
+						// Keep the existing mirror; live re-sync is best-effort.
+					}
 				}
+				// Always override the startup snapshot, including with an empty
+				// string when all skills were removed or withheld.
+				output.options["skillsCatalogue"] = currentSkillsCatalogue;
 			}
 		},
 
@@ -269,11 +357,12 @@ export const CursorPlugin: Plugin = async (input) => {
 		},
 
 		dispose: async () => {
-			// Best-effort: drop the generated system-prompt rule so it doesn't
-			// linger in the user's workspace / Cursor IDE after the session ends.
-			// Uses the same canonical cwd the provider wrote to; sentinel-guarded,
-			// so a user-owned opencode.mdc is never deleted.
+			// Best-effort: drop the generated system-prompt rule and skill mirror
+			// so they don't linger in the user's workspace / Cursor IDE after the
+			// session ends. Uses the same canonical cwd the provider wrote to;
+			// sentinel-guarded, so user-owned files are never deleted.
 			removeSystemRule(resolvedCwd);
+			removeSkillMirror(resolvedCwd);
 			clearSubagentBridge();
 		},
 	};

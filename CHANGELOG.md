@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- **Skills bridge: opencode skills are now mirrored into `.cursor/skills/` for
+  the Cursor agent.** Both project-scoped and global skills are discovered
+  (matching opencode's resolution order: `.opencode/skills/`, `.claude/skills/`,
+  `.agents/skills/`, walked up to the git worktree root, plus global
+  `~/.config/opencode/skills/` etc.), filtered through opencode's `permission`
+  config, and materialised as a git-ignored mirror with a `generated:
+  opencode-cursor` sentinel. An `<available_skills>` catalogue is appended to
+  the generated system rule so the Cursor agent can discover and load skills on
+  demand. Works for the primary agent, Cursor sub-agents, and `cursor_delegate`
+  (which passes `settingSources: ["project"]`). `ask`-permissioned skills are
+  withheld (the ask prompt can't cross the Cursor boundary). Opt out with
+  `forwardSkills: false`; manual override with `skills: { include, exclude }`.
+  User-owned `.cursor/skills/<id>/` directories are never overwritten.
+  `config.skills.paths` directories are also scanned (lowest priority,
+  first-wins on duplicate ids). `config.skills.urls` (HTTP catalogs) are not
+  yet supported.
+
 ## [0.6.1] — 2026-07-24
 
 - **Fixed: reasoning/thinking variants showed as meaningless numbered entries for

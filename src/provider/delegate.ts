@@ -1,4 +1,4 @@
-import type { AgentModeOption } from "@cursor/sdk";
+import type { AgentModeOption, SettingSource } from "@cursor/sdk";
 import type { CursorUsage } from "./agent-events.js";
 import { streamAgentTurn } from "./agent-events.js";
 import { resolveControls } from "./controls.js";
@@ -25,6 +25,12 @@ export interface DelegateParams {
 	agentId?: string;
 	/** Cancels the run when aborted (wired to the tool's abort signal). */
 	abortSignal?: AbortSignal;
+	/**
+	 * Cursor settings layers to load from disk. When omitted, defaults to
+	 * `["project"]` so the delegate picks up `.cursor/skills/` and other
+	 * project-level config from its cwd. Pass an explicit array to override.
+	 */
+	settingSources?: SettingSource[];
 }
 
 export interface DelegateToolActivity {
@@ -67,6 +73,10 @@ export async function runDelegate(
 		modelSelection,
 		mode,
 		cwd: params.cwd,
+		// Default to the "project" settings layer so the delegate picks up
+		// `.cursor/skills/` and other project-level config from its cwd. An
+		// explicit `settingSources` from the caller overrides this default.
+		settingSources: params.settingSources ?? ["project"],
 		...(params.sandbox !== undefined ? { sandbox: params.sandbox } : {}),
 		...(params.agentId ? { resumeAgentId: params.agentId } : {}),
 	});

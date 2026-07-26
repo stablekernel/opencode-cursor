@@ -95,6 +95,12 @@ export interface CursorModelConfig {
 	 * {@link SystemPromptMode}). Defaults to "rules".
 	 */
 	systemPrompt?: SystemPromptMode;
+	/**
+	 * `<available_skills>` catalogue appended to the generated system rule,
+	 * listing mirrored skills for the Cursor agent to discover and load on
+	 * demand. Seeded by the plugin from the resolved skill set.
+	 */
+	skillsCatalogue?: string;
 }
 
 /**
@@ -283,11 +289,21 @@ export class CursorLanguageModel implements LanguageModelV3 {
 		// Degrades to inline "message" delivery when the user explicitly opted
 		// out of the "project" settings layer, when the rule file is user-owned,
 		// or when the write fails (read-only checkout etc.).
+		// The skills catalogue may be updated per-turn by the plugin's
+		// chat.params hook (reflecting mid-session skill changes); fall back to
+		// the static config value when not present in per-request options.
+		const dynamicSkillsCatalogue =
+			typeof providerOptions?.["skillsCatalogue"] === "string"
+				? (providerOptions["skillsCatalogue"] as string)
+				: undefined;
+		const skillsCatalogue =
+			dynamicSkillsCatalogue ?? this.config.skillsCatalogue;
 		const delivery = resolveSystemDelivery({
 			mode: this.config.systemPrompt ?? "rules",
 			settingSources: this.config.settingSources,
 			cwd: this.config.cwd,
 			systemText: extractSystemText(options.prompt),
+			skillsCatalogue,
 			warn: (message) => this.warnOnce(message),
 		});
 		const systemMode: SystemPromptMode = delivery.mode;

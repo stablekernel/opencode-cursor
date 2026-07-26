@@ -36,6 +36,33 @@ your opencode `permission` config (`allow` / `ask` / `deny`) controls them. The
 gate is **fail-closed**: if no permission mechanism is available, or approval is
 rejected, the call is blocked rather than silently allowed.
 
+### Skills mirror — instructions cross the permission boundary
+
+When `forwardSkills` is enabled (default), opencode's resolved skills are
+mirrored into `<cwd>/.cursor/skills/` so the Cursor agent can discover and load
+them. This means **skill instructions now reach an agent running outside
+opencode's permission system**. Key implications:
+
+- Skill content is copied to disk and loaded by Cursor's own agent runtime —
+  opencode cannot intervene, revoke, or gate access once the files are written.
+- Skills are discovered from all standard locations (project `.opencode/skills/`,
+  `.claude/skills/`, `.agents/skills/`, global `~/.config/opencode/skills/`,
+  etc.) **and** from `config.skills.paths` — additional directories configured
+  in `opencode.json`. If `skills.paths` points to directories outside the
+  project, skills from those directories will also be mirrored.
+- `deny`-permissioned skills are excluded from the mirror before writing.
+- `ask`-permissioned skills are also excluded, because the ask prompt cannot be
+  enforced across the Cursor boundary (there is no way for Cursor to relay the
+  approval request back to opencode's permission system).
+- The mirror is written at plugin init and re-synced each turn, so permission
+  changes take effect on the next turn (not retroactively on already-loaded
+  skills within a running Cursor agent).
+- A user-owned `.cursor/skills/<id>/SKILL.md` (without the `generated:
+  opencode-cursor` sentinel) is never overwritten or deleted — the plugin
+  respects existing user content.
+- `config.skills.urls` (HTTP skill catalogs) are not mirrored — only filesystem
+  paths are scanned.
+
 ## Credentials
 
 - Your `CURSOR_API_KEY` is read from opencode auth storage or the environment.
