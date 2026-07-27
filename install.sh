@@ -394,11 +394,38 @@ else
 	info "Set it with ${DIM}export CURSOR_API_KEY=\"key_...\"${RESET} or run ${DIM}opencode auth login${RESET} (choose \"Cursor\")."
 fi
 
+# ---- 4. opencode-plugins-refresh ---------------------------------------------
+step "Installing opencode-plugins-refresh helper (optional)"
+LOCAL_BIN="$HOME/.local/bin"
+mkdir -p "$LOCAL_BIN"
+SCRIPT_URL="https://raw.githubusercontent.com/stablekernel/opencode-cursor/main/scripts/opencode-plugins-refresh"
+if have_tty; then
+	printf 'Install opencode-plugins-refresh to %s? [y/N] ' "$LOCAL_BIN"
+	read -r REPLY <"$TTY" || REPLY=""
+	case "$REPLY" in
+	[yY]*)
+		if curl -fsSL "$SCRIPT_URL" -o "$LOCAL_BIN/opencode-plugins-refresh" 2>/dev/null; then
+			chmod +x "$LOCAL_BIN/opencode-plugins-refresh"
+			ok "Installed opencode-plugins-refresh → ${DIM}${LOCAL_BIN}/opencode-plugins-refresh${RESET}"
+			info "Make sure ${DIM}${LOCAL_BIN}${RESET} is on your PATH."
+		else
+			err "Failed to download opencode-plugins-refresh from ${SCRIPT_URL}"
+			warn "You can install it manually later by re-running this installer."
+		fi
+		;;
+	*) info "Skipped. Install manually: ${DIM}curl -fsSL ${SCRIPT_URL} -o ${LOCAL_BIN}/opencode-plugins-refresh && chmod +x ${LOCAL_BIN}/opencode-plugins-refresh${RESET}" ;;
+	esac
+else
+	info "Non-interactive install — skipping opencode-plugins-refresh."
+	info "To install manually: ${DIM}curl -fsSL ${SCRIPT_URL} -o ${LOCAL_BIN}/opencode-plugins-refresh && chmod +x ${LOCAL_BIN}/opencode-plugins-refresh${RESET}"
+fi
+
 # ---- done --------------------------------------------------------------------
 step "Done"
 ok "opencode-cursor is installed."
 info "Next:"
 info "  1. ${DIM}Ensure CURSOR_API_KEY is set, or run: opencode auth login${RESET}"
 info "  2. ${DIM}Restart opencode, then run: opencode models${RESET}  (lists cursor/* models)"
+info "  3. ${DIM}Run: opencode-plugins-refresh --check${RESET}  (check for plugin updates)"
 info ""
 info "Docs: ${DIM}${REPO_URL}#readme${RESET}"

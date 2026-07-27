@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-07-27 (patch)
+
+- **Fixed: startup toast no longer suspends into the user's first prompt on slow networks.**
+  The version-check toast previously ran `setTimeout(callback, 2000)` and then `await
+  _versionCheckPromise` inside the callback, so a slow npm registry fetch could block the
+  callback until after the user's first message was sent. The delay now runs *after* the
+  promise resolves: `_versionCheckPromise.then(async (result) => { await sleep(2000); showToast() })`.
+  The 2 s TUI-init pause is preserved; only the ordering changes.
+- **Removed: terminal `console.warn` for update notifications.** The `warnIfStale` function
+  previously printed a multi-line warning to stderr on every startup when the plugin was
+  outdated. This message is removed — the UI toast (introduced in 0.4.5) is the sole
+  notification channel, avoiding duplicate noise in the terminal.
+- **New: `scripts/opencode-plugins-refresh`.** Helper script that compares cached `@latest` plugin
+  versions against npm and optionally clears outdated caches so opencode re-fetches the latest on
+  next launch. Supports `--check` (exit 1 if outdated, CI/cron-friendly) and `--force` (clear
+  without prompting).
+- **`install.sh` now offers to install `opencode-plugins-refresh` to `~/.local/bin` (step 4).**
+- **`PLUGIN_CACHE_PATH` exported from `src/version-check.ts`.** Single source of truth for the
+  opencode plugin cache path (cross-platform). Used by both the startup warning and the
+  `cursor_update_plugin` tool to build the removal command / actually clear the cache — removes
+  the duplication that could cause them to diverge.
+- **`warnIfStale` accepts an optional pre-fetched version string.** `warnIfStale(prefetchedLatest?)`
+  now skips the registry call when the caller has already resolved it. Paired with a single
+  `_latestVersionPromise` in the plugin that is shared by the console warning, the UI toast, and
+  the system-prompt notice — so only one npm registry fetch happens per startup regardless of how
+  many paths consume it.
+
 ## [0.6.1] — 2026-07-24
 
 - **Fixed: reasoning/thinking variants showed as meaningless numbered entries for

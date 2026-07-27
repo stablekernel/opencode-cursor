@@ -71,6 +71,9 @@ Drop `@latest` (`"@stablekernel/opencode-cursor"`) or pin a version
 The stale-version check is skipped when the `CI` or `NO_UPDATE_NOTIFIER`
 environment variable is set.
 
+To keep the plugin up to date easily, install the `opencode-plugins-refresh` helper (offered by
+the one-line installer, or install manually — see [Keeping the plugin up to date](#keeping-the-plugin-up-to-date)).
+
 The plugin injects the `provider` block automatically. If you need explicit control:
 
 ```json
@@ -84,6 +87,41 @@ The plugin injects the `provider` block automatically. If you need explicit cont
   }
 }
 ```
+
+## Keeping the plugin up to date
+
+opencode pins `@latest` plugins on first install and never auto-updates them. When the installed
+version falls behind the latest release, the plugin shows a warning once every 24 hours at startup.
+The warning tells you what to do:
+
+- If `opencode-plugins-refresh` is on your `PATH`, the warning says `run: opencode-plugins-refresh`.
+- Otherwise it shows the raw `rm -rf` command and suggests re-running the installer to get the
+  helper script.
+
+### opencode-plugins-refresh
+
+`opencode-plugins-refresh` is a shell script that checks all `@latest` plugin caches for updates
+by comparing pinned versions against npm, and optionally clears outdated caches so opencode
+re-fetches the latest on next launch.
+
+```bash
+opencode-plugins-refresh           # check for updates, prompt to clear cache
+opencode-plugins-refresh --check   # check only, exit 1 if outdated
+opencode-plugins-refresh --force   # clear all outdated caches without prompting
+```
+
+The `--check` flag exits with code `1` when any cache is outdated, making it suitable for CI jobs
+or cron checks.
+
+The one-line installer offers to install `opencode-plugins-refresh` to `~/.local/bin` (step 4).
+To install it manually at any time:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/stablekernel/opencode-cursor/main/scripts/opencode-plugins-refresh \
+  -o ~/.local/bin/opencode-plugins-refresh && chmod +x ~/.local/bin/opencode-plugins-refresh
+```
+
+Make sure `~/.local/bin` is on your `PATH`.
 
 ## Authenticate
 
