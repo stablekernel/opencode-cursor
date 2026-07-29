@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- **Structured logging via `client.app.log()` instead of raw `console.*`.** The
+  plugin's own diagnostics (transport fallback warnings, per-turn debug traces
+  gated on `OPENCODE_CURSOR_DEBUG=1`) now route through opencode's plugin
+  logging API (`service: "opencode-cursor"`) rather than `console.warn`/
+  `console.error`. Falls back to `console.*` when no client is available
+  (e.g. running the provider standalone).
+- **Cursor SDK's own "rules"/"skills" load diagnostics captured and forwarded.**
+  `@cursor/sdk`'s bundled local-exec runtime writes internal messages like
+  `LocalCursorRulesService load completed meta={durationMs, ruleCount}` and
+  `AgentSkillsCursorRulesService load completed meta={durationMs, ruleCount,
+  skillCount}` straight to `console.log`, with no public logger hook to
+  redirect it. These are now recognized (in-process transport via a narrowly
+  scoped `console.log` interceptor; sidecar transport via the child process's
+  own interceptor forwarding over the existing JSONL protocol) and re-emitted
+  as structured opencode logs instead of raw terminal noise. Every other
+  `console.log` call passes through unchanged.
+
 ## [0.6.2] — 2026-07-28
 
 Version-check UX cleanup from #79.

@@ -23,6 +23,7 @@ import {
 } from "./message-map.js";
 import { extractSystemText, resolveSystemDelivery } from "./system-rule.js";
 import { classifyError } from "./error-classify.js";
+import { pluginLog } from "./log-bridge.js";
 import {
 	addUsage,
 	sendAgentTurnSilently,
@@ -126,7 +127,7 @@ export class CursorLanguageModel implements LanguageModelV3 {
 	private warnOnce(message: string): void {
 		if (this.warned.has(message)) return;
 		this.warned.add(message);
-		console.warn(`[${this.provider}] ${message}`);
+		pluginLog("warn", message, { provider: this.provider });
 	}
 
 	private requireApiKey(): string {
@@ -159,9 +160,10 @@ export class CursorLanguageModel implements LanguageModelV3 {
 			providerOptions,
 		);
 		if (process.env["OPENCODE_CURSOR_DEBUG"] === "1") {
-			console.error(
-				`[cursor:debug] model=${this.modelId} selection=${JSON.stringify(modelSelection)}`,
-			);
+			pluginLog("debug", "model call", {
+				model: this.modelId,
+				selection: modelSelection,
+			});
 		}
 		const sessionID =
 			typeof providerOptions?.["sessionID"] === "string"
@@ -240,9 +242,7 @@ export class CursorLanguageModel implements LanguageModelV3 {
 						: classification.kind === "continuation-multi"
 							? `resume-multi:${multiNewUserCount}`
 							: `fresh:${classification.kind}`;
-				console.error(
-					`[cursor:debug] turn classification=${label} session=${sessionID}`,
-				);
+				pluginLog("debug", "turn classification", { label, session: sessionID });
 			}
 		}
 
@@ -448,8 +448,9 @@ export class CursorLanguageModel implements LanguageModelV3 {
 						!options.abortSignal?.aborted
 					) {
 						if (process.env["OPENCODE_CURSOR_DEBUG"] === "1") {
-							console.error(
-								"[cursor:debug] resumed turn failed before emitting; retrying with a fresh agent",
+							pluginLog(
+								"debug",
+								"resumed turn failed before emitting; retrying with a fresh agent",
 							);
 						}
 						acquired.release();
@@ -468,10 +469,9 @@ export class CursorLanguageModel implements LanguageModelV3 {
 								// Non-Error throw or pre-existing cause: the original resume
 								// failure can't ride along as `cause`, so log it instead of
 								// dropping it silently.
-								console.error(
-									"[cursor:debug] original resume failure (not attachable as cause):",
-									err,
-								);
+								pluginLog("debug", "original resume failure (not attachable as cause)", {
+									error: err instanceof Error ? err.message : String(err),
+								});
 							}
 							throw retryErr;
 						}

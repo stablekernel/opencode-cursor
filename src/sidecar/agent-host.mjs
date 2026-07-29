@@ -38,6 +38,49 @@ function write(payload) {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
 }
 
+// eslint-disable-next-line no-control-regex
+const ANSI_PATTERN = /\x1b\[[0-9;]*m/g;
+
+// `@cursor/sdk`'s bundled local-exec runtime writes its rules/skills
+// load-completion diagnostics straight to `console.log` (no public logger
+// hook exists to redirect it — see src/provider/cursor-log-intercept.ts,
+// which applies the identical pattern for the in-process transport). This
+// process's own JSONL protocol never uses console.log (only
+// process.stdout.write via write() above), so console.log here is entirely
+// free for the SDK's use: recognized lines are forwarded to the parent as a
+// structured "log" event instead of being written as raw, unparseable text.
+const RULE_LOAD_PATTERN =
+  /^\d{2}:\d{2}:\d{2}\.\d{3}\s+INFO\s+(LocalCursorRulesService|AgentSkillsCursorRulesService|CursorPluginsAgentSkillsService) load completed(?:\s+ctx=\S+)?\s+meta=\{([^}]*)\}\s*$/;
+
+function parseLogMeta(raw) {
+  const out = {};
+  for (const part of raw.split(",")) {
+    const [key, value] = part.split(":").map((s) => s.trim());
+    if (!key || value === undefined) continue;
+    const num = Number(value);
+    if (Number.isFinite(num)) out[key] = num;
+  }
+  return out;
+}
+
+const originalConsoleLog = console.log.bind(console);
+console.log = (...args) => {
+  if (args.length === 1 && typeof args[0] === "string") {
+    const match = RULE_LOAD_PATTERN.exec(args[0].replace(ANSI_PATTERN, ""));
+    if (match) {
+      const [, service, meta] = match;
+      write({
+        ev: "log",
+        level: "info",
+        message: `${service} load completed`,
+        meta: parseLogMeta(meta ?? ""),
+      });
+      return;
+    }
+  }
+  originalConsoleLog(...args);
+};
+
 let sdkPromise;
 function loadSdk() {
   // OPENCODE_CURSOR_SDK_PATH lets tests substitute a fake SDK module.

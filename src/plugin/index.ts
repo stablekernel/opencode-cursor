@@ -15,6 +15,7 @@ import {
 import { buildCursorTools } from "./cursor-tools.js";
 import { getLocalVersion, getLatestVersion, clearVersionCache, PLUGIN_CACHE_PATH } from "../version-check.js";
 import { removeSystemRule } from "../provider/system-rule.js";
+import { clearLogBridge, setLogBridge } from "../provider/log-bridge.js";
 import {
 	clearSubagentBridge,
 	setSubagentBridge,
@@ -103,7 +104,10 @@ export const CursorPlugin: Plugin = async (input) => {
 	// create a real child session for each Cursor subagent (making its `task`
 	// card clickable / `ctrl+x`-navigable). Same-process handoff via a globalThis
 	// registry; the provider degrades gracefully when it's absent.
-	if (client) setSubagentBridge({ client, directory });
+	if (client) {
+		setSubagentBridge({ client, directory });
+		setLogBridge({ client, directory });
+	}
 	// Canonical working directory for the generated system-prompt rule: the
 	// provider writes `.cursor/rules/opencode.mdc` under this path and dispose
 	// cleans it up from the same path. The config hook threads it into the
@@ -390,6 +394,7 @@ export const CursorPlugin: Plugin = async (input) => {
 			// so a user-owned opencode.mdc is never deleted.
 			removeSystemRule(resolvedCwd);
 			clearSubagentBridge();
+			clearLogBridge();
 		},
 	};
 };

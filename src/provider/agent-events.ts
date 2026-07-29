@@ -1,6 +1,7 @@
 import type { AgentModeOption, SDKUserMessage } from "@cursor/sdk";
 import type { AgentLike, AgentRunLike, AgentSendOptions } from "./agent-backend.js";
 import { classifyError } from "./error-classify.js";
+import { pluginLog } from "./log-bridge.js";
 
 /** Token usage as reported by Cursor's `turn-ended` update. */
 export interface CursorUsage {
@@ -202,9 +203,11 @@ export async function* streamAgentTurn(
         if (options.abortSignal?.aborted) void Promise.resolve(run.cancel()).catch(() => {});
         const result = await run.wait();
         if (debug) {
-          console.error(
-            `[cursor:debug] updates=${JSON.stringify(counts)} status=${result.status} resultLen=${(result.result ?? "").length}`,
-          );
+          pluginLog("debug", "turn finished", {
+            updates: counts,
+            status: result.status,
+            resultLen: (result.result ?? "").length,
+          });
         }
         // Superseded by a watchdog force-resend: this run is abandoned.
         if (gen !== runGen || finished) return;
@@ -221,7 +224,11 @@ export async function* streamAgentTurn(
       .catch((err) => {
         if (gen !== runGen) return;
         failure = err;
-        if (debug) console.error(`[cursor:debug] send failed: ${err instanceof Error ? err.message : String(err)}`);
+        if (debug) {
+          pluginLog("debug", "send failed", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       })
       .finally(() => {
         // Only the live run finishes the stream; a superseded (cancelled-for-
@@ -265,7 +272,7 @@ export async function* streamAgentTurn(
       return;
     }
     forced = true;
-    if (debug) console.error("[cursor:debug] stream stalled; cancelling and resending with local.force");
+    if (debug) pluginLog("debug", "stream stalled; cancelling and resending with local.force");
     try {
       await runHolder.run?.cancel();
     } catch {
@@ -324,7 +331,7 @@ export async function sendWithRecovery(
     } catch (err) {
       const classified = classifyError(err);
       if (classified.kind === "agent-busy") {
-        if (debug) console.error("[cursor:debug] agent busy; retrying send with local.force");
+        if (debug) pluginLog("debug", "agent busy; retrying send with local.force");
         return agent.send(message, { ...sendOptions, local: { force: true } });
       }
       if (
@@ -332,9 +339,9 @@ export async function sendWithRecovery(
         attempt < RETRY_BACKOFF_MS.length
       ) {
         if (debug)
-          console.error(
-            `[cursor:debug] ${classified.kind}; retrying send in ${RETRY_BACKOFF_MS[attempt]}ms`,
-          );
+          pluginLog("debug", `${classified.kind}; retrying send`, {
+            delayMs: RETRY_BACKOFF_MS[attempt],
+          });
         await sleep(RETRY_BACKOFF_MS[attempt]!);
         continue;
       }

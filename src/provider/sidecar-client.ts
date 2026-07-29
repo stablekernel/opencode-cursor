@@ -39,6 +39,13 @@ export interface SidecarClientOptions {
   env?: Record<string, string>;
   /** Mirror child stderr to this process (debug aid). */
   debug?: boolean;
+  /**
+   * Structured log lines the child recognized on the SDK's stdout (currently
+   * Cursor's rules/skills load-completion diagnostics; see
+   * src/sidecar/agent-host.mjs) and forwarded over the protocol instead of
+   * discarding as non-JSON noise.
+   */
+  onLog?: (level: "debug" | "info" | "warn" | "error", message: string, meta?: Record<string, unknown>) => void;
 }
 
 interface Pending {
@@ -149,6 +156,19 @@ export class SidecarClient {
     } catch {
       return; // ignore non-protocol noise on stdout
     }
+    if (msg["ev"] === "log") {
+      const level = msg["level"];
+      const message = msg["message"];
+      if (typeof level === "string" && typeof message === "string") {
+        this.options.onLog?.(
+          level as "debug" | "info" | "warn" | "error",
+          message,
+          msg["meta"] as Record<string, unknown> | undefined,
+        );
+      }
+      return;
+    }
+
     const id = msg["id"];
     if (typeof id !== "number") return;
     const pending = this.pending.get(id);
