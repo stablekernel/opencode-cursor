@@ -238,6 +238,16 @@ export const CursorPlugin: Plugin = async (input) => {
 			if (input.agent === "plan" && output.options["mode"] === undefined) {
 				output.options["mode"] = "plan";
 			}
+			// opencode runs its own title-generation call on the same sessionID as
+			// a session's real first turn, concurrently, with an unrelated (empty)
+			// system prompt. Mark it ephemeral so the provider always treats it as
+			// a side-call regardless of whether a pool record exists yet — without
+			// this, a race between the two calls' agent-creation round-trips can
+			// let the title call's fingerprint win and permanently overwrite the
+			// session's pool record (see language-model.ts's `ephemeral` check).
+			if (input.agent === "title") {
+				output.options["ephemeral"] = true;
+			}
 
 			// Dynamically re-forward MCP servers from opencode's *live* state so
 			// mid-session enable/disable reaches the Cursor agent (the config hook

@@ -41,6 +41,7 @@ import {
 	acquireAgent,
 	dropSessionRecord,
 	getSessionRecord,
+	withSessionLock,
 } from "./session-pool.js";
 import {
 	classifyTurn,
@@ -192,132 +193,153 @@ export class CursorLanguageModel implements LanguageModelV3 {
 
 		// Decide create-vs-resume and whether to pool, from the turn classification.
 		const usePool = sessionEnabled && Boolean(sessionID) && !explicitAgentId;
-		let resumeAgentId: string | undefined = explicitAgentId;
-		let poolKey: string | undefined;
-		let record:
-			| { systemHash: string; userHashes: string[]; mcpHash?: string }
-			| undefined;
-		// Number of new trailing user messages for a multi-message interjection
-		// (>= 2). Stays 0 for every other turn kind. When set, and the agent is
-		// resumed, we replay just those new messages as sequential turns instead
-		// of a cold full-transcript replay.
-		let multiNewUserCount = 0;
-		if (usePool) {
-			const classification = ephemeral
-				? {
-						kind: "side-call" as const,
-						fingerprint: fingerprint(options.prompt),
-					}
-				: classifyTurn(getSessionRecord(sessionID!), options.prompt);
-			switch (classification.kind) {
-				case "continuation":
-				case "continuation-multi": {
-					const prev = getSessionRecord(sessionID!);
-					// A resumed agent keeps its original MCP servers, so only resume
-					// when the live MCP set is unchanged; otherwise create fresh so the
-					// new server set takes effect (re-pooled under the same session).
-					if (prev?.mcpHash === mcpHash) {
-						resumeAgentId = prev?.agentId;
-					}
-					poolKey = sessionID;
-					record = { ...classification.fingerprint, mcpHash };
-					if (classification.kind === "continuation-multi") {
-						multiNewUserCount = classification.newUserCount ?? 0;
-					}
-					break;
-				}
-				case "new":
-				case "divergence":
-					poolKey = sessionID;
-					record = { ...classification.fingerprint, mcpHash };
-					break;
-				case "side-call":
-					// fresh ephemeral agent; pool left untouched.
-					break;
-			}
-			if (process.env["OPENCODE_CURSOR_DEBUG"] === "1") {
-				const label =
-					classification.kind === "continuation"
-						? "resume"
-						: classification.kind === "continuation-multi"
-							? `resume-multi:${multiNewUserCount}`
-							: `fresh:${classification.kind}`;
-				pluginLog("debug", "turn classification", { label, session: sessionID });
-			}
-		}
 
-		// A multi-message interjection: two-or-more user messages were queued while
-		// the agent was busy, forming a contiguous user-turn tail (the classifier
-		// guarantees this shape for "continuation-multi"). On a resumed agent we
-		// replay just those new messages as sequential turns.
-		//
-		// Defensive invariant check: if the recovered tail doesn't match the
-		// classifier's count (unreachable today, but one classifier refactor away
-		// from real), we must NOT degrade to sending only the latest message —
-		// the session record keeps the full N-message fingerprint, so messages
-		// 1..N-1 would be silently lost. Instead force the cold path: clear the
-		// resume id so a FRESH agent gets the FULL transcript, which matches the
-		// record being written and loses nothing.
-		//
-		// Computed before acquireAgent so a mismatched tail can clear
-		// resumeAgentId in time to affect which agent we acquire.
-		let multiTurns: SDKUserMessage[] | undefined;
-		if (multiNewUserCount >= 2) {
-			const turns = trailingUserMessages(options.prompt, multiNewUserCount);
-			if (turns.length === multiNewUserCount) {
-				multiTurns = turns;
-			} else {
-				resumeAgentId = undefined;
-			}
-		}
-
-		const latestUser = latestUserMessage(options.prompt);
-		const idempotencyKey = sendIdempotencyKey(
-			sessionID,
+		// The whole classify -> acquire span below is wrapped in a per-session
+		// lock (withSessionLock). opencode can run a concurrent side call (e.g.
+		// its title-generation turn) against the SAME sessionID as a session's
+		// real first turn; classifyTurn's side-call detection only works once a
+		// prior pool record exists, so on turn 1 both calls can independently
+		// classify as "new" and both write to the pool — whichever's agent
+		// creation round-trip resolves last silently and permanently overwrites
+		// the other's entry. Serializing per sessionID here means the second
+		// call's classification always sees the first call's completed write.
+		const {
+			acquired,
+			multiTurns,
+			idempotencyKey,
+			systemMode,
+			baseAcquire,
 			record,
-			latestUser?.text ?? JSON.stringify(options.prompt),
-		);
+		} = await withSessionLock(usePool ? sessionID : undefined, async () => {
+			let resumeAgentId: string | undefined = explicitAgentId;
+			let poolKey: string | undefined;
+			let record:
+				| { systemHash: string; userHashes: string[]; mcpHash?: string }
+				| undefined;
+			// Number of new trailing user messages for a multi-message interjection
+			// (>= 2). Stays 0 for every other turn kind. When set, and the agent is
+			// resumed, we replay just those new messages as sequential turns instead
+			// of a cold full-transcript replay.
+			let multiNewUserCount = 0;
+			if (usePool) {
+				const classification = ephemeral
+					? {
+							kind: "side-call" as const,
+							fingerprint: fingerprint(options.prompt),
+						}
+					: classifyTurn(getSessionRecord(sessionID!), options.prompt);
+				switch (classification.kind) {
+					case "continuation":
+					case "continuation-multi": {
+						const prev = getSessionRecord(sessionID!);
+						// A resumed agent keeps its original MCP servers, so only resume
+						// when the live MCP set is unchanged; otherwise create fresh so the
+						// new server set takes effect (re-pooled under the same session).
+						if (prev?.mcpHash === mcpHash) {
+							resumeAgentId = prev?.agentId;
+						}
+						poolKey = sessionID;
+						record = { ...classification.fingerprint, mcpHash };
+						if (classification.kind === "continuation-multi") {
+							multiNewUserCount = classification.newUserCount ?? 0;
+						}
+						break;
+					}
+					case "new":
+					case "divergence":
+						poolKey = sessionID;
+						record = { ...classification.fingerprint, mcpHash };
+						break;
+					case "side-call":
+						// fresh ephemeral agent; pool left untouched.
+						break;
+				}
+				if (process.env["OPENCODE_CURSOR_DEBUG"] === "1") {
+					const label =
+						classification.kind === "continuation"
+							? "resume"
+							: classification.kind === "continuation-multi"
+								? `resume-multi:${multiNewUserCount}`
+								: `fresh:${classification.kind}`;
+					pluginLog("debug", "turn classification", { label, session: sessionID });
+				}
+			}
 
-		// In "rules" mode (default), deliver opencode's system prompt through
-		// Cursor's authoritative rules channel instead of the user transcript.
-		// Degrades to inline "message" delivery when the user explicitly opted
-		// out of the "project" settings layer, when the rule file is user-owned,
-		// or when the write fails (read-only checkout etc.).
-		const delivery = resolveSystemDelivery({
-			mode: this.config.systemPrompt ?? "rules",
-			settingSources: this.config.settingSources,
-			cwd: this.config.cwd,
-			systemText: extractSystemText(options.prompt),
-			warn: (message) => this.warnOnce(message),
-		});
-		const systemMode: SystemPromptMode = delivery.mode;
-		const settingSources = delivery.settingSources;
+			// A multi-message interjection: two-or-more user messages were queued
+			// while the agent was busy, forming a contiguous user-turn tail (the
+			// classifier guarantees this shape for "continuation-multi"). On a
+			// resumed agent we replay just those new messages as sequential turns.
+			//
+			// Defensive invariant check: if the recovered tail doesn't match the
+			// classifier's count (unreachable today, but one classifier refactor
+			// away from real), we must NOT degrade to sending only the latest
+			// message — the session record keeps the full N-message fingerprint,
+			// so messages 1..N-1 would be silently lost. Instead force the cold
+			// path: clear the resume id so a FRESH agent gets the FULL transcript,
+			// which matches the record being written and loses nothing.
+			//
+			// Computed before acquireAgent so a mismatched tail can clear
+			// resumeAgentId in time to affect which agent we acquire.
+			let multiTurns: SDKUserMessage[] | undefined;
+			if (multiNewUserCount >= 2) {
+				const turns = trailingUserMessages(options.prompt, multiNewUserCount);
+				if (turns.length === multiNewUserCount) {
+					multiTurns = turns;
+				} else {
+					resumeAgentId = undefined;
+				}
+			}
 
-		// Shared acquire params. The retry path reuses this verbatim (minus
-		// resumeAgentId) so a fresh agent can never drift from the first attempt's
-		// config (sandbox, settingSources, MCP, etc.).
-		const baseAcquire = {
-			apiKey: this.requireApiKey(),
-			modelSelection,
-			mode,
-			cwd: this.config.cwd,
-			...(settingSources ? { settingSources } : {}),
-			...(this.config.sandbox !== undefined
-				? { sandbox: this.config.sandbox }
-				: {}),
-			...(this.config.autoReview !== undefined
-				? { autoReview: this.config.autoReview }
-				: {}),
-			...(mcpServers ? { mcpServers } : {}),
-			...(this.config.agents ? { agents: this.config.agents } : {}),
-			...(poolKey ? { name: `opencode/${sessionID!.slice(-8)}` } : {}),
-			...(poolKey ? { poolKey } : {}),
-			...(record ? { record } : {}),
-		};
+			const latestUser = latestUserMessage(options.prompt);
+			const idempotencyKey = sendIdempotencyKey(
+				sessionID,
+				record,
+				latestUser?.text ?? JSON.stringify(options.prompt),
+			);
 
-		const acquired = await acquireAgent({
-			...baseAcquire,
-			...(resumeAgentId ? { resumeAgentId } : {}),
+			// In "rules" mode (default), deliver opencode's system prompt through
+			// Cursor's authoritative rules channel instead of the user transcript.
+			// Degrades to inline "message" delivery when the user explicitly opted
+			// out of the "project" settings layer, when the rule file is user-owned,
+			// or when the write fails (read-only checkout etc.).
+			const delivery = resolveSystemDelivery({
+				mode: this.config.systemPrompt ?? "rules",
+				settingSources: this.config.settingSources,
+				cwd: this.config.cwd,
+				systemText: extractSystemText(options.prompt),
+				warn: (message) => this.warnOnce(message),
+			});
+			const systemMode: SystemPromptMode = delivery.mode;
+			const settingSources = delivery.settingSources;
+
+			// Shared acquire params. The retry path reuses this verbatim (minus
+			// resumeAgentId) so a fresh agent can never drift from the first
+			// attempt's config (sandbox, settingSources, MCP, etc.).
+			const baseAcquire = {
+				apiKey: this.requireApiKey(),
+				modelSelection,
+				mode,
+				cwd: this.config.cwd,
+				...(settingSources ? { settingSources } : {}),
+				...(this.config.sandbox !== undefined
+					? { sandbox: this.config.sandbox }
+					: {}),
+				...(this.config.autoReview !== undefined
+					? { autoReview: this.config.autoReview }
+					: {}),
+				...(mcpServers ? { mcpServers } : {}),
+				...(this.config.agents ? { agents: this.config.agents } : {}),
+				...(poolKey ? { name: `opencode/${sessionID!.slice(-8)}` } : {}),
+				...(poolKey ? { poolKey } : {}),
+				...(record ? { record } : {}),
+			};
+
+			const acquired = await acquireAgent({
+				...baseAcquire,
+				...(resumeAgentId ? { resumeAgentId } : {}),
+			});
+
+			return { acquired, multiTurns, idempotencyKey, systemMode, baseAcquire, record };
 		});
 
 		let yielded = false;
@@ -461,7 +483,10 @@ export class CursorLanguageModel implements LanguageModelV3 {
 						// original resume failure as the cause for diagnosability.
 						let retry: Awaited<ReturnType<typeof acquireAgent>>;
 						try {
-							retry = await acquireAgent({ ...baseAcquire });
+							retry = await withSessionLock(
+								usePool ? sessionID : undefined,
+								() => acquireAgent({ ...baseAcquire }),
+							);
 						} catch (retryErr) {
 							if (retryErr instanceof Error && retryErr.cause === undefined) {
 								retryErr.cause = err;

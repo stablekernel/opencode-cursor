@@ -136,4 +136,15 @@ describe("CursorPlugin chat.params hook", () => {
     const options = await runHook("plan", {}, { providerID: "anthropic", modelID: "x" });
     expect(options).toEqual({});
   });
+
+  it("marks opencode's title-generation call as ephemeral so it never touches the session pool", async () => {
+    const options = await runHook("title");
+    expect(options["ephemeral"]).toBe(true);
+    expect(options["sessionID"]).toBe("s1");
+  });
+
+  it("does not mark other agents as ephemeral", async () => {
+    const options = await runHook("build");
+    expect(options["ephemeral"]).toBeUndefined();
+  });
 });
