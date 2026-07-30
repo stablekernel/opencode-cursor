@@ -66,17 +66,29 @@ function toolDisplayName(toolCall: ({ type?: string } & Record<string, any>) | u
 }
 
 /**
+ * Node stores a timer delay in a signed 32-bit int; anything larger overflows
+ * and is silently clamped to `1`. An operator following the tool-phase stall
+ * message's own advice to "raise OPENCODE_CURSOR_TOOL_STALL_MS" could therefore
+ * pick a number so large that every tool-bearing turn stalls within a
+ * millisecond — the exact failure the budget is meant to prevent. Cap instead.
+ */
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
+/**
  * Parse a millisecond env var, falling back when unset. An empty string is
  * treated as `0` (preserving the historical "set to empty to disable" behavior
  * of `OPENCODE_CURSOR_STALL_MS`); any other non-finite value falls back to the
  * default so a typo can't arm `setTimeout(fn, NaN)` (which fires immediately).
+ * Finite values are capped at {@link MAX_TIMEOUT_MS} so an over-large budget
+ * degrades to "as long as a timer can express" rather than to ~instant.
  */
 function envMs(name: string, fallback: number): number {
   const raw = process.env[name];
   if (raw === undefined) return fallback;
   if (raw === "") return 0;
   const n = Number(raw);
-  return Number.isFinite(n) ? n : fallback;
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(n, MAX_TIMEOUT_MS);
 }
 
 /**

@@ -34,6 +34,12 @@ All notable changes to this project will be documented in this file.
   `Number("abc")` is `NaN`; `NaN <= 0` is `false`, so the guard passed and `setTimeout(fn, NaN)`
   fired at once. Env parsing now falls back to the default for non-finite values (an empty string
   still disables, preserving the historical escape hatch).
+- **Fixed: an over-large stall budget overflowed to a ~1 ms deadline.** A `setTimeout` delay is
+  stored as a signed 32-bit int, so anything above `2147483647` is silently clamped to `1` — and the
+  tool-phase stall message tells operators to *raise* `OPENCODE_CURSOR_TOOL_STALL_MS`, making the
+  trap reachable by following the plugin's own advice. Setting it to e.g. `999999999999` stalled
+  every tool-bearing turn within milliseconds while reporting `no events for 999999999999ms`. Both
+  budgets are now capped at `2147483647`.
 
 ## [0.6.2] — 2026-07-28
 

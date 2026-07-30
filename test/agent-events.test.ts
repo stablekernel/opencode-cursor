@@ -822,4 +822,75 @@ describe("stream watchdog", () => {
 			vi.useRealTimers();
 		}
 	});
+
+	it("caps an over-large TOOL_STALL_MS instead of overflowing to ~instant", async () => {
+		vi.useFakeTimers();
+		try {
+			// A timer delay above 2^31-1 overflows and Node clamps it to 1ms, so
+			// without the cap this budget stalls the turn almost immediately —
+			// while reporting "no events for 999999999999ms". The stall message
+			// tells operators to raise this very variable, so the trap is reachable
+			// by following the plugin's own advice.
+			process.env.OPENCODE_CURSOR_STALL_MS = "1000";
+			process.env.OPENCODE_CURSOR_TOOL_STALL_MS = "999999999999";
+			const ac = new AbortController();
+			const { outcome, promise } = watchdogTurn({
+				emit: (onDelta) => onDelta(toolStarted("c1")),
+				abortSignal: ac.signal,
+			});
+			// Past the idle budget AND past the 600000 tool default, so the result
+			// can be neither the idle budget nor a silent fall back to the default.
+			// (It cannot be the fallback anyway — that needs a non-finite value —
+			// but this rules it out observationally rather than by argument.)
+			await vi.advanceTimersByTimeAsync(601_000);
+			expect(outcome.state).toBe("pending");
+			ac.abort();
+			await vi.advanceTimersByTimeAsync(50);
+			await promise;
+		} finally {
+			delete process.env.OPENCODE_CURSOR_STALL_MS;
+			delete process.env.OPENCODE_CURSOR_TOOL_STALL_MS;
+			vi.useRealTimers();
+		}
+	});
+
+	it("negative control: a large tool budget still stalls once exceeded", async () => {
+		vi.useFakeTimers();
+		try {
+			// Same timescale as the cap test, with a budget the harness can outrun.
+			// Proves that test's "pending" reflects a deadline further out and not
+			// a watchdog that stopped arming, and that a stall is observable here.
+			process.env.OPENCODE_CURSOR_STALL_MS = "1000";
+			process.env.OPENCODE_CURSOR_TOOL_STALL_MS = "600000";
+			const { outcome, promise } = watchdogTurn({
+				emit: (onDelta) => onDelta(toolStarted("c1")),
+			});
+			await vi.advanceTimersByTimeAsync(601_000);
+			await promise;
+			expect(outcome.state).toBe("stalled");
+			expect(String(outcome.error)).toMatch(/tool "shell" still in flight/);
+		} finally {
+			delete process.env.OPENCODE_CURSOR_STALL_MS;
+			delete process.env.OPENCODE_CURSOR_TOOL_STALL_MS;
+			vi.useRealTimers();
+		}
+	});
+
+	it("caps an over-large idle STALL_MS as well", async () => {
+		vi.useFakeTimers();
+		try {
+			process.env.OPENCODE_CURSOR_STALL_MS = "1e30";
+			const ac = new AbortController();
+			const { outcome, promise } = watchdogTurn({ abortSignal: ac.signal });
+			// Without the cap this is a 1ms deadline and every turn dies here.
+			await vi.advanceTimersByTimeAsync(1_000);
+			expect(outcome.state).toBe("pending");
+			ac.abort();
+			await vi.advanceTimersByTimeAsync(50);
+			await promise;
+		} finally {
+			delete process.env.OPENCODE_CURSOR_STALL_MS;
+			vi.useRealTimers();
+		}
+	});
 });
