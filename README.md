@@ -192,7 +192,8 @@ See [SECURITY.md](./SECURITY.md) for the full threat model.
 | `OPENCODE_CURSOR_MODEL_CACHE_TTL_MS` | `86400000` | Model-list cache lifetime (ms) |
 | `OPENCODE_CURSOR_DEBUG` | — | Set to `1` for trace logging on stderr |
 | `OPENCODE_CURSOR_TRANSPORT` | — | Force a transport: `http1` \| `http2-direct` \| `sidecar` — see [Transport](#transport) |
-| `OPENCODE_CURSOR_STALL_MS` | `60000` | Stream watchdog timeout (ms); `0` disables — see [Reliability](#reliability) |
+| `OPENCODE_CURSOR_STALL_MS` | `120000` | Idle stream-watchdog timeout in ms (no tool call open). `0` disables the whole watchdog; an empty string also disables — see [Reliability](#reliability) |
+| `OPENCODE_CURSOR_TOOL_STALL_MS` | `600000` | Stream-watchdog timeout in ms while a tool call is in flight (e.g. a long build or test suite). `0` disables the bound during tool execution only — see [Reliability](#reliability) |
 | `OPENCODE_CURSOR_SIDECAR` | — | Legacy: `1` maps to `sidecar`, `0` maps to `http2-direct` (superseded by `OPENCODE_CURSOR_TRANSPORT`) |
 | `OPENCODE_CURSOR_TOOL_INPUT_STREAM` | on | Set to `0` to disable live tool-input streaming (`tool-input-start`/`-delta`/`-end` parts) |
 
@@ -378,10 +379,20 @@ The provider classifies Cursor SDK errors into typed kinds (`agent-not-found`, `
 
 Sends carry an idempotency key so a retry is a server-side dedupe, not a duplicate turn.
 
-A **stream watchdog** guards against a wedged run that streams nothing: if no event arrives within
-`OPENCODE_CURSOR_STALL_MS` (default `60000`), a pre-first-event stall cancels and force-resends
-once; a stall after partial output is surfaced as a terminal error rather than re-emitting the
-already-yielded prefix. Set `OPENCODE_CURSOR_STALL_MS=0` to disable.
+A **stream watchdog** guards against a wedged run that streams nothing. It uses two budgets:
+
+- **Idle** (`OPENCODE_CURSOR_STALL_MS`, default `120000`): when no tool call is open. A
+  pre-first-event stall cancels and force-resends once; a stall after partial output is surfaced
+  as a terminal error rather than re-emitting the already-yielded prefix.
+- **Tool-phase** (`OPENCODE_CURSOR_TOOL_STALL_MS`, default `600000`): while at least one Cursor
+  tool call is in flight. A long shell command, build, or test suite legitimately streams nothing
+  for minutes; the larger budget stops a healthy run from being killed mid-tool. A tool-phase
+  stall is terminal and names the in-flight tool. Set `0` to disable the bound during tool
+  execution only.
+
+The watchdog re-arms on **any** SDK update — including types the plugin doesn't model — so
+progress/heartbeat updates count as liveness. Set `OPENCODE_CURSOR_STALL_MS=0` to disable the whole
+watchdog (an empty string also disables, for backward compatibility).
 
 ## Troubleshooting
 

@@ -66,6 +66,20 @@ function toolDisplayName(toolCall: ({ type?: string } & Record<string, any>) | u
 }
 
 /**
+ * Parse a millisecond env var, falling back when unset. An empty string is
+ * treated as `0` (preserving the historical "set to empty to disable" behavior
+ * of `OPENCODE_CURSOR_STALL_MS`); any other non-finite value falls back to the
+ * default so a typo can't arm `setTimeout(fn, NaN)` (which fires immediately).
+ */
+function envMs(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  if (raw === "") return 0;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/**
  * Stream a single turn on an already-acquired Cursor agent and yield normalized
  * events. The agent's lifecycle (create/resume/close) is owned by the caller
  * (see session-pool.ts) so it can be reused across turns. The SDK streams via
@@ -86,12 +100,22 @@ export async function* streamAgentTurn(
   const debug = process.env.OPENCODE_CURSOR_DEBUG === "1";
   const counts: Record<string, number> = {};
 
-  // Stall watchdog: if no event arrives within stallMs, cancel the wedged run
-  // and force-resend once (pre-first-event only). `0` disables.
-  const stallMs = Number(process.env.OPENCODE_CURSOR_STALL_MS ?? 60_000);
+  // Stall watchdog. Two budgets:
+  //  - stallMs: idle budget (no tool call open). `0` disables the whole
+  //    watchdog, matching the historical single-knob behavior.
+  //  - toolStallMs: budget while at least one tool call is in flight. A long
+  //    shell command or test suite legitimately streams nothing for minutes;
+  //    killing it at the idle budget was a real-work-destroying false stall.
+  //    `0` disables the bound during tool execution only. Default 10 min.
+  const stallMs = envMs("OPENCODE_CURSOR_STALL_MS", 120_000);
+  const toolStallMs = envMs("OPENCODE_CURSOR_TOOL_STALL_MS", 600_000);
   let stallTimer: ReturnType<typeof setTimeout> | undefined;
   let forced = false;
   let anyEvent = false;
+
+  // Open tool calls: callId -> display name. Lets the stall message name the
+  // culprit and lets armWatchdog pick the larger budget while a tool runs.
+  const openTools = new Map<string, string>();
 
   const push = (event: CursorEvent) => {
     anyEvent = true;
@@ -103,10 +127,15 @@ export async function* streamAgentTurn(
 
   const armWatchdog = () => {
     if (stallMs <= 0 || finished) return;
+    const budget = openTools.size > 0 ? toolStallMs : stallMs;
     if (stallTimer) clearTimeout(stallTimer);
+    if (budget <= 0) {
+      stallTimer = undefined;
+      return;
+    }
     stallTimer = setTimeout(() => {
       void onStall();
-    }, stallMs);
+    }, budget);
     stallTimer.unref?.();
   };
 
@@ -136,6 +165,9 @@ export async function* streamAgentTurn(
         });
         break;
       case "tool-call-started":
+        // Track the open call BEFORE push() re-arms the watchdog with the
+        // larger tool budget.
+        openTools.set(String(update.callId), toolDisplayName(update.toolCall));
         push({
           type: "tool-call",
           id: String(update.callId),
@@ -144,6 +176,7 @@ export async function* streamAgentTurn(
         });
         break;
       case "tool-call-completed": {
+        openTools.delete(String(update.callId));
         const tool = update.toolCall ?? {};
         const result = tool.result;
         // MCP failures often arrive as {status:"success", value:{isError:true}}
@@ -159,12 +192,22 @@ export async function* streamAgentTurn(
         break;
       }
       case "turn-ended":
+        // Reconcile: a dropped or differently-keyed `tool-call-completed`
+        // would otherwise leave an entry pinned here, holding the turn on the
+        // 10-minute tool budget and naming a tool that already finished.
+        openTools.clear();
         if (update.usage) {
           const summed = addUsage(options.usageBase, update.usage as CursorUsage);
           if (summed) push({ type: "usage", usage: summed });
         }
         break;
     }
+    // Any SDK update proves the stream is alive — including types we don't map
+    // (progress, heartbeats, future types), which never reach `push()`. Armed
+    // AFTER the switch so it observes the post-mutation `openTools` state and
+    // therefore always selects the correct budget (a `turn-ended` that cleared
+    // the map must fall back to the idle budget immediately).
+    armWatchdog();
   };
 
   const runHolder: { run?: AgentRunLike } = {};
@@ -264,7 +307,16 @@ export async function* streamAgentTurn(
       // A stall AFTER partial output is terminal: force-resending would
       // re-emit the already-yielded prefix. Cancel the wedged run and surface
       // the stall instead.
-      await failTerminal(`Cursor run stalled (no events for ${stallMs}ms)`);
+      const budget = openTools.size > 0 ? toolStallMs : stallMs;
+      const inFlight = [...openTools.values()];
+      const toolHint =
+        inFlight.length > 0
+          ? `; tool${inFlight.length > 1 ? "s" : ""} ${inFlight.map((n) => `"${n}"`).join(", ")} still in flight`
+          : "";
+      const knob = openTools.size > 0 ? "OPENCODE_CURSOR_TOOL_STALL_MS" : "OPENCODE_CURSOR_STALL_MS";
+      await failTerminal(
+        `Cursor run stalled (no events for ${budget}ms${toolHint}). Raise ${knob} (or set 0 to disable) if this legitimately runs longer.`,
+      );
       return;
     }
     if (forced) {
@@ -278,6 +330,9 @@ export async function* streamAgentTurn(
     } catch {
       /* best effort */
     }
+    // The abandoned run's tool calls will never complete; don't let them hold
+    // the resend on the tool budget.
+    openTools.clear();
     armWatchdog();
     startRun(true);
   };
