@@ -11,6 +11,21 @@ updates:
           - "@opencode-ai/*"
       dev-dependencies:
         dependency-type: "development"
+    ignore:
+      # tsup's bundled rollup-plugin-dts (6.x, peer typescript
+      # "^4.5 || ^5.0 || ^6.0") crashes declaration emit under TypeScript 7:
+      # "Cannot read properties of undefined (reading
+      # 'useCaseSensitiveFileNames')". No released tsup or rollup-plugin-dts
+      # supports TS7 yet, so `npm run build` cannot pass with it. Drop this
+      # entry once rollup-plugin-dts declares TS7 support.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      # The provider implements the V3 language-model spec (LanguageModelV3*)
+      # and declares peerDependencies "@ai-sdk/provider": "^3.0.0". A v4 dev
+      # dependency typechecks against types consumers don't install, so the
+      # major has to be a deliberate spec migration, not a dependency bump.
+      - dependency-name: "@ai-sdk/provider"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
