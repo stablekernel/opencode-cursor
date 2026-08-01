@@ -79,6 +79,74 @@ export function resolveContextLimit(modelId: string): number {
 }
 
 /**
+ * Per-model API pricing (USD per million tokens), keyed by model id prefix.
+ * Values from cursor.com/docs/models-and-pricing. Cursor Models pool models
+ * (Grok 4.5, Composer 2.5, Auto) have $0 — they draw from the Cursor Models
+ * pool, not the Other Models pool, so there is no per-token API charge.
+ *
+ * Longest prefix wins: `gpt-5.4-mini` (0.75) beats `gpt-5.4` (2.50).
+ */
+const MODEL_COST: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
+  "claude-sonnet-4": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  "claude-sonnet-4-5": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  "claude-sonnet-4-6": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  "claude-sonnet-5": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  "claude-opus-4-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  "claude-opus-4-6": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  "claude-opus-4-7": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  "claude-opus-4-8": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  "claude-opus-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  "claude-haiku-4-5": { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+  "claude-fable-5": { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+  "gpt-5": { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
+  "gpt-5-mini": { input: 0.25, output: 2, cacheRead: 0.025, cacheWrite: 0 },
+  "gpt-5.1": { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
+  "gpt-5.2": { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+  "gpt-5.3-codex": { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+  "gpt-5.4": { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+  "gpt-5.4-mini": { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
+  "gpt-5.4-nano": { input: 0.2, output: 1.25, cacheRead: 0.02, cacheWrite: 0 },
+  "gpt-5.5": { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+  "gpt-5.6-luna": { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 },
+  "gpt-5.6-sol": { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+  "gpt-5.6-terra": { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 2.5 },
+  "gemini-2.5-flash": { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 },
+  "gemini-3-flash": { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 },
+  "gemini-3.1-pro": { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 },
+  "gemini-3.5-flash": { input: 1.5, output: 9, cacheRead: 0.15, cacheWrite: 0 },
+  "gemini-3.6-flash": { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 },
+  "grok-4.5": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  "glm-5.2": { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
+  "composer-2": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  "composer-2.5": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  "auto-smart": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+};
+
+const DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+
+/**
+ * Resolve a model's per-token cost by longest-prefix match against
+ * {@link MODEL_COST}. Falls back to $0 for unknown models (treated as
+ * subscription/Cursor Models pool).
+ */
+export function resolveCost(modelId: string): {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+} {
+  let best: { input: number; output: number; cacheRead: number; cacheWrite: number } | undefined;
+  let bestLen = 0;
+  for (const [prefix, cost] of Object.entries(MODEL_COST)) {
+    if (modelId.startsWith(prefix) && prefix.length > bestLen) {
+      best = cost;
+      bestLen = prefix.length;
+    }
+  }
+  return best ?? DEFAULT_COST;
+}
+
+/**
  * Build opencode's rich runtime `Model` objects from discovered Cursor models.
  * Used by the auth-aware `provider.models()` hook. Fields opencode does not get
  * from the Cursor catalog are filled with safe defaults (zero cost — Cursor
@@ -102,7 +170,10 @@ export function buildModelV2Map(items: ModelListItem[]): Record<string, ModelV2>
         output: { text: true, audio: false, image: false, video: false, pdf: false },
         interleaved: false,
       },
-      cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+      cost: (() => {
+        const c = resolveCost(item.id);
+        return { input: c.input, output: c.output, cache: { read: c.cacheRead, write: c.cacheWrite } };
+      })(),
       limit: { context: resolveContextLimit(item.id), output: 32_000 },
       status: "active",
       options: Object.keys(params).length > 0 ? { params } : {},
