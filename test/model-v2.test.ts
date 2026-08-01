@@ -76,6 +76,19 @@ describe("buildModelV2Map", () => {
     });
   });
 
+  it("sets output limit from per-model map for known models", () => {
+    const map = buildModelV2Map([
+      { id: "claude-opus-5", displayName: "Claude Opus 5" },
+      { id: "claude-sonnet-4-6", displayName: "Claude Sonnet 4.6" },
+      { id: "gpt-5.5", displayName: "GPT-5.5" },
+      { id: "composer-2.5", displayName: "Composer 2.5" },
+    ]);
+    expect(map["claude-opus-5"]!.limit.output).toBe(64_000);
+    expect(map["claude-sonnet-4-6"]!.limit.output).toBe(32_000);
+    expect(map["gpt-5.5"]!.limit.output).toBe(64_000);
+    expect(map["composer-2.5"]!.limit.output).toBe(32_000);
+  });
+
   it("uses $0 cost for Cursor Models pool models", () => {
     const map = buildModelV2Map([
       { id: "composer-2.5", displayName: "Composer 2.5" },

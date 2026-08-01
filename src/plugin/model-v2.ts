@@ -147,6 +147,38 @@ export function resolveCost(modelId: string): {
 }
 
 /**
+ * Per-model output token limits, keyed by model id prefix. The Cursor SDK
+ * doesn't expose output limits, so these are best-known values. 32K default
+ * (the previous hardcoded value); 64K for frontier models known to support
+ * higher output. Low priority — the TUI doesn't display output limit.
+ */
+const MODEL_OUTPUT_LIMITS: Record<string, number> = {
+  "claude-opus-4-7": 64_000,
+  "claude-opus-4-8": 64_000,
+  "claude-opus-5": 64_000,
+  "claude-fable-5": 64_000,
+  "gpt-5.5": 64_000,
+  "gpt-5.6-sol": 64_000,
+};
+
+const DEFAULT_OUTPUT_LIMIT = 32_000;
+
+/**
+ * Resolve a model's output limit by longest-prefix match. Falls back to 32K.
+ */
+export function resolveOutputLimit(modelId: string): number {
+  let best: number | undefined;
+  let bestLen = 0;
+  for (const [prefix, limit] of Object.entries(MODEL_OUTPUT_LIMITS)) {
+    if (modelId.startsWith(prefix) && prefix.length > bestLen) {
+      best = limit;
+      bestLen = prefix.length;
+    }
+  }
+  return best ?? DEFAULT_OUTPUT_LIMIT;
+}
+
+/**
  * Build opencode's rich runtime `Model` objects from discovered Cursor models.
  * Used by the auth-aware `provider.models()` hook. Fields opencode does not get
  * from the Cursor catalog are filled with safe defaults (zero cost — Cursor
@@ -174,7 +206,7 @@ export function buildModelV2Map(items: ModelListItem[]): Record<string, ModelV2>
         const c = resolveCost(item.id);
         return { input: c.input, output: c.output, cache: { read: c.cacheRead, write: c.cacheWrite } };
       })(),
-      limit: { context: resolveContextLimit(item.id), output: 32_000 },
+      limit: { context: resolveContextLimit(item.id), output: resolveOutputLimit(item.id) },
       status: "active",
       options: Object.keys(params).length > 0 ? { params } : {},
       headers: {},
