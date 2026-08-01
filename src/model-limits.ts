@@ -1,0 +1,160 @@
+/**
+ * Per-model default context window limits (tokens), keyed by model id prefix.
+ * Values from cursor.com/docs/account/pricing/request-based-legacy. The
+ * "Max context" (1M for frontier models) requires Max Mode and is NOT used
+ * here — the plugin can't detect Max Mode, so the default window is the
+ * honest limit to display.
+ *
+ * Longest prefix wins: `claude-opus-4-8` (300K) beats `claude-opus-4` (200K).
+ */
+const MODEL_CONTEXT_LIMITS: Record<string, number> = {
+  "claude-sonnet-4": 200_000,
+  "claude-sonnet-4-5": 200_000,
+  "claude-sonnet-4-6": 200_000,
+  "claude-sonnet-5": 200_000,
+  "claude-opus-4-5": 200_000,
+  "claude-opus-4-6": 200_000,
+  "claude-opus-4-7": 300_000,
+  "claude-opus-4-8": 300_000,
+  "claude-opus-5": 300_000,
+  "claude-haiku-4-5": 200_000,
+  "claude-fable-5": 300_000,
+  "gpt-5": 272_000,
+  "gpt-5-mini": 272_000,
+  "gpt-5.1": 272_000,
+  "gpt-5.2": 272_000,
+  "gpt-5.3-codex": 272_000,
+  "gpt-5.4": 272_000,
+  "gpt-5.5": 272_000,
+  "gpt-5.6-luna": 272_000,
+  "gpt-5.6-sol": 272_000,
+  "gpt-5.6-terra": 272_000,
+  "gemini-2.5-flash": 200_000,
+  "gemini-3-flash": 200_000,
+  "gemini-3.1-pro": 200_000,
+  "gemini-3.5-flash": 200_000,
+  "gemini-3.6-flash": 200_000,
+  "grok-4.5": 256_000,
+  "glm-5.2": 200_000,
+  "composer-2": 200_000,
+  "composer-2.5": 200_000,
+  "auto-smart": 200_000,
+};
+
+const DEFAULT_CONTEXT_LIMIT = 200_000;
+
+/**
+ * Resolve a model's context window by longest-prefix match against
+ * {@link MODEL_CONTEXT_LIMITS}. Falls back to 200K for unknown models.
+ */
+export function resolveContextLimit(modelId: string): number {
+  let best: number | undefined;
+  let bestLen = 0;
+  for (const [prefix, limit] of Object.entries(MODEL_CONTEXT_LIMITS)) {
+    if (modelId.startsWith(prefix) && prefix.length > bestLen) {
+      best = limit;
+      bestLen = prefix.length;
+    }
+  }
+  return best ?? DEFAULT_CONTEXT_LIMIT;
+}
+
+/**
+ * Per-model API pricing (USD per million tokens), keyed by model id prefix.
+ * Values from cursor.com/docs/models-and-pricing. Cursor Models pool models
+ * (Grok 4.5, Composer 2.5, Auto) have $0 — they draw from the Cursor Models
+ * pool, not the Other Models pool, so there is no per-token API charge.
+ *
+ * Longest prefix wins: `gpt-5.4-mini` (0.75) beats `gpt-5.4` (2.50).
+ */
+const MODEL_COST: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
+  "claude-sonnet-4": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  "claude-sonnet-4-5": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  "claude-sonnet-4-6": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  "claude-sonnet-5": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  "claude-opus-4-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  "claude-opus-4-6": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  "claude-opus-4-7": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  "claude-opus-4-8": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  "claude-opus-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  "claude-haiku-4-5": { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+  "claude-fable-5": { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+  "gpt-5": { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
+  "gpt-5-mini": { input: 0.25, output: 2, cacheRead: 0.025, cacheWrite: 0 },
+  "gpt-5.1": { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
+  "gpt-5.2": { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+  "gpt-5.3-codex": { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+  "gpt-5.4": { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+  "gpt-5.4-mini": { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
+  "gpt-5.4-nano": { input: 0.2, output: 1.25, cacheRead: 0.02, cacheWrite: 0 },
+  "gpt-5.5": { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+  "gpt-5.6-luna": { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 },
+  "gpt-5.6-sol": { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+  "gpt-5.6-terra": { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 2.5 },
+  "gemini-2.5-flash": { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 },
+  "gemini-3-flash": { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 },
+  "gemini-3.1-pro": { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 },
+  "gemini-3.5-flash": { input: 1.5, output: 9, cacheRead: 0.15, cacheWrite: 0 },
+  "gemini-3.6-flash": { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 },
+  "grok-4.5": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  "glm-5.2": { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
+  "composer-2": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  "composer-2.5": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  "auto-smart": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+};
+
+const DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+
+/**
+ * Resolve a model's per-token cost by longest-prefix match against
+ * {@link MODEL_COST}. Falls back to $0 for unknown models (treated as
+ * subscription/Cursor Models pool).
+ */
+export function resolveCost(modelId: string): {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+} {
+  let best: { input: number; output: number; cacheRead: number; cacheWrite: number } | undefined;
+  let bestLen = 0;
+  for (const [prefix, cost] of Object.entries(MODEL_COST)) {
+    if (modelId.startsWith(prefix) && prefix.length > bestLen) {
+      best = cost;
+      bestLen = prefix.length;
+    }
+  }
+  return best ?? DEFAULT_COST;
+}
+
+/**
+ * Per-model output token limits, keyed by model id prefix. The Cursor SDK
+ * doesn't expose output limits, so these are best-known values. 32K default
+ * (the previous hardcoded value); 64K for frontier models known to support
+ * higher output. Low priority — the TUI doesn't display output limit.
+ */
+const MODEL_OUTPUT_LIMITS: Record<string, number> = {
+  "claude-opus-4-7": 64_000,
+  "claude-opus-4-8": 64_000,
+  "claude-opus-5": 64_000,
+  "claude-fable-5": 64_000,
+  "gpt-5.5": 64_000,
+  "gpt-5.6-sol": 64_000,
+};
+
+const DEFAULT_OUTPUT_LIMIT = 32_000;
+
+/**
+ * Resolve a model's output limit by longest-prefix match. Falls back to 32K.
+ */
+export function resolveOutputLimit(modelId: string): number {
+  let best: number | undefined;
+  let bestLen = 0;
+  for (const [prefix, limit] of Object.entries(MODEL_OUTPUT_LIMITS)) {
+    if (modelId.startsWith(prefix) && prefix.length > bestLen) {
+      best = limit;
+      bestLen = prefix.length;
+    }
+  }
+  return best ?? DEFAULT_OUTPUT_LIMIT;
+}

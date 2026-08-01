@@ -1,5 +1,7 @@
 import type { ModelListItem } from "@cursor/sdk";
+import type { Config } from "@opencode-ai/plugin";
 import { fingerprintApiKey, resolveCursorApiKey } from "./api-key.js";
+import { resolveContextLimit, resolveCost, resolveOutputLimit } from "./model-limits.js";
 import { readLatestModelCache, readModelCache, writeModelCache } from "./model-cache.js";
 import { FALLBACK_MODELS } from "./fallback-models.js";
 import { loadCursorSdk } from "./cursor-runtime.js";
@@ -105,7 +107,58 @@ export interface OpencodeModelConfigEntry {
    * Cursor's server-side `fast` default. See {@link defaultModelParams}.
    */
   options: { params?: Record<string, string> };
+  /**
+   * Per-model context/output window. opencode's config channel is the only
+   * one that reaches the model registry for providers absent from
+   * models.dev, so the TUI session header's context-window percentage
+   * depends on this being present. Both fields are required by the schema.
+   */
+  limit: { context: number; output: number };
+  /**
+   * Per-model API pricing, USD per million tokens. Note the FLAT snake_case
+   * cache keys — the config schema (`ProviderConfig` in
+   * `@opencode-ai/sdk`) uses `cache_read`/`cache_write`, unlike the
+   * `ModelV2` shape's nested `cache: { read, write }`.
+   */
+  cost: { input: number; output: number; cache_read: number; cache_write: number };
 }
+
+/**
+ * Compile-time guard: the entries we write into
+ * `config.provider.cursor.models` must satisfy the shape opencode's config
+ * schema accepts. If opencode changes the schema (or we drift, e.g. by
+ * using `cache: { read, write }` instead of `cache_read`/`cache_write`),
+ * `npm run typecheck` fails here rather than silently producing a config
+ * opencode discards.
+ */
+type AcceptedModelConfig = NonNullable<
+  NonNullable<NonNullable<Config["provider"]>[string]>["models"]
+>[string];
+const _entryShapeGuard: AcceptedModelConfig = {} as OpencodeModelConfigEntry;
+void _entryShapeGuard;
+
+/**
+ * Assignability alone is too weak for `cost`/`limit`. Excess-property checking
+ * only applies to fresh object literals, and the schema's cache keys are
+ * optional — so a drifted `cost: { input, output, cache: { read, write } }`
+ * assigns cleanly to the accepted shape (verified: it typechecks) while
+ * opencode would read `cache_read`/`cache_write` as absent. These guards
+ * assert every key we emit is a key the schema actually declares.
+ *
+ * `never` means "no excess keys"; anything else collapses `_KeysAccepted` to
+ * `never` and the `true` initializer below fails to compile.
+ */
+type _KeysAccepted<Ours, Accepted> = Exclude<keyof Ours, keyof Accepted> extends never ? true : never;
+const _costKeyGuard: _KeysAccepted<
+  OpencodeModelConfigEntry["cost"],
+  NonNullable<AcceptedModelConfig["cost"]>
+> = true;
+void _costKeyGuard;
+const _limitKeyGuard: _KeysAccepted<
+  OpencodeModelConfigEntry["limit"],
+  NonNullable<AcceptedModelConfig["limit"]>
+> = true;
+void _limitKeyGuard;
 
 /**
  * Map discovered Cursor models to opencode's provider config `models` map. The
@@ -116,6 +169,7 @@ export function toOpencodeModels(items: ModelListItem[]): Record<string, Opencod
   const out: Record<string, OpencodeModelConfigEntry> = {};
   for (const item of items) {
     const params = defaultModelParams(item);
+    const cost = resolveCost(item.id);
     out[item.id] = {
       id: item.id,
       name: item.displayName || item.id,
@@ -125,6 +179,16 @@ export function toOpencodeModels(items: ModelListItem[]): Record<string, Opencod
       tool_call: true,
       variants: buildModelVariants(item),
       options: Object.keys(params).length > 0 ? { params } : {},
+      limit: {
+        context: resolveContextLimit(item.id),
+        output: resolveOutputLimit(item.id),
+      },
+      cost: {
+        input: cost.input,
+        output: cost.output,
+        cache_read: cost.cacheRead,
+        cache_write: cost.cacheWrite,
+      },
     };
   }
   return out;

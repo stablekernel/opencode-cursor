@@ -81,6 +81,57 @@ describe("toOpencodeModels", () => {
   });
 });
 
+describe("toOpencodeModels config-channel limits and cost", () => {
+  it("emits per-model limit with both context and output", () => {
+    const out = toOpencodeModels([
+      { id: "claude-opus-4-8", displayName: "Opus 4.8" },
+      { id: "gpt-5.5", displayName: "GPT-5.5" },
+      { id: "grok-4.5", displayName: "Grok 4.5" },
+    ] satisfies ModelListItem[]);
+    expect(out["claude-opus-4-8"]!.limit).toEqual({ context: 300_000, output: 64_000 });
+    expect(out["gpt-5.5"]!.limit).toEqual({ context: 272_000, output: 64_000 });
+    expect(out["grok-4.5"]!.limit).toEqual({ context: 256_000, output: 32_000 });
+  });
+
+  it("emits cost with FLAT snake_case cache keys, not nested cache object", () => {
+    const out = toOpencodeModels([
+      { id: "claude-sonnet-4-6", displayName: "Sonnet 4.6" },
+    ] satisfies ModelListItem[]);
+    expect(out["claude-sonnet-4-6"]!.cost).toEqual({
+      input: 3,
+      output: 15,
+      cache_read: 0.3,
+      cache_write: 3.75,
+    });
+    expect(out["claude-sonnet-4-6"]!.cost).not.toHaveProperty("cache");
+  });
+
+  it("emits $0 cost for Cursor Models pool models", () => {
+    const out = toOpencodeModels([
+      { id: "composer-2.5", displayName: "Composer 2.5" },
+    ] satisfies ModelListItem[]);
+    expect(out["composer-2.5"]!.cost).toEqual({
+      input: 0,
+      output: 0,
+      cache_read: 0,
+      cache_write: 0,
+    });
+  });
+
+  it("falls back to 200K/32K and $0 for unknown models", () => {
+    const out = toOpencodeModels([
+      { id: "brand-new-model", displayName: "New" },
+    ] satisfies ModelListItem[]);
+    expect(out["brand-new-model"]!.limit).toEqual({ context: 200_000, output: 32_000 });
+    expect(out["brand-new-model"]!.cost).toEqual({
+      input: 0,
+      output: 0,
+      cache_read: 0,
+      cache_write: 0,
+    });
+  });
+});
+
 describe("discoverModels without a key", () => {
   it("returns the fallback snapshot with a warning when no cache exists", async () => {
     const prev = process.env.CURSOR_API_KEY;
