@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Generate `src/model-limits.ts` from Cursor's published docs.
  *
@@ -8,6 +7,14 @@
  * markdown docs, matches their display names against our supported model ids,
  * and emits the two generated maps.
  *
+ * This module is import-pure: it never runs `main()` as a side effect. The CLI
+ * lives in `scripts/sync-model-limits-cli.mjs`, which calls `main()`
+ * unconditionally. That split is deliberate — a "am I the entry point?" guard
+ * comparing `process.argv[1]` against `import.meta.url` is fail-open: any
+ * invocation where the two differ makes `main()` never run and the process exit
+ * 0 having done nothing, which is a permanently green, permanently useless
+ * drift job. That already happened once (a symlinked path).
+ *
  * Modes:
  *   (default)  fetch docs, write `src/model-limits.ts`
  *   --check    fetch docs, regenerate in memory, compare against the committed
@@ -16,21 +23,33 @@
  * Exit codes (CI depends on these):
  *   0  no drift
  *   1  drift detected (committed file differs from generated)
- *   2  network or parse failure — docs unreachable, table/columns missing, a
- *      MODEL_IDS entry unmatched with no override, or an ambiguous match
+ *   2  network, parse, or write failure — docs unreachable, table/columns
+ *      missing, a row missing a requested column, an unparseable cell, a
+ *      MODEL_IDS entry unmatched with no override, an ambiguous match, or the
+ *      output file could not be written
  *
  * Node 22 built-ins only. No dependencies.
  */
 
-import { readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OUTPUT_PATH = join(HERE, "..", "src", "model-limits.ts");
 
+/**
+ * The two docs pages. Cursor serves markdown for these two paths through
+ * different URL shapes and it is not symmetric: `models-and-pricing.md` returns
+ * markdown while the extensionless form returns HTML, and
+ * `request-based-legacy.md` returns `{"error":"File not found"}` (HTTP 404)
+ * while the extensionless form returns markdown. Each URL is therefore the one
+ * that currently serves markdown for its page, not a consistent convention. A
+ * non-2xx response or a page that stops carrying the expected columns exits 2,
+ * so if Cursor moves either one it surfaces rather than going quiet.
+ */
 export const SOURCES = {
-  context: "https://cursor.com/docs/account/pricing/request-based-legacy.md",
+  context: "https://cursor.com/docs/account/pricing/request-based-legacy",
   pricing: "https://cursor.com/docs/models-and-pricing.md",
 };
 
@@ -118,8 +137,31 @@ export const OVERRIDES = {
 /** Column that holds the model display name in both docs tables. */
 const NAME_COLUMN = "Model";
 
+/** Column that holds the vendor in both docs tables. */
+const PROVIDER_COLUMN = "Provider";
+
 /** Vendor/pricing words that appear on one side of a match but not the other. */
 const NOISE_TOKENS = new Set(["claude", "gpt", "cursor", "cost"]);
+
+/**
+ * Vendor identity for the vendor words {@link NOISE_TOKENS} drops, mapped to
+ * the `Provider` cell that must accompany them.
+ *
+ * Dropping `claude`/`gpt` is what lets `claude-sonnet-4-6` match "Claude 4.6
+ * Sonnet", but it also discards vendor identity: a surviving row from a
+ * different vendor whose remaining tokens coincide would be a wrong-but-
+ * confident match (e.g. the id `gpt-5.5` against a hypothetical Anthropic row
+ * "Claude 5.5", both reducing to `{5.5}`). Re-checking the `Provider` column
+ * puts the discarded identity back.
+ *
+ * Only the dropped words need an entry. `gemini`, `grok`, `glm`, `composer`,
+ * and `kimi` are not noise tokens, so their vendor identity already survives
+ * inside the compared token set.
+ */
+const PROVIDER_BY_VENDOR_TOKEN = new Map([
+  ["claude", "anthropic"],
+  ["gpt", "openai"],
+]);
 
 /** A cell that is nothing but a markdown link, e.g. `[Claude Opus 4.8](url)`. */
 const WHOLE_CELL_LINK = /^\[([^\]]+)\]\([^)]*\)$/;
@@ -167,7 +209,20 @@ export function parseDocsTable(md, columnNames) {
       if (!raw.startsWith("|")) break;
       const cells = splitRow(raw);
       const row = {};
-      for (const [index, name] of header.entries()) row[name] = cells[index] ?? "";
+      // An absent cell (row shorter than the header) is left unset rather than
+      // defaulted to "". Conflating the two is how a missing price column
+      // becomes a silent $0: `parsePrice("")` used to answer 0.
+      for (const [index, name] of header.entries()) {
+        if (index < cells.length) row[name] = cells[index];
+      }
+      for (const name of columnNames) {
+        if (row[name] === undefined) {
+          throw new Error(
+            `row ${JSON.stringify(row[NAME_COLUMN] ?? raw.slice(0, 60))} is missing the requested ` +
+              `column "${name}" (${cells.length} cells for ${header.length} headers)`,
+          );
+        }
+      }
       rows.push(row);
     }
     if (rows.length === 0) {
@@ -203,12 +258,19 @@ export function parseTokens(text) {
  * `"$3"` -> `3`, `"$0.30"` -> `0.3`, `"-"` -> `0`.
  * Throws on anything else so an unexpected docs format exits 2.
  *
+ * `"-"` is Cursor's documented "not applicable" and is a real $0. An empty cell
+ * is not: it carries no statement about price, and answering 0 for it would
+ * emit a silently wrong rate card entry for a model that matched. So it throws.
+ *
  * @param {string} text
  * @returns {number}
  */
 export function parsePrice(text) {
   const value = String(text ?? "").trim();
-  if (value === "" || value === "-") return 0;
+  if (value === "-") return 0;
+  if (value === "") {
+    throw new Error(`empty price cell: expected a dollar amount, or "-" for not applicable`);
+  }
   const match = /^\$?([\d,]+(?:\.\d+)?)$/.exec(value);
   if (!match) throw new Error(`cannot parse a price from ${JSON.stringify(text)}`);
   return Number(match[1].replace(/,/g, ""));
@@ -245,17 +307,43 @@ function sameTokens(a, b) {
 }
 
 /**
+ * The `Provider` cell a row must carry for `id`, or `undefined` when `id`
+ * names no vendor whose identity {@link tokenSet} discards.
+ *
+ * @param {string} id
+ * @returns {string | undefined}
+ */
+function requiredProvider(id) {
+  for (const part of String(id).toLowerCase().split(/[^a-z0-9.]+/)) {
+    const provider = PROVIDER_BY_VENDOR_TOKEN.get(part);
+    if (provider !== undefined) return provider;
+  }
+  return undefined;
+}
+
+/**
  * Find the single docs row whose display name describes `id`. Exact set
  * equality only — a near miss like "Composer 2.5" must not satisfy
- * "composer-2".
+ * "composer-2" — plus a `Provider` check for vendors the token set drops.
+ *
+ * The provider check is strict, not best-effort: an id naming a dropped vendor
+ * matches only a row whose `Provider` cell says so. A row with a blank or
+ * absent `Provider` therefore does not match such an id, which is the honest
+ * outcome — the alternative is matching on the same evidence that was just
+ * found insufficient.
  *
  * @param {string} id
  * @param {Array<Record<string, string>>} docRows
- * @returns {{ row: Record<string, string> } | { ambiguous: string[] } | undefined}
+ * @returns {{ row: Record<string, string>, ambiguous?: never } | { row?: never, ambiguous: string[] } | undefined}
  */
 export function matchModelId(id, docRows) {
   const wanted = tokenSet(id);
-  const hits = docRows.filter((row) => sameTokens(wanted, tokenSet(row[NAME_COLUMN] ?? "")));
+  const provider = requiredProvider(id);
+  const hits = docRows.filter((row) => {
+    if (!sameTokens(wanted, tokenSet(row[NAME_COLUMN] ?? ""))) return false;
+    if (provider === undefined) return true;
+    return (row[PROVIDER_COLUMN] ?? "").trim().toLowerCase() === provider;
+  });
   if (hits.length === 1) return { row: hits[0] };
   if (hits.length > 1) return { ambiguous: hits.map((row) => row[NAME_COLUMN] ?? "") };
   return undefined;
@@ -269,12 +357,12 @@ function formatCost(cost) {
   return `{ input: ${cost.input}, output: ${cost.output}, cacheRead: ${cost.cacheRead}, cacheWrite: ${cost.cacheWrite} }`;
 }
 
-/** Placeholder the sync date is normalized to before any comparison. */
-const SYNC_DATE_LINE = /^ \* Synced: .*$/m;
-const SYNC_DATE_PLACEHOLDER = " * Synced: <ignored for comparison>";
+/** Placeholder the generated date line is normalized to before any comparison. */
+const SYNC_DATE_LINE = /^ \* Data last changed: .*$/m;
+const SYNC_DATE_PLACEHOLDER = " * Data last changed: <ignored for comparison>";
 
 /**
- * Strip the sync date so `--check` reports data drift, not the passage of
+ * Strip the date line so `--check` reports data drift, not the passage of
  * time. Write mode uses the same normalization to leave the committed date
  * alone when nothing else moved.
  *
@@ -285,13 +373,30 @@ export function normalizeForComparison(text) {
 }
 
 /**
- * Resolve every id in MODEL_IDS against the two docs tables and emit the full
+ * Resolve every id in `modelIds` against the two docs tables and emit the full
  * text of `src/model-limits.ts`.
  *
- * @param {{ contextMd: string, pricingMd: string, date?: string }} input
+ * `modelIds` and `overrides` are injectable so the contracts this function
+ * holds — strict overrides, ambiguity, docs-over-override precedence, sorted
+ * output — can be exercised against small fixtures instead of only against the
+ * live 33-id catalog.
+ *
+ * @param {{
+ *   contextMd: string,
+ *   pricingMd: string,
+ *   modelIds?: readonly string[],
+ *   overrides?: Record<string, { context?: number, cost?: { input: number, output: number, cacheRead: number, cacheWrite: number }, why?: string }>,
+ *   date?: string,
+ * }} input
  * @returns {{ text: string, stats: { context: { matched: number, overridden: number }, cost: { matched: number, overridden: number } } }}
  */
-export function generate({ contextMd, pricingMd, date = new Date().toISOString().slice(0, 10) }) {
+export function generate({
+  contextMd,
+  pricingMd,
+  modelIds = MODEL_IDS,
+  overrides = OVERRIDES,
+  date = new Date().toISOString().slice(0, 10),
+}) {
   const contextRows = parseDocsTable(contextMd, [NAME_COLUMN, "Default context"]);
   const priceRows = parseDocsTable(pricingMd, [NAME_COLUMN, "Input", "Cache write", "Cache read", "Output"]);
 
@@ -302,8 +407,8 @@ export function generate({ contextMd, pricingMd, date = new Date().toISOString()
   const contextLimits = [];
   const costs = [];
 
-  for (const id of [...MODEL_IDS].sort()) {
-    const override = OVERRIDES[id];
+  for (const id of [...modelIds].sort()) {
+    const override = overrides[id];
 
     const contextHit = matchModelId(id, contextRows);
     if (contextHit && "ambiguous" in contextHit) {
@@ -361,7 +466,10 @@ export function generate({ contextMd, pricingMd, date = new Date().toISOString()
  *   context windows  ${SOURCES.context}
  *   pricing          ${SOURCES.pricing}
  *
- * Synced: ${date}
+ * Data last changed: ${date}
+ * (a sync that finds no data change leaves this date alone, so it dates the
+ *  last change to the generated maps — NOT the last time they were verified.
+ *  Verification runs on a schedule in CI; see the model-data-drift job.)
  * Regenerate: \`npm run sync:model-limits\`
  *
  * Only MODEL_CONTEXT_LIMITS and MODEL_COST are derived from the docs.
@@ -494,7 +602,15 @@ async function fetchDoc(url) {
   return await response.text();
 }
 
-async function main(argv) {
+/**
+ * Run the CLI. Returns the process exit code rather than calling
+ * `process.exit`, so the caller owns the exit. Invoked unconditionally by
+ * `scripts/sync-model-limits-cli.mjs`.
+ *
+ * @param {string[]} argv
+ * @returns {Promise<number>}
+ */
+export async function main(argv) {
   const check = argv.includes("--check");
 
   let generated;
@@ -543,24 +659,16 @@ async function main(argv) {
     return 0;
   }
 
-  writeFileSync(OUTPUT_PATH, text);
+  try {
+    writeFileSync(OUTPUT_PATH, text);
+  } catch (error) {
+    // Exit 2, not 1: an I/O failure is an environment problem, and 1 means
+    // "the committed file is stale", which this does not establish.
+    process.stderr.write(
+      `sync-model-limits: cannot write ${OUTPUT_PATH}: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    return 2;
+  }
   process.stdout.write(`sync-model-limits: wrote src/model-limits.ts (${summary})\n`);
   return 0;
-}
-
-// Resolve symlinks on both sides before comparing: `import.meta.url` is always
-// the real path, so a symlinked invocation path would otherwise make this look
-// like an import and silently skip the CLI (exiting 0 without doing anything).
-function isInvokedDirectly() {
-  const entry = process.argv[1];
-  if (entry === undefined) return false;
-  try {
-    return import.meta.url === pathToFileURL(realpathSync(entry)).href;
-  } catch {
-    return import.meta.url === pathToFileURL(entry).href;
-  }
-}
-
-if (isInvokedDirectly()) {
-  process.exitCode = await main(process.argv.slice(2));
 }

@@ -1,5 +1,8 @@
 name: CI
 
+# `schedule` and `workflow_dispatch` exist for the model-data-drift job only.
+# Triggers are workflow-wide in Actions, so every job below carries an `if:`
+# that scopes it to the events it is actually for.
 on:
   push:
     branches: ["**"]
@@ -14,6 +17,9 @@ permissions:
 jobs:
   build:
     name: typecheck · test · build (node ${{ matrix.node-version }})
+    # Code CI only. The weekly cron and manual dispatch exist for
+    # model-data-drift; re-running the matrix on them buys nothing.
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -68,9 +74,10 @@ jobs:
 
       - name: Check committed model limits against Cursor docs
         run: |
+          log="$RUNNER_TEMP/drift.log"
           set +e
-          npm run sync:model-limits -- --check
-          code=$?
+          npm run sync:model-limits -- --check 2>&1 | tee "$log"
+          code=${PIPESTATUS[0]}
           set -e
           if [ "$code" = "1" ]; then
             echo "::error::src/model-limits.ts is stale. Run 'npm run sync:model-limits' and commit."
@@ -80,10 +87,23 @@ jobs:
             echo "::warning::Could not verify model data (docs unreachable or unparseable)."
             exit 0
           fi
-          exit "$code"
+          if [ "$code" != "0" ]; then
+            echo "::error::Unexpected exit code $code from the drift check."
+            exit "$code"
+          fi
+          # Exit 0 is only trustworthy if the run also reported its summary. A
+          # bare 0 is what "did nothing at all" looks like, and that has
+          # happened: an entry-point guard once skipped main() entirely and the
+          # job passed for free. Demand the evidence, not just the code.
+          if ! grep -qE 'sync-model-limits: src/model-limits\.ts is up to date \(context: [0-9]+ from docs, [0-9]+ overridden \| cost: [0-9]+ from docs, [0-9]+ overridden \| [0-9]+ model ids\)' "$log"; then
+            echo "::error::Drift check exited 0 without printing a run summary — it did not actually verify anything."
+            exit 1
+          fi
 
   integration:
     name: e2e · opencode loads plugin & lists models
+    # Code CI only, same reason as `build`.
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
