@@ -4,6 +4,7 @@ import type { CursorEvent } from "../src/provider/agent-events.js";
 import {
 	cursorEventsToContent,
 	cursorEventsToStream,
+	effectiveToolDisplay,
 	mapUsage,
 } from "../src/provider/stream-map.js";
 import {
@@ -1694,5 +1695,27 @@ describe("subagent child-session linking (blocks)", () => {
 		);
 		const result = toolResults(parts)[0]!;
 		expect(foldedMetadata(result)["sessionId"]).toBeUndefined();
+	});
+});
+
+describe("effectiveToolDisplay", () => {
+	it("returns \"reasoning\" when tools are undefined", () => {
+		expect(effectiveToolDisplay("blocks", undefined)).toBe("reasoning");
+	});
+
+	it("returns \"reasoning\" when tools are an empty array", () => {
+		expect(effectiveToolDisplay("blocks", [])).toBe("reasoning");
+	});
+
+	it("returns the configured mode when tools are present", () => {
+		expect(effectiveToolDisplay("blocks", [{ type: "function", name: "read" } as never])).toBe(
+			"blocks",
+		);
+	});
+
+	it("defaults to \"blocks\" when configured is undefined and tools are present", () => {
+		expect(
+			effectiveToolDisplay(undefined, [{ type: "function", name: "read" } as never]),
+		).toBe("blocks");
 	});
 });

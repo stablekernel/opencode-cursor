@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- **Fixed: auto-compaction (and manual `/compact`) failed with `Tool call not
+  allowed while generating summary` whenever the Cursor agent used a tool while
+  summarizing.** opencode declares zero tools on a compaction/summary turn, but
+  the Cursor agent runs its own tools regardless; the provider forwarded that
+  activity as provider-executed `tool-call` parts, which opencode's summary
+  guard rejects. The provider now routes no-tools turns through the existing
+  `"reasoning"` tool-display path, so Cursor's tool activity surfaces as
+  reasoning text instead of crossing the tool-execution boundary. Manual
+  `/compact` was affected all along; **auto**-compaction became reachable only
+  in 0.7.1-next.0, because #89 published real per-model context windows —
+  pre-0.7.1 opencode saw `limit.context: 0` for every Cursor model, and a zero
+  context limit structurally disables the auto-compaction trigger.
+
 ## [0.7.1-next.0] — 2026-08-03 (pre-release)
 
 Pre-release of the skills bridge (#90) and per-model context limits + pricing

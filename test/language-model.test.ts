@@ -457,3 +457,122 @@ describe("CursorLanguageModel doStream — resume-aware retry", () => {
 		expect((error.cause as Error)?.message).toContain("error");
 	});
 });
+
+// Regression for "Tool call not allowed while generating summary" on turns
+// where opencode declares no tools (compaction/summary, title generation).
+// The Cursor agent runs its own tools regardless; the provider must fold that
+// activity into reasoning text rather than emitting provider-executed
+// tool-call parts the host cannot accept.
+describe("CursorLanguageModel — no-tools turns fold tool activity into reasoning", () => {
+	const TOOL_TYPES = [
+		"tool-input-start",
+		"tool-input-delta",
+		"tool-input-end",
+		"tool-call",
+		"tool-result",
+	] as const;
+
+	// A Cursor tool-call for an MCP tool (the shape that produced the reported
+	// `cursor_context-mode_ctx_search` part).
+	const mcpToolCallUpdate = {
+		type: "tool-call-started",
+		callId: "c1",
+		toolCall: { type: "mcp", args: { toolName: "context-mode_ctx_search", providerIdentifier: "context-mode" } },
+	};
+	const mcpToolResultUpdate = {
+		type: "tool-call-completed",
+		callId: "c1",
+		toolCall: { type: "mcp", result: { content: [{ type: "text", text: "ok" }] } },
+	};
+
+	it("doStream: a no-tools turn emits no tool parts", async () => {
+		const model = makeModel();
+		create.mockResolvedValueOnce(
+			fakeAgent({
+				agentId: "a1",
+				updates: [mcpToolCallUpdate, mcpToolResultUpdate, { type: "text-delta", text: "summary" }],
+			}),
+		);
+
+		const parts = await collectStream(
+			streamCall(model, {
+				prompt: [user("summarize")],
+				// tools intentionally omitted — mirrors opencode's compaction turn
+				providerOptions: { cursor: { sessionID: "s1" } },
+			} as never),
+		);
+
+		for (const t of TOOL_TYPES) {
+			expect(eventTypes(parts)).not.toContain(t);
+		}
+
+		// Absence alone would also hold if the stream emitted nothing, so assert
+		// the activity was FOLDED INTO reasoning rather than dropped.
+		const reasoning = parts
+			.filter(
+				(p): p is Extract<LanguageModelV3StreamPart, { type: "reasoning-delta" }> =>
+					p.type === "reasoning-delta",
+			)
+			.map((p) => p.delta)
+			.join("");
+		expect(reasoning).toContain("context-mode_ctx_search");
+		// The summary text itself still reaches the host.
+		const text = parts
+			.filter(
+				(p): p is Extract<LanguageModelV3StreamPart, { type: "text-delta" }> =>
+					p.type === "text-delta",
+			)
+			.map((p) => p.delta)
+			.join("");
+		expect(text).toBe("summary");
+	});
+
+	it("doStream: a turn WITH tools still emits tool-call parts", async () => {
+		const model = makeModel();
+		create.mockResolvedValueOnce(
+			fakeAgent({
+				agentId: "a1",
+				updates: [mcpToolCallUpdate, mcpToolResultUpdate, { type: "text-delta", text: "done" }],
+			}),
+		);
+
+		const parts = await collectStream(
+			streamCall(model, {
+				prompt: [sys("S"), user("hi")],
+				tools: [{ type: "function", name: "read", inputSchema: {} }],
+				providerOptions: { cursor: { sessionID: "s1" } },
+			} as never),
+		);
+
+		// Normal tool blocks are preserved — the suppression is no-tools-only.
+		expect(eventTypes(parts)).toContain("tool-call");
+	});
+
+	it("doGenerate: a no-tools turn carries no tool-call in content", async () => {
+		const model = makeModel();
+		create.mockResolvedValueOnce(
+			fakeAgent({
+				agentId: "a1",
+				updates: [mcpToolCallUpdate, mcpToolResultUpdate, { type: "text-delta", text: "summary" }],
+			}),
+		);
+
+		const result = await model.doGenerate({
+			prompt: [user("summarize")],
+			providerOptions: { cursor: { sessionID: "s1" } },
+		} as never);
+
+		const toolContent = result.content.filter((c) => c.type === "tool-call");
+		expect(toolContent).toHaveLength(0);
+
+		// Folded into reasoning, not dropped.
+		const reasoning = result.content
+			.filter(
+				(c): c is Extract<typeof c, { type: "reasoning" }> =>
+					c.type === "reasoning",
+			)
+			.map((c) => c.text)
+			.join("");
+		expect(reasoning).toContain("context-mode_ctx_search");
+	});
+});

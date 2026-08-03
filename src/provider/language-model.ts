@@ -34,6 +34,7 @@ import {
 import {
 	cursorEventsToContent,
 	cursorEventsToStream,
+	effectiveToolDisplay,
 	type ToolDisplay,
 } from "./stream-map.js";
 import { resolveControls } from "./controls.js";
@@ -549,9 +550,11 @@ export class CursorLanguageModel implements LanguageModelV3 {
 				? (po["sessionID"] as string)
 				: undefined;
 		return {
-			stream: cursorEventsToStream(this.agentRun(options), this.config.toolDisplay, {
-				sessionID,
-			}),
+			stream: cursorEventsToStream(
+				this.agentRun(options),
+				effectiveToolDisplay(this.config.toolDisplay, options.tools),
+				{ sessionID },
+			),
 		};
 	}
 
@@ -563,7 +566,7 @@ export class CursorLanguageModel implements LanguageModelV3 {
 	}> {
 		const result = await cursorEventsToContent(
 			this.agentRun(options),
-			this.config.toolDisplay,
+			effectiveToolDisplay(this.config.toolDisplay, options.tools),
 		);
 		return { ...result, warnings: [] };
 	}

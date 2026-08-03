@@ -1,4 +1,5 @@
 import type {
+	LanguageModelV3CallOptions,
 	LanguageModelV3Content,
 	LanguageModelV3FinishReason,
 	LanguageModelV3StreamPart,
@@ -54,6 +55,24 @@ function injectSubagentSessionId(
  *    treated as dynamic.
  */
 export type ToolDisplay = "reasoning" | "blocks";
+
+/**
+ * A host that declared no tools cannot accept tool parts — opencode's summary
+ * guard throws on them (`Tool call not allowed while generating summary`).
+ * Cursor's agent runs its own tools regardless, so fold that activity into
+ * reasoning text for those turns. Returns the configured mode otherwise.
+ */
+export function effectiveToolDisplay(
+	configured: ToolDisplay | undefined,
+	tools: LanguageModelV3CallOptions["tools"],
+): ToolDisplay {
+	// `Array.isArray` rather than a null check: opencode passes tools as a
+	// Record at its own layer and the ai-sdk converts it to an array (an empty
+	// Record short-circuits to `undefined`), so a raw record never reaches us
+	// today — but this way the guard holds even if that conversion changes.
+	if (!Array.isArray(tools) || tools.length === 0) return "reasoning";
+	return configured ?? "blocks";
+}
 
 const FINISH_STOP: LanguageModelV3FinishReason = {
 	unified: "stop",

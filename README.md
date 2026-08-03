@@ -413,6 +413,10 @@ open a PR.
 - **`"reasoning"`** — compact inline lines (`[tool] write {"path":…}`). Works on any host; use
   this on older opencode versions.
 
+Turns where the host declares no tools at all — compaction/summary and title generation — always
+use `"reasoning"` regardless of this setting. opencode rejects tool parts on a summary turn, so
+Cursor's tool activity is folded into reasoning text there instead.
+
 To force the fallback:
 
 ```json
