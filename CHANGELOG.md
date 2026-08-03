@@ -20,8 +20,10 @@ All notable changes to this project will be documented in this file.
   `config.skills.paths` directories are also scanned (lowest priority,
   first-wins on duplicate ids). Symlinked skill directories and symlinked
   supporting files are followed (broken links and symlink loops are skipped).
-  `config.skills.urls` (HTTP catalogs) and skills bundled inside opencode
-  plugin packages are not yet supported.
+  Mirror diagnostics (withheld skills, oversized files, write failures) route
+  through opencode's structured plugin logging rather than the terminal,
+  matching 0.7.0's logging change. `config.skills.urls` (HTTP catalogs) and
+  skills bundled inside opencode plugin packages are not yet supported.
 
 ## [0.7.0] — 2026-07-30
 

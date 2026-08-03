@@ -15,7 +15,7 @@ import {
 import { buildCursorTools } from "./cursor-tools.js";
 import { getLocalVersion, getLatestVersion, clearVersionCache, PLUGIN_CACHE_PATH } from "../version-check.js";
 import { removeSystemRule } from "../provider/system-rule.js";
-import { clearLogBridge, setLogBridge } from "../provider/log-bridge.js";
+import { clearLogBridge, pluginLog, setLogBridge } from "../provider/log-bridge.js";
 import {
 	writeSkillMirror,
 	removeSkillMirror,
@@ -230,22 +230,23 @@ export const CursorPlugin: Plugin = async (input) => {
 						skillFilterOptions,
 					);
 					writeSkillMirror(resolvedCwd, resolved.skills, (msg) =>
-						console.warn(`[cursor] ${msg}`),
+						pluginLog("warn", msg),
 					);
 					currentSkillsCatalogue = buildSkillsCatalogue(resolved.skills) ?? "";
 					lastSkillHash = skillSetHash(resolved.skills);
 					if (resolved.withheld.length > 0) {
-						const summary = resolved.withheld
-							.map((w) => `${w.id} (${w.reason})`)
-							.join(", ");
-						console.warn(
-							`[cursor] Skills withheld from mirror: ${summary}`,
-						);
+						pluginLog("warn", "skills withheld from mirror", {
+							withheld: resolved.withheld.map((w) => ({
+								id: w.id,
+								reason: w.reason,
+							})),
+						});
 					}
 				} catch (error) {
-					console.warn(
-						`[cursor] Skill mirror failed: ${error instanceof Error ? error.message : String(error)}. Skills will not be available to the Cursor agent this session.`,
-					);
+					pluginLog("warn", "skill mirror failed", {
+						error: error instanceof Error ? error.message : String(error),
+						impact: "skills unavailable to the Cursor agent this session",
+					});
 				}
 			}
 
@@ -370,7 +371,7 @@ export const CursorPlugin: Plugin = async (input) => {
 						const hash = skillSetHash(resolved.skills);
 						if (hash !== lastSkillHash) {
 							writeSkillMirror(resolvedCwd, resolved.skills, (msg) =>
-								console.warn(`[cursor] ${msg}`),
+								pluginLog("warn", msg),
 							);
 							currentSkillsCatalogue =
 								buildSkillsCatalogue(resolved.skills) ?? "";
