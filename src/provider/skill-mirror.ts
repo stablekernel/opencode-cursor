@@ -7,9 +7,11 @@ import {
 	readdirSync,
 	statSync,
 	copyFileSync,
+	realpathSync,
 } from "node:fs";
 import type { Dirent } from "node:fs";
 import { join, relative, dirname } from "node:path";
+import { entryKind } from "../plugin/skill-discovery.js";
 import type { DiscoveredSkill } from "../plugin/skill-discovery.js";
 
 /** Location of the generated mirror, relative to the agent's cwd. */
@@ -76,8 +78,18 @@ function copyTree(
 ): { bytes: number; skipped: string[] } {
 	let bytes = 0;
 	const skipped: string[] = [];
+	// Following symlinked directories admits cycles; track resolved paths.
+	const visited = new Set<string>();
 
 	function walk(src: string, dest: string) {
+		let realSrc: string;
+		try {
+			realSrc = realpathSync(src);
+		} catch {
+			return;
+		}
+		if (visited.has(realSrc)) return;
+		visited.add(realSrc);
 		let entries;
 		try {
 			entries = readdirSync(src, { withFileTypes: true });
@@ -87,9 +99,10 @@ function copyTree(
 		for (const entry of entries) {
 			const srcPath = join(src, entry.name);
 			const destPath = join(dest, entry.name);
-			if (entry.isDirectory()) {
+			const kind = entryKind(entry, srcPath);
+			if (kind === "dir") {
 				walk(srcPath, destPath);
-			} else if (entry.isFile()) {
+			} else if (kind === "file") {
 				// Never copy SKILL.md here — it's already written with the
 				// sentinel stamped by the caller. Copying the original would
 				// overwrite the stamped version.

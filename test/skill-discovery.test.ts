@@ -5,6 +5,7 @@ import {
 	writeFileSync,
 	rmSync,
 	existsSync,
+	symlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -288,6 +289,68 @@ describe("discoverSkills", () => {
 		const cwd = tmp();
 		const skills = discoverSkills(cwd, ["/nonexistent/path/12345"]);
 		expect(skills).toHaveLength(0);
+	});
+
+	it("discovers a skill through a symlinked skill directory", () => {
+		const cwd = tmp();
+		const real = tmp();
+		const target = writeSkill(real, "linked-real", {
+			name: "linked",
+			description: "Reached through a symlink.",
+		});
+		const skillsRoot = join(cwd, ".opencode", "skills");
+		mkdirSync(skillsRoot, { recursive: true });
+		symlinkSync(target, join(skillsRoot, "linked"));
+		const skills = discoverSkills(cwd);
+		const linked = skills.find((s) => s.id === "linked");
+		expect(linked).toBeDefined();
+		expect(linked!.description).toBe("Reached through a symlink.");
+	});
+
+	it("skips a broken symlink and a symlink pointing at a file", () => {
+		const cwd = tmp();
+		const skillsRoot = join(cwd, ".opencode", "skills");
+		mkdirSync(skillsRoot, { recursive: true });
+		symlinkSync(join(cwd, "does-not-exist"), join(skillsRoot, "broken"));
+		const loose = join(cwd, "loose.md");
+		writeFileSync(loose, "not a skill dir", "utf8");
+		symlinkSync(loose, join(skillsRoot, "file-link"));
+		expect(discoverSkills(cwd)).toHaveLength(0);
+	});
+
+	it("collects supporting files reached through symlinks", () => {
+		const cwd = tmp();
+		const real = tmp();
+		const refTarget = join(real, "reference.md");
+		writeFileSync(refTarget, "reference body", "utf8");
+		const assetsTarget = join(real, "assets");
+		mkdirSync(assetsTarget, { recursive: true });
+		writeFileSync(join(assetsTarget, "note.txt"), "note", "utf8");
+
+		const dir = writeSkill(join(cwd, ".opencode", "skills"), "with-links", {
+			name: "with-links",
+			description: "Has symlinked supporting files.",
+		});
+		symlinkSync(refTarget, join(dir, "reference.md"));
+		symlinkSync(assetsTarget, join(dir, "assets"));
+
+		const skill = discoverSkills(cwd).find((s) => s.id === "with-links");
+		expect(skill).toBeDefined();
+		expect(skill!.files).toContain("reference.md");
+		expect(skill!.files).toContain(join("assets", "note.txt"));
+	});
+
+	it("does not loop forever on a self-referential symlinked subdirectory", () => {
+		const cwd = tmp();
+		const dir = writeSkill(join(cwd, ".opencode", "skills"), "cyclic", {
+			name: "cyclic",
+			description: "Contains a symlink loop.",
+		});
+		writeFileSync(join(dir, "real.txt"), "real", "utf8");
+		symlinkSync(dir, join(dir, "loop"));
+		const skill = discoverSkills(cwd).find((s) => s.id === "cyclic");
+		expect(skill).toBeDefined();
+		expect(skill!.files).toContain("real.txt");
 	});
 });
 

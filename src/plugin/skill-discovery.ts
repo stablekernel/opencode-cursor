@@ -3,6 +3,7 @@ import {
 	readFileSync,
 	statSync,
 	existsSync,
+	realpathSync,
 } from "node:fs";
 import type { Dirent } from "node:fs";
 import { join, relative, dirname, resolve as resolvePath, isAbsolute } from "node:path";
@@ -124,7 +125,11 @@ function scanSkillDir(
 	}
 	const found: Array<{ id: string; sourceDir: string }> = [];
 	for (const entry of entries) {
-		if (!entry.isDirectory()) continue;
+		// Symlinks are admitted here rather than filtered: `Dirent.isDirectory()`
+		// is false for a symlink pointing at a directory, which would silently
+		// drop skills linked in from a shared checkout. The `SKILL.md` check
+		// below follows symlinks, so it rejects broken links and links to files.
+		if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
 		const skillDir = join(dir, entry.name);
 		if (!existsSync(join(skillDir, "SKILL.md"))) continue;
 		found.push({ id: entry.name, sourceDir: skillDir });
@@ -132,10 +137,42 @@ function scanSkillDir(
 	return found;
 }
 
+/**
+ * Classify a directory entry, following symlinks. `Dirent` reports a symlink
+ * as neither file nor directory, so symlinked supporting files would be lost
+ * without this. Broken symlinks and non-regular targets resolve to "other".
+ */
+export function entryKind(
+	entry: Dirent,
+	fullPath: string,
+): "dir" | "file" | "other" {
+	if (entry.isDirectory()) return "dir";
+	if (entry.isFile()) return "file";
+	if (!entry.isSymbolicLink()) return "other";
+	try {
+		const target = statSync(fullPath);
+		if (target.isDirectory()) return "dir";
+		if (target.isFile()) return "file";
+	} catch {
+		// Broken symlink.
+	}
+	return "other";
+}
+
 /** Collect supporting files (relative paths) alongside SKILL.md in a skill dir. */
 function collectFiles(sourceDir: string): string[] {
 	const files: string[] = [];
+	// Following symlinked directories admits cycles; track resolved paths.
+	const visited = new Set<string>();
 	function walk(dir: string, base: string) {
+		let realDir: string;
+		try {
+			realDir = realpathSync(dir);
+		} catch {
+			return;
+		}
+		if (visited.has(realDir)) return;
+		visited.add(realDir);
 		let entries;
 		try {
 			entries = readdirSync(dir, { withFileTypes: true });
@@ -146,9 +183,10 @@ function collectFiles(sourceDir: string): string[] {
 			const fullPath = join(dir, entry.name);
 			const relPath = relative(base, fullPath);
 			if (entry.name === "SKILL.md") continue;
-			if (entry.isDirectory()) {
+			const kind = entryKind(entry, fullPath);
+			if (kind === "dir") {
 				walk(fullPath, base);
-			} else if (entry.isFile()) {
+			} else if (kind === "file") {
 				files.push(relPath);
 			}
 		}

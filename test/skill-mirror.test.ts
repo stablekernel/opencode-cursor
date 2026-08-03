@@ -7,6 +7,7 @@ import {
 	existsSync,
 	rmSync,
 	chmodSync,
+	symlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -214,6 +215,41 @@ describe("writeSkillMirror", () => {
 		).not.toThrow();
 		// Restore for cleanup.
 		chmodSync(join(cwd, ".cursor", "skills"), 0o755);
+	});
+
+	it("copies supporting files reached through symlinks", () => {
+		const cwd = tmp();
+		const src = join(cwd, "src", "linked-files");
+		const skill = makeSkill("linked-files", src);
+		const external = tmp();
+		const refTarget = join(external, "reference.md");
+		writeFileSync(refTarget, "reference body", "utf8");
+		const assetsTarget = join(external, "assets");
+		mkdirSync(assetsTarget, { recursive: true });
+		writeFileSync(join(assetsTarget, "note.txt"), "note", "utf8");
+		symlinkSync(refTarget, join(src, "reference.md"));
+		symlinkSync(assetsTarget, join(src, "assets"));
+
+		const warnings: string[] = [];
+		writeSkillMirror(cwd, [skill], (m) => warnings.push(m));
+		const dest = skillDir(cwd, "linked-files");
+		expect(readFileSync(join(dest, "reference.md"), "utf8")).toBe(
+			"reference body",
+		);
+		expect(readFileSync(join(dest, "assets", "note.txt"), "utf8")).toBe("note");
+		expect(warnings).toHaveLength(0);
+	});
+
+	it("does not loop forever on a self-referential symlinked subdirectory", () => {
+		const cwd = tmp();
+		const src = join(cwd, "src", "cyclic");
+		const skill = makeSkill("cyclic", src);
+		writeFileSync(join(src, "real.txt"), "real", "utf8");
+		symlinkSync(src, join(src, "loop"));
+		expect(() => writeSkillMirror(cwd, [skill], () => {})).not.toThrow();
+		expect(
+			readFileSync(join(skillDir(cwd, "cyclic"), "real.txt"), "utf8"),
+		).toBe("real");
 	});
 });
 
