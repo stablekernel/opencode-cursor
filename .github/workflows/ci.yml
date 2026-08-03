@@ -4,6 +4,9 @@ on:
   push:
     branches: ["**"]
   pull_request:
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -44,6 +47,40 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  model-data-drift:
+    name: model limits · drift vs Cursor docs
+    # Deliberately not on pull_request: this job reaches cursor.com, and PR CI
+    # stays hermetic.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24.x"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check committed model limits against Cursor docs
+        run: |
+          set +e
+          npm run sync:model-limits -- --check
+          code=$?
+          set -e
+          if [ "$code" = "1" ]; then
+            echo "::error::src/model-limits.ts is stale. Run 'npm run sync:model-limits' and commit."
+            exit 1
+          fi
+          if [ "$code" = "2" ]; then
+            echo "::warning::Could not verify model data (docs unreachable or unparseable)."
+            exit 0
+          fi
+          exit "$code"
 
   integration:
     name: e2e · opencode loads plugin & lists models
