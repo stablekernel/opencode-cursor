@@ -50,7 +50,9 @@ opencode's permission system**. Key implications:
   etc.) **and** from `config.skills.paths` — additional directories configured
   in `opencode.json`. If `skills.paths` points to directories outside the
   project, skills from those directories will also be mirrored.
-- `deny`-permissioned skills are excluded from the mirror before writing.
+- `deny`-permissioned skills are excluded from the mirror before writing, unless
+  explicitly re-added via a manual `skills.include` list, which takes precedence
+  over permission config by design.
 - `ask`-permissioned skills are also excluded, because the ask prompt cannot be
   enforced across the Cursor boundary (there is no way for Cursor to relay the
   approval request back to opencode's permission system).

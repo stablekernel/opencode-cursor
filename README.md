@@ -306,6 +306,12 @@ user explicitly asked for them). `exclude` always drops the listed skills.
 
 ### Limitations
 
+- **Skills bundled inside opencode plugins are not mirrored.** Those ship in the
+  plugin package cache (`~/.cache/opencode/packages/<pkg>/node_modules/<pkg>/skills/`),
+  which is not a scanned location — `@opencode-ai/sdk` exposes no skills API, so
+  the mirror resolves skills from the filesystem itself. Skills that reach
+  opencode only through a plugin will be absent from `.cursor/skills/`. To
+  mirror one, add its directory to `config.skills.paths`.
 - A user-owned `.cursor/skills/<id>/SKILL.md` (without the `generated:
   opencode-cursor` sentinel) is never overwritten or deleted.
 - Individual files larger than 1 MB are skipped (the rest of the skill is still

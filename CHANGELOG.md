@@ -18,8 +18,10 @@ All notable changes to this project will be documented in this file.
   `forwardSkills: false`; manual override with `skills: { include, exclude }`.
   User-owned `.cursor/skills/<id>/` directories are never overwritten.
   `config.skills.paths` directories are also scanned (lowest priority,
-  first-wins on duplicate ids). `config.skills.urls` (HTTP catalogs) are not
-  yet supported.
+  first-wins on duplicate ids). Symlinked skill directories and symlinked
+  supporting files are followed (broken links and symlink loops are skipped).
+  `config.skills.urls` (HTTP catalogs) and skills bundled inside opencode
+  plugin packages are not yet supported.
 
 ## [0.6.1] — 2026-07-24
 
