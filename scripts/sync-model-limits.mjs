@@ -364,9 +364,11 @@ export function generate({ contextMd, pricingMd, date = new Date().toISOString()
  * Synced: ${date}
  * Regenerate: \`npm run sync:model-limits\`
  *
- * Only MODEL_CONTEXT_LIMITS and MODEL_COST are generated. MODEL_OUTPUT_LIMITS
- * further down is hand-maintained, because Cursor's docs have no output-token
- * column to generate it from.
+ * Only MODEL_CONTEXT_LIMITS and MODEL_COST are derived from the docs.
+ * MODEL_OUTPUT_LIMITS further down is hand-maintained, because Cursor's docs
+ * publish no output-token column — but it is still emitted from this file's
+ * template, so edit it in \`scripts/sync-model-limits.mjs\`, not here. An edit
+ * made here is reverted by the next sync.
  *
  * Pricing is read from the structured Input / Cache write / Cache read /
  * Output columns only. The \`Notes\` cell is deliberately NOT parsed, even
@@ -446,8 +448,10 @@ export function resolveCost(modelId: string): {
 }
 
 /**
- * NOT GENERATED — hand-maintained. Cursor's docs publish no output-token
- * column, so there is nothing to generate these from.
+ * NOT DERIVED FROM THE DOCS — hand-maintained in the template inside
+ * \`scripts/sync-model-limits.mjs\`. Cursor's docs publish no output-token
+ * column, so there is nothing to generate these from. Editing this map here
+ * has no lasting effect; the next sync reverts it.
  *
  * Per-model output token limits, keyed by model id prefix. The Cursor SDK
  * doesn't expose output limits, so these are best-known values. 32K default
