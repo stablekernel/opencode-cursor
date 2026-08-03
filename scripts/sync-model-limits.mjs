@@ -39,17 +39,22 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const OUTPUT_PATH = join(HERE, "..", "src", "model-limits.ts");
 
 /**
- * The two docs pages. Cursor serves markdown for these two paths through
- * different URL shapes and it is not symmetric: `models-and-pricing.md` returns
- * markdown while the extensionless form returns HTML, and
- * `request-based-legacy.md` returns `{"error":"File not found"}` (HTTP 404)
- * while the extensionless form returns markdown. Each URL is therefore the one
- * that currently serves markdown for its page, not a consistent convention. A
- * non-2xx response or a page that stops carrying the expected columns exits 2,
- * so if Cursor moves either one it surfaces rather than going quiet.
+ * The two docs pages, both in their `.md` form.
+ *
+ * Cursor's docs site content-negotiates. Measured against both URL shapes:
+ * with the markdown-preferring Accept header `fetchDoc` sends, the `.md` and
+ * extensionless forms both return the same markdown. With a default wildcard
+ * Accept header, only the `.md` form does — the extensionless form returns the
+ * ~110KB HTML page instead, which carries no pipe table.
+ *
+ * The `.md` form is therefore the more robust choice: it does not depend on the
+ * Accept header staying markdown-preferring. Keep both URLs on `.md`.
+ *
+ * A non-2xx response, or a page that stops carrying the expected columns,
+ * exits 2 — so if Cursor moves either page it surfaces rather than going quiet.
  */
 export const SOURCES = {
-  context: "https://cursor.com/docs/account/pricing/request-based-legacy",
+  context: "https://cursor.com/docs/account/pricing/request-based-legacy.md",
   pricing: "https://cursor.com/docs/models-and-pricing.md",
 };
 

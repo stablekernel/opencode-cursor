@@ -84,8 +84,8 @@ jobs:
             exit 1
           fi
           if [ "$code" = "2" ]; then
-            echo "::warning::Could not verify model data (docs unreachable or unparseable)."
-            exit 0
+            echo "::error::Could not verify model data (docs unreachable, unparseable, or a model id matched nothing). The drift check did not run — treat this as unverified, not as passing."
+            exit 1
           fi
           if [ "$code" != "0" ]; then
             echo "::error::Unexpected exit code $code from the drift check."
