@@ -153,51 +153,51 @@ export const CursorPlugin: Plugin = async (input) => {
 				if (Object.keys(params).length > 0) modelParamDefaults[item.id] = params;
 			}
 
-		// One canonical cwd for the provider's rule write and our dispose
-		// cleanup: an explicit user option wins, else the plugin directory.
-		const optionCwd = existingOptions["cwd"];
-		resolvedCwd =
-			(typeof optionCwd === "string" ? optionCwd : undefined) ??
-			directory ??
-			process.cwd();
+			// One canonical cwd for the provider's rule write and our dispose
+			// cleanup: an explicit user option wins, else the plugin directory.
+			const optionCwd = existingOptions["cwd"];
+			resolvedCwd =
+				(typeof optionCwd === "string" ? optionCwd : undefined) ??
+				directory ??
+				process.cwd();
 
-		// Forward opencode's resolved skills (both project and global scope) to
-		// the Cursor agent by mirroring them into `<cwd>/.cursor/skills/`. Cursor
-		// discovers these natively when the `project` settings layer is loaded.
-		// Opt out via `provider.cursor.options.forwardSkills: false`. Manual
-		// include/exclude override via `provider.cursor.options.skills`.
-		forwardSkills = existingOptions["forwardSkills"] !== false;
-		const skillsOpt = existingOptions["skills"] as
-			| { include?: string[]; exclude?: string[] }
-			| undefined;
-		skillFilterOptions = skillsOpt;
+			// Forward opencode's resolved skills (both project and global scope) to
+			// the Cursor agent by mirroring them into `<cwd>/.cursor/skills/`. Cursor
+			// discovers these natively when the `project` settings layer is loaded.
+			// Opt out via `provider.cursor.options.forwardSkills: false`. Manual
+			// include/exclude override via `provider.cursor.options.skills`.
+			forwardSkills = existingOptions["forwardSkills"] !== false;
+			const skillsOpt = existingOptions["skills"] as
+				| { include?: string[]; exclude?: string[] }
+				| undefined;
+			skillFilterOptions = skillsOpt;
 
-		if (forwardSkills) {
-			try {
-				const resolved = resolveSkills(
-					resolvedCwd,
-					config as Config | undefined,
-					skillFilterOptions,
-				);
-				writeSkillMirror(resolvedCwd, resolved.skills, (msg) =>
-					console.warn(`[cursor] ${msg}`),
-				);
-				currentSkillsCatalogue = buildSkillsCatalogue(resolved.skills) ?? "";
-				lastSkillHash = skillSetHash(resolved.skills);
-				if (resolved.withheld.length > 0) {
-					const summary = resolved.withheld
-						.map((w) => `${w.id} (${w.reason})`)
-						.join(", ");
+			if (forwardSkills) {
+				try {
+					const resolved = resolveSkills(
+						resolvedCwd,
+						config as Config | undefined,
+						skillFilterOptions,
+					);
+					writeSkillMirror(resolvedCwd, resolved.skills, (msg) =>
+						console.warn(`[cursor] ${msg}`),
+					);
+					currentSkillsCatalogue = buildSkillsCatalogue(resolved.skills) ?? "";
+					lastSkillHash = skillSetHash(resolved.skills);
+					if (resolved.withheld.length > 0) {
+						const summary = resolved.withheld
+							.map((w) => `${w.id} (${w.reason})`)
+							.join(", ");
+						console.warn(
+							`[cursor] Skills withheld from mirror: ${summary}`,
+						);
+					}
+				} catch (error) {
 					console.warn(
-						`[cursor] Skills withheld from mirror: ${summary}`,
+						`[cursor] Skill mirror failed: ${error instanceof Error ? error.message : String(error)}. Skills will not be available to the Cursor agent this session.`,
 					);
 				}
-			} catch (error) {
-				console.warn(
-					`[cursor] Skill mirror failed: ${error instanceof Error ? error.message : String(error)}. Skills will not be available to the Cursor agent this session.`,
-				);
 			}
-		}
 
 			config.provider[PROVIDER_ID] = {
 				name: "Cursor",
@@ -290,8 +290,8 @@ export const CursorPlugin: Plugin = async (input) => {
 					}
 				} catch {
 					// Keep the static snapshot; live forwarding is best-effort.
+				}
 			}
-		}
 
 			// Re-sync the skill mirror from opencode's *live* state so skills
 			// added/removed mid-session reach the Cursor agent on the next turn.
