@@ -1,6 +1,8 @@
 import type { Config, Plugin } from "@opencode-ai/plugin";
 import type { Auth } from "@opencode-ai/sdk/v2";
 import type { McpServerConfig } from "@cursor/sdk";
+import { rmSync } from "node:fs";
+import semver from "semver";
 import { resolveCursorApiKey } from "../api-key.js";
 import { discoverModels, toOpencodeModels } from "../model-discovery.js";
 import { defaultModelParams } from "../model-variants.js";
@@ -11,8 +13,9 @@ import {
 	translateMcpServers,
 } from "./mcp-config.js";
 import { buildCursorTools } from "./cursor-tools.js";
-import { warnIfStale } from "../version-check.js";
+import { getLocalVersion, getLatestVersion, clearVersionCache, PLUGIN_CACHE_PATH } from "../version-check.js";
 import { removeSystemRule } from "../provider/system-rule.js";
+import { clearLogBridge, setLogBridge } from "../provider/log-bridge.js";
 import {
 	writeSkillMirror,
 	removeSkillMirror,
@@ -45,13 +48,32 @@ function apiKeyFromAuth(auth: Auth | undefined): string | undefined {
  * - `tool.cursor_refresh_models`: force-refresh the model catalog.
  */
 export const CursorPlugin: Plugin = async (input) => {
-	// Warn if the installed plugin is behind the npm `latest` tag. The registry
-	// fetch is throttled to once per 24h via an on-disk cache, but while the
-	// cached result says the install is stale the warning prints on each
-	// startup. opencode freezes `@latest` plugin installs on first use, so this
-	// keeps users from silently running stale releases. Fire-and-forget: never
-	// block or fail plugin init.
-	void warnIfStale().catch(() => {});
+	// Single registry fetch shared by both the console warning and the UI
+	// version-check paths. Throttled to once per 24h via an on-disk cache.
+	// Fire-and-forget: never block or fail plugin init.
+	const _latestVersionPromise: Promise<string | undefined> = (async () => {
+		try {
+			if (process.env.CI || process.env.NO_UPDATE_NOTIFIER) return undefined;
+			return await getLatestVersion();
+		} catch {
+			return undefined;
+		}
+	})();
+
+	// Surfaces the update notice in the UI (toast). Resolved once per plugin
+	// instance using the shared fetch above.
+	const _versionCheckPromise: Promise<{ local: string; latest: string } | null> = (async () => {
+		try {
+			if (process.env.CI || process.env.NO_UPDATE_NOTIFIER) return null;
+			const local = getLocalVersion();
+			const latest = await _latestVersionPromise;
+			if (!local || !latest || !semver.gt(latest, local)) return null;
+			return { local, latest };
+		} catch {
+			return null;
+		}
+	})();
+	let _toastShown = false;
 
 	// The Cursor API key resolved by opencode's auth loader, captured so the
 	// delegation tools (which don't receive auth directly) can reuse it. Falls
@@ -62,12 +84,40 @@ export const CursorPlugin: Plugin = async (input) => {
 	// per-turn chat.params hook can re-forward the *live* MCP server set
 	// (reflecting mid-session enable/disable) rather than the startup snapshot.
 	const client = input?.client;
+
+	// Show a version update toast shortly after startup so it surfaces before
+	// the user sends their first message. The 2s delay gives the TUI time to
+	// initialize before we call showToast; it runs AFTER the version fetch
+	// resolves so a slow network never suspends into the user's first prompt.
+	void _versionCheckPromise
+		.then(async (result) => {
+			if (_toastShown || !result || !client) return;
+			_toastShown = true;
+			await new Promise<void>((r) => setTimeout(r, 2000));
+			const message = `@stablekernel/opencode-cursor v${result.latest} is available (you have v${result.local}). Use the cursor_update_plugin tool to update, then restart opencode.`;
+			void client.tui
+				.showToast({
+					body: {
+						title: "Cursor plugin update available",
+						message,
+						variant: "warning",
+						duration: 15000,
+					},
+				})
+				.catch(() => {});
+		})
+		.catch(() => {});
+
+
 	const directory = input?.directory;
 	// Publish the opencode client + directory so the provider stream layer can
 	// create a real child session for each Cursor subagent (making its `task`
 	// card clickable / `ctrl+x`-navigable). Same-process handoff via a globalThis
 	// registry; the provider degrades gracefully when it's absent.
-	if (client) setSubagentBridge({ client, directory });
+	if (client) {
+		setSubagentBridge({ client, directory });
+		setLogBridge({ client, directory });
+	}
 	// Canonical working directory for the generated system-prompt rule: the
 	// provider writes `.cursor/rules/opencode.mdc` under this path and dispose
 	// cleans it up from the same path. The config hook threads it into the
@@ -244,6 +294,16 @@ export const CursorPlugin: Plugin = async (input) => {
 			if (input.agent === "plan" && output.options["mode"] === undefined) {
 				output.options["mode"] = "plan";
 			}
+			// opencode runs its own title-generation call on the same sessionID as
+			// a session's real first turn, concurrently, with an unrelated (empty)
+			// system prompt. Mark it ephemeral so the provider always treats it as
+			// a side-call regardless of whether a pool record exists yet — without
+			// this, a race between the two calls' agent-creation round-trips can
+			// let the title call's fingerprint win and permanently overwrite the
+			// session's pool record (see language-model.ts's `ephemeral` check).
+			if (input.agent === "title") {
+				output.options["ephemeral"] = true;
+			}
 
 			// Dynamically re-forward MCP servers from opencode's *live* state so
 			// mid-session enable/disable reaches the Cursor agent (the config hook
@@ -327,9 +387,78 @@ export const CursorPlugin: Plugin = async (input) => {
 		},
 
 		tool: {
+			cursor_update_plugin: {
+				description:
+					"Check if the @stablekernel/opencode-cursor plugin is up to date and update it if not. Call this when the user asks to update, upgrade, or refresh the cursor plugin. Clears the cached install so opencode fetches the latest version on next launch.",
+				args: {},
+				execute: async () => {
+					if (process.env.CI || process.env.NO_UPDATE_NOTIFIER) {
+						return {
+							title: "cursor plugin (checks disabled)",
+							output: "Update checks are disabled (CI or NO_UPDATE_NOTIFIER is set).",
+							metadata: { local: undefined, latest: undefined, status: "disabled" as const },
+						};
+					}
+
+					const local = getLocalVersion();
+					if (!local || !semver.valid(local)) {
+						return {
+							title: "cursor plugin (unknown version)",
+							output: "Could not determine the installed plugin version.",
+							metadata: { local, latest: undefined, status: "failed" as const },
+						};
+					}
+
+					const latest = await getLatestVersion();
+					if (!latest || !semver.valid(latest)) {
+						return {
+							title: "cursor plugin (registry unavailable)",
+							output: "Could not fetch the latest version from npm. Check your network connection and try again.",
+							metadata: { local, latest, status: "failed" as const },
+						};
+					}
+
+					if (!semver.gt(latest, local)) {
+						return {
+							title: "cursor plugin (up to date)",
+							output: `The plugin is up to date (v${local}).`,
+							metadata: { local, latest, status: "up-to-date" as const },
+						};
+					}
+
+				// Plugin is outdated — clear the opencode plugin cache so it re-fetches on next launch.
+				const cachePath = PLUGIN_CACHE_PATH;
+				const removeCommand = process.platform === "win32"
+					? `rmdir /s /q "${cachePath}"`
+					: `rm -rf ${cachePath}`;
+
+					try {
+						rmSync(cachePath, { recursive: true, force: true });
+						clearVersionCache();
+						return {
+							title: "cursor plugin (updated)",
+							output:
+								`Plugin cache cleared (v${local} → v${latest}).\n` +
+								`Restart opencode to complete the upgrade — it will fetch v${latest} on next launch.`,
+							metadata: { local, latest, status: "updated" as const },
+						};
+					} catch (err) {
+						const message = err instanceof Error ? err.message : String(err);
+						return {
+							title: "cursor plugin (cache clear failed)",
+							output:
+								`Failed to clear plugin cache: ${message}\n\n` +
+								`To update manually, exit opencode and run:\n\n` +
+								`  ${removeCommand}\n\n` +
+								`then restart opencode.`,
+							metadata: { local, latest, status: "failed" as const },
+						};
+					}
+				},
+			},
 			cursor_refresh_models: {
 				description:
-					"Refresh the live Cursor model catalog now (bypasses the cache) and report the available models. The catalog also auto-refreshes on every opencode startup; use this to pick up new models mid-session.",
+					"Refresh the live Cursor model catalog now (bypasses the cache) and report the available models. The catalog also auto-refreshes on every opencode startup; use this to pick up new models mid-session. Note: to update the plugin itself (not just the model list), use the cursor_update_plugin tool.",
 				args: {},
 				execute: async () => {
 					const result = await discoverModels({ forceRefresh: true });
@@ -364,6 +493,7 @@ export const CursorPlugin: Plugin = async (input) => {
 			removeSystemRule(resolvedCwd);
 			removeSkillMirror(resolvedCwd);
 			clearSubagentBridge();
+			clearLogBridge();
 		},
 	};
 };

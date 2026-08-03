@@ -18,6 +18,8 @@ import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { loadCursorSdk } from "../cursor-runtime.js";
+import { installCursorLogInterceptor } from "./cursor-log-intercept.js";
+import { pluginLog } from "./log-bridge.js";
 import { SidecarClient, type AgentLike } from "./sidecar-client.js";
 
 export type { AgentLike, AgentRunLike, AgentSendOptions } from "./sidecar-client.js";
@@ -109,6 +111,11 @@ async function ensureHttp1Configured(): Promise<void> {
 }
 
 function inProcessBackend(useHttp1: boolean): AgentBackend {
+  // The SDK runs in this process and writes its own diagnostics straight to
+  // the shared global `console` (see cursor-log-intercept.ts); install once
+  // so its rules/skills load-completion logs route through opencode logging
+  // instead of appearing as raw stdout noise.
+  installCursorLogInterceptor();
   return {
     kind: "in-process",
     createAgent: async (options) => {
@@ -143,7 +150,11 @@ export function resolveSidecarScript(): string | undefined {
 }
 
 function sidecarBackend(nodePath: string, scriptPath: string): AgentBackend {
-  const client = new SidecarClient({ scriptPath, nodePath });
+  const client = new SidecarClient({
+    scriptPath,
+    nodePath,
+    onLog: (level, message, meta) => pluginLog(level, message, meta),
+  });
   return {
     kind: "sidecar",
     createAgent: (options) => client.createAgent(options),
@@ -161,18 +172,18 @@ export function loadAgentBackend(): AgentBackend {
     const scriptPath = transport === "sidecar" ? resolveSidecarScript() : undefined;
     if (transport === "sidecar" && (!env.nodePath || !scriptPath)) {
       // Explicit sidecar request we can't satisfy: fall back loudly.
-      console.error(
-        "[opencode-cursor] Node sidecar requested but unavailable " +
-          `(node: ${env.nodePath ?? "not found"}, script: ${scriptPath ?? "not found"}); ` +
-          "falling back to in-process HTTP/1.1 transport.",
+      pluginLog(
+        "warn",
+        "Node sidecar requested but unavailable; falling back to in-process HTTP/1.1 transport.",
+        { node: env.nodePath ?? null, script: scriptPath ?? null },
       );
       cached = inProcessBackend(true);
       return cached;
     }
     if (transport === "http2-direct" && env.isBun) {
-      console.error(
-        "[opencode-cursor] http2-direct under Bun: Cursor streams may fail " +
-          "(Bun node:http2 incompatibility, oven-sh/bun#31499). " +
+      pluginLog(
+        "warn",
+        "http2-direct under Bun: Cursor streams may fail (Bun node:http2 incompatibility, oven-sh/bun#31499). " +
           "Set OPENCODE_CURSOR_TRANSPORT=http1 (recommended) or sidecar.",
       );
     }

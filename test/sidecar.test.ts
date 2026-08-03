@@ -7,10 +7,13 @@ const FAKE_SDK = fileURLToPath(new URL("./fixtures/fake-cursor-sdk.mjs", import.
 
 const clients: SidecarClient[] = [];
 
-function makeClient(): SidecarClient {
+function makeClient(
+  onLog?: (level: "debug" | "info" | "warn" | "error", message: string, meta?: Record<string, unknown>) => void,
+): SidecarClient {
   const client = new SidecarClient({
     scriptPath: SCRIPT,
     env: { OPENCODE_CURSOR_SDK_PATH: FAKE_SDK },
+    ...(onLog ? { onLog } : {}),
   });
   clients.push(client);
   return client;
@@ -101,6 +104,27 @@ describe("SidecarClient", () => {
     const run = await agent.send({ type: "user", text: "hang" }, { mode: "agent" });
     await run.cancel();
     await expect(run.wait()).resolves.toMatchObject({ status: "cancelled" });
+  });
+
+  it("forwards recognized Cursor rules/skills log lines via onLog, and drops everything else", async () => {
+    const logs: Array<{ level: string; message: string; meta?: Record<string, unknown> }> = [];
+    const client = makeClient((level, message, meta) => {
+      logs.push({ level, message, meta });
+    });
+    await client.createAgent({ ...CREATE_OPTIONS, emitRulesLog: true });
+
+    expect(logs).toEqual([
+      {
+        level: "info",
+        message: "LocalCursorRulesService load completed",
+        meta: { durationMs: 89, ruleCount: 1 },
+      },
+      {
+        level: "info",
+        message: "AgentSkillsCursorRulesService load completed",
+        meta: { durationMs: 86, ruleCount: 18, skillCount: 18 },
+      },
+    ]);
   });
 
   it("rejects in-flight requests when the client is disposed", async () => {

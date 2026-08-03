@@ -8,9 +8,24 @@
  *   "rich"  -> send() rejects with an error carrying status/code/isRetryable/helpUrl
  *   "hang"  -> run.wait() never resolves (until cancel(), which resolves cancelled)
  *   other   -> emits one text-delta "echo:<text>" update, wait() -> done:<text>
+ *
+ * `options.emitRulesLog` -> Agent.create/resume writes the same rules/skills
+ * "load completed" lines the real @cursor/sdk writes to console.log (see
+ * src/sidecar/agent-host.mjs / src/provider/cursor-log-intercept.ts), plus
+ * one unrelated console.log line, to verify the sidecar's log interception
+ * forwards only the recognized lines and passes everything else through.
  */
 
 function makeAgent(agentId, options) {
+  if (options?.emitRulesLog) {
+    console.log(
+      "16:05:53.036 INFO  LocalCursorRulesService load completed meta={durationMs: 89, ruleCount: 1}",
+    );
+    console.log(
+      "16:05:53.036 INFO  AgentSkillsCursorRulesService load completed meta={durationMs: 86, ruleCount: 18, skillCount: 18}",
+    );
+    console.log("some unrelated cursor sdk output");
+  }
   return {
     agentId,
     model: options?.model,

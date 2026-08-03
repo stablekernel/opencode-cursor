@@ -26,6 +26,7 @@ const streamAgentTurn = vi.fn();
 vi.mock("../src/provider/session-pool.js", () => ({
 	acquireAgent: (...args: unknown[]) => acquireAgent(...args),
 	getSessionRecord: () => undefined,
+	withSessionLock: (_sessionID: unknown, fn: () => Promise<unknown>) => fn(),
 }));
 vi.mock("../src/provider/agent-events.js", () => ({
 	streamAgentTurn: (...args: unknown[]) => streamAgentTurn(...args),

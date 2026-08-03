@@ -512,4 +512,385 @@ describe("stream watchdog", () => {
 			vi.useRealTimers();
 		}
 	});
+
+	/**
+	 * Drive a turn against an agent whose run only settles on cancel, tracking
+	 * the outcome without blocking so a test can assert "still pending" partway
+	 * through. `emit` receives the SDK `onDelta` hook, so updates can be
+	 * scheduled at t>0 with `setTimeout` under fake timers.
+	 */
+	function watchdogTurn(opts: {
+		emit?: (onDelta: OnDelta) => void;
+		abortSignal?: AbortSignal;
+	}): { outcome: { state: "pending" | "stalled" | "done"; error?: unknown }; promise: Promise<void> } {
+		const outcome: { state: "pending" | "stalled" | "done"; error?: unknown } = {
+			state: "pending",
+		};
+		const agent: AgentLike = {
+			agentId: "agent-wd-harness",
+			send: async (_m: unknown, sendOptions?: Record<string, unknown>) => {
+				const onDelta = sendOptions?.["onDelta"] as OnDelta | undefined;
+				if (onDelta) opts.emit?.(onDelta);
+				let cancelled = false;
+				return {
+					wait: () =>
+						new Promise<FakeRunResult>((resolve) => {
+							const t = setInterval(() => {
+								if (cancelled) {
+									clearInterval(t);
+									resolve({ status: "cancelled" });
+								}
+							}, 10);
+						}),
+					cancel: async () => {
+						cancelled = true;
+					},
+				} as never;
+			},
+			close: () => {},
+		} as unknown as AgentLike;
+
+		const promise = (async () => {
+			try {
+				for await (const _e of streamAgentTurn(agent, MESSAGE, {
+					mode: "agent",
+					...(opts.abortSignal ? { abortSignal: opts.abortSignal } : {}),
+				})) {
+					/* drain */
+				}
+				outcome.state = "done";
+			} catch (err) {
+				outcome.state = "stalled";
+				outcome.error = err;
+			}
+		})();
+		promise.catch(() => {});
+		return { outcome, promise };
+	}
+
+	/** An update that opens a tool call under `callId`. */
+	function toolStarted(callId: string, type = "shell") {
+		return { update: { type: "tool-call-started", callId, toolCall: { type } } };
+	}
+
+	it("uses the larger tool budget while a tool call is in flight", async () => {
+		vi.useFakeTimers();
+		try {
+			process.env.OPENCODE_CURSOR_STALL_MS = "1000";
+			process.env.OPENCODE_CURSOR_TOOL_STALL_MS = "5000";
+			const { outcome, promise } = watchdogTurn({
+				emit: (onDelta) => onDelta(toolStarted("c1")),
+			});
+			// Well past the idle budget (1000). This assertion is what fails if
+			// budget selection is reverted to always using `stallMs`.
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(outcome.state).toBe("pending");
+			// Past the tool budget (5000): terminal, and it names the tool.
+			await vi.advanceTimersByTimeAsync(3_500);
+			await promise;
+			expect(outcome.state).toBe("stalled");
+			expect(String(outcome.error)).toMatch(/tool "shell" still in flight/);
+		} finally {
+			delete process.env.OPENCODE_CURSOR_STALL_MS;
+			delete process.env.OPENCODE_CURSOR_TOOL_STALL_MS;
+			vi.useRealTimers();
+		}
+	});
+
+	it("negative control: with no tool open the idle budget governs", async () => {
+		vi.useFakeTimers();
+		try {
+			process.env.OPENCODE_CURSOR_STALL_MS = "1000";
+			process.env.OPENCODE_CURSOR_TOOL_STALL_MS = "5000";
+			// A text-delta sets `anyEvent` so the stall is terminal rather than a
+			// pre-first-event force-resend, but opens no tool.
+			const { outcome, promise } = watchdogTurn({
+				emit: (onDelta) => onDelta({ update: { type: "text-delta", text: "x" } }),
+			});
+			await vi.advanceTimersByTimeAsync(2_000);
+			await promise;
+			// Same 2000ms window that stayed pending above now stalls, proving the
+			// larger budget is applied only while a tool is open.
+			expect(outcome.state).toBe("stalled");
+			expect(String(outcome.error)).not.toMatch(/in flight/);
+		} finally {
+			delete process.env.OPENCODE_CURSOR_STALL_MS;
+			delete process.env.OPENCODE_CURSOR_TOOL_STALL_MS;
+			vi.useRealTimers();
+		}
+	});
+
+	it("restores the idle budget once the tool call completes", async () => {
+		vi.useFakeTimers();
+		try {
+			process.env.OPENCODE_CURSOR_STALL_MS = "1000";
+			process.env.OPENCODE_CURSOR_TOOL_STALL_MS = "5000";
+			const { outcome, promise } = watchdogTurn({
+				emit: (onDelta) => {
+					onDelta(toolStarted("c1"));
+					onDelta({
+						update: {
+							type: "tool-call-completed",
+							callId: "c1",
+							toolCall: { type: "shell", result: { status: "success" } },
+						},
+					});
+				},
+			});
+			// Tool closed, so the idle budget (1000) applies again: stalls inside
+			// the 2000ms window. Fails if `openTools.delete` is removed (the turn
+			// would stay pending on the 5000ms tool budget).
+			await vi.advanceTimersByTimeAsync(2_000);
+			await promise;
+			expect(outcome.state).toBe("stalled");
+			expect(String(outcome.error)).not.toMatch(/in flight/);
+		} finally {
+			delete process.env.OPENCODE_CURSOR_STALL_MS;
+			delete process.env.OPENCODE_CURSOR_TOOL_STALL_MS;
+			vi.useRealTimers();
+		}
+	});
+
+	it("clears open tool calls on turn-ended so a dropped completion can't pin the tool budget", async () => {
+		vi.useFakeTimers();
+		try {
+			process.env.OPENCODE_CURSOR_STALL_MS = "1000";
+			process.env.OPENCODE_CURSOR_TOOL_STALL_MS = "5000";
+			const { outcome, promise } = watchdogTurn({
+				emit: (onDelta) => {
+					onDelta(toolStarted("c1"));
+					// Note: no `tool-call-completed` — simulates a dropped or
+					// differently-keyed completion.
+					onDelta({ update: { type: "turn-ended" } });
+				},
+			});
+			await vi.advanceTimersByTimeAsync(2_000);
+			await promise;
+			expect(outcome.state).toBe("stalled");
+			expect(String(outcome.error)).not.toMatch(/in flight/);
+		} finally {
+			delete process.env.OPENCODE_CURSOR_STALL_MS;
+			delete process.env.OPENCODE_CURSOR_TOOL_STALL_MS;
+			vi.useRealTimers();
+		}
+	});
+
+	it("re-arms on an unmapped update type (raw SDK activity counts as liveness)", async () => {
+		vi.useFakeTimers();
+		try {
+			process.env.OPENCODE_CURSOR_STALL_MS = "1000";
+			const { outcome, promise } = watchdogTurn({
+				emit: (onDelta) => {
+					// t=0: sets anyEvent, arms deadline t=1000.
+					onDelta({ update: { type: "text-delta", text: "x" } });
+					// t=800: a type the plugin does not map, so it never reaches
+					// push(). With the raw re-arm it pushes the deadline to t=1800.
+					setTimeout(() => onDelta({ update: { type: "some-future-type" } }), 800);
+				},
+			});
+			// Past the original t=1000 deadline but inside the re-armed t=1800 one.
+			// Fails if the post-switch armWatchdog() is removed.
+			await vi.advanceTimersByTimeAsync(1_500);
+			expect(outcome.state).toBe("pending");
+			// Past the re-armed deadline.
+			await vi.advanceTimersByTimeAsync(600);
+			await promise;
+			expect(outcome.state).toBe("stalled");
+		} finally {
+			delete process.env.OPENCODE_CURSOR_STALL_MS;
+			vi.useRealTimers();
+		}
+	});
+
+	it("negative control: without the intervening update the same schedule stalls", async () => {
+		vi.useFakeTimers();
+		try {
+			process.env.OPENCODE_CURSOR_STALL_MS = "1000";
+			const { outcome, promise } = watchdogTurn({
+				emit: (onDelta) => onDelta({ update: { type: "text-delta", text: "x" } }),
+			});
+			// Identical timeline to the test above, minus the t=800 update: the
+			// t=1000 deadline stands, so 1500ms is enough to stall. This proves the
+			// preceding test's "pending" result is caused by the re-arm.
+			await vi.advanceTimersByTimeAsync(1_500);
+			await promise;
+			expect(outcome.state).toBe("stalled");
+		} finally {
+			delete process.env.OPENCODE_CURSOR_STALL_MS;
+			vi.useRealTimers();
+		}
+	});
+
+	it("falls back to the default when STALL_MS is not a number", async () => {
+		vi.useFakeTimers();
+		try {
+			// Number("abc") is NaN. NaN <= 0 is false, so the old code armed
+			// setTimeout(fn, NaN), which fires immediately and stalled every turn.
+			process.env.OPENCODE_CURSOR_STALL_MS = "abc";
+			const ac = new AbortController();
+			const { outcome, promise } = watchdogTurn({ abortSignal: ac.signal });
+			await vi.advanceTimersByTimeAsync(500);
+			expect(outcome.state).toBe("pending");
+			ac.abort();
+			await vi.advanceTimersByTimeAsync(50);
+			await promise;
+		} finally {
+			delete process.env.OPENCODE_CURSOR_STALL_MS;
+			vi.useRealTimers();
+		}
+	});
+
+	it("negative control: a valid small STALL_MS does stall inside that window", async () => {
+		vi.useFakeTimers();
+		try {
+			process.env.OPENCODE_CURSOR_STALL_MS = "50";
+			const { outcome, promise } = watchdogTurn({});
+			// Proves the harness can observe a stall at this timescale, so the
+			// "pending" result above is the fallback and not an artifact.
+			await vi.advanceTimersByTimeAsync(500);
+			await promise;
+			expect(outcome.state).toBe("stalled");
+		} finally {
+			delete process.env.OPENCODE_CURSOR_STALL_MS;
+			vi.useRealTimers();
+		}
+	});
+
+	it("treats an empty STALL_MS as fully disabled (historical escape hatch)", async () => {
+		vi.useFakeTimers();
+		try {
+			process.env.OPENCODE_CURSOR_STALL_MS = "";
+			const ac = new AbortController();
+			// The text-delta sets `anyEvent`, so any stall would be TERMINAL rather
+			// than a pre-first-event force-resend (which would leave the turn
+			// "pending" and make this assertion vacuous).
+			const { outcome, promise } = watchdogTurn({
+				abortSignal: ac.signal,
+				emit: (onDelta) => onDelta({ update: { type: "text-delta", text: "x" } }),
+			});
+			// Past the 120000 fallback: had empty fallen back to the default
+			// instead of disabling, this would have stalled.
+			await vi.advanceTimersByTimeAsync(130_000);
+			expect(outcome.state).toBe("pending");
+			ac.abort();
+			await vi.advanceTimersByTimeAsync(50);
+			await promise;
+		} finally {
+			delete process.env.OPENCODE_CURSOR_STALL_MS;
+			vi.useRealTimers();
+		}
+	});
+
+	it("applies the raised 120000 idle default when STALL_MS is unset", async () => {
+		vi.useFakeTimers();
+		try {
+			delete process.env.OPENCODE_CURSOR_STALL_MS;
+			const { outcome, promise } = watchdogTurn({
+				emit: (onDelta) => onDelta({ update: { type: "text-delta", text: "x" } }),
+			});
+			// Past the old 60000 default, inside the new 120000 one.
+			await vi.advanceTimersByTimeAsync(90_000);
+			expect(outcome.state).toBe("pending");
+			// Past the new default.
+			await vi.advanceTimersByTimeAsync(35_000);
+			await promise;
+			expect(outcome.state).toBe("stalled");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("TOOL_STALL_MS=0 disables the bound during tool execution", async () => {
+		vi.useFakeTimers();
+		try {
+			process.env.OPENCODE_CURSOR_STALL_MS = "1000";
+			process.env.OPENCODE_CURSOR_TOOL_STALL_MS = "0";
+			const ac = new AbortController();
+			const { outcome, promise } = watchdogTurn({
+				emit: (onDelta) => onDelta(toolStarted("c1")),
+				abortSignal: ac.signal,
+			});
+			// Far past the idle budget with a tool open and the tool bound off.
+			await vi.advanceTimersByTimeAsync(4_000);
+			expect(outcome.state).toBe("pending");
+			ac.abort();
+			await vi.advanceTimersByTimeAsync(50);
+			await promise;
+		} finally {
+			delete process.env.OPENCODE_CURSOR_STALL_MS;
+			delete process.env.OPENCODE_CURSOR_TOOL_STALL_MS;
+			vi.useRealTimers();
+		}
+	});
+
+	it("caps an over-large TOOL_STALL_MS instead of overflowing to ~instant", async () => {
+		vi.useFakeTimers();
+		try {
+			// A timer delay above 2^31-1 overflows and Node clamps it to 1ms, so
+			// without the cap this budget stalls the turn almost immediately —
+			// while reporting "no events for 999999999999ms". The stall message
+			// tells operators to raise this very variable, so the trap is reachable
+			// by following the plugin's own advice.
+			process.env.OPENCODE_CURSOR_STALL_MS = "1000";
+			process.env.OPENCODE_CURSOR_TOOL_STALL_MS = "999999999999";
+			const ac = new AbortController();
+			const { outcome, promise } = watchdogTurn({
+				emit: (onDelta) => onDelta(toolStarted("c1")),
+				abortSignal: ac.signal,
+			});
+			// Past the idle budget AND past the 600000 tool default, so the result
+			// can be neither the idle budget nor a silent fall back to the default.
+			// (It cannot be the fallback anyway — that needs a non-finite value —
+			// but this rules it out observationally rather than by argument.)
+			await vi.advanceTimersByTimeAsync(601_000);
+			expect(outcome.state).toBe("pending");
+			ac.abort();
+			await vi.advanceTimersByTimeAsync(50);
+			await promise;
+		} finally {
+			delete process.env.OPENCODE_CURSOR_STALL_MS;
+			delete process.env.OPENCODE_CURSOR_TOOL_STALL_MS;
+			vi.useRealTimers();
+		}
+	});
+
+	it("negative control: a large tool budget still stalls once exceeded", async () => {
+		vi.useFakeTimers();
+		try {
+			// Same timescale as the cap test, with a budget the harness can outrun.
+			// Proves that test's "pending" reflects a deadline further out and not
+			// a watchdog that stopped arming, and that a stall is observable here.
+			process.env.OPENCODE_CURSOR_STALL_MS = "1000";
+			process.env.OPENCODE_CURSOR_TOOL_STALL_MS = "600000";
+			const { outcome, promise } = watchdogTurn({
+				emit: (onDelta) => onDelta(toolStarted("c1")),
+			});
+			await vi.advanceTimersByTimeAsync(601_000);
+			await promise;
+			expect(outcome.state).toBe("stalled");
+			expect(String(outcome.error)).toMatch(/tool "shell" still in flight/);
+		} finally {
+			delete process.env.OPENCODE_CURSOR_STALL_MS;
+			delete process.env.OPENCODE_CURSOR_TOOL_STALL_MS;
+			vi.useRealTimers();
+		}
+	});
+
+	it("caps an over-large idle STALL_MS as well", async () => {
+		vi.useFakeTimers();
+		try {
+			process.env.OPENCODE_CURSOR_STALL_MS = "1e30";
+			const ac = new AbortController();
+			const { outcome, promise } = watchdogTurn({ abortSignal: ac.signal });
+			// Without the cap this is a 1ms deadline and every turn dies here.
+			await vi.advanceTimersByTimeAsync(1_000);
+			expect(outcome.state).toBe("pending");
+			ac.abort();
+			await vi.advanceTimersByTimeAsync(50);
+			await promise;
+		} finally {
+			delete process.env.OPENCODE_CURSOR_STALL_MS;
+			vi.useRealTimers();
+		}
+	});
 });

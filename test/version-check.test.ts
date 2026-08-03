@@ -58,7 +58,7 @@ vi.mock("node:fs", () => ({
   rmSync: vi.fn(),
 }));
 
-const { warnIfStale } = await import("../src/version-check.js");
+const { warnIfStale, PLUGIN_CACHE_PATH } = await import("../src/version-check.js");
 
 function respondWithRaw(body: string | undefined, statusCode = 200) {
   const res = new MockResponse();
@@ -102,12 +102,12 @@ describe("warnIfStale", () => {
     delete (globalThis as Record<string, unknown>).__PKG_VERSION__;
   });
 
-  it("warns when registry latest is newer than local version", async () => {
+  it("does not emit a terminal warning when registry latest is newer than local version", async () => {
     const promise = warnIfStale();
     respondWith(NEWER_VERSION);
     await promise;
-    expect(consoleWarn).toHaveBeenCalledOnce();
-    expect(String(consoleWarn.mock.calls[0]?.[0])).toContain(NEWER_VERSION);
+    // Update notice is surfaced via the UI toast only; no console.warn output.
+    expect(consoleWarn).not.toHaveBeenCalled();
   });
 
   it("does not warn when local version equals latest", async () => {
@@ -130,8 +130,8 @@ describe("warnIfStale", () => {
     const promise = warnIfStale();
     respondWith(newer ?? "99.0.0");
     await promise;
-    expect(consoleWarn).toHaveBeenCalledOnce();
-    expect(String(consoleWarn.mock.calls[0]?.[0])).toContain(realPkg.version);
+    // Update notice is surfaced via the UI toast only; no console.warn output.
+    expect(consoleWarn).not.toHaveBeenCalled();
   });
 
   it("does not warn when registry fetch fails", async () => {
@@ -185,7 +185,8 @@ describe("warnIfStale", () => {
     });
     await warnIfStale();
     expect(get).not.toHaveBeenCalled();
-    expect(consoleWarn).toHaveBeenCalledOnce();
+    // Update notice is surfaced via the UI toast only; no console.warn output.
+    expect(consoleWarn).not.toHaveBeenCalled();
   });
 
   it("re-fetches when a cached failure is older than the failure TTL", async () => {
@@ -197,7 +198,8 @@ describe("warnIfStale", () => {
     respondWith(NEWER_VERSION);
     await promise;
     expect(get).toHaveBeenCalledOnce();
-    expect(consoleWarn).toHaveBeenCalledOnce();
+    // Update notice is surfaced via the UI toast only; no console.warn output.
+    expect(consoleWarn).not.toHaveBeenCalled();
   });
 
   it("does not re-fetch a recent cached failure", async () => {
@@ -210,26 +212,117 @@ describe("warnIfStale", () => {
     expect(consoleWarn).not.toHaveBeenCalled();
   });
 
-  it("emits a windows removal command on win32", async () => {
+  it("does not emit a terminal warning on win32 when update is available", async () => {
     const original = process.platform;
     Object.defineProperty(process, "platform", { value: "win32" });
     try {
       const promise = warnIfStale();
       respondWith(NEWER_VERSION);
       await promise;
-      expect(consoleWarn).toHaveBeenCalledOnce();
-      const message = String(consoleWarn.mock.calls[0]?.[0]);
-      expect(message).toContain("rmdir /s /q");
-      expect(message).not.toContain("rm -rf");
+      // Update notice is surfaced via the UI toast only; no console.warn output.
+      expect(consoleWarn).not.toHaveBeenCalled();
     } finally {
       Object.defineProperty(process, "platform", { value: original });
     }
   });
 
-  it("emits rm -rf on non-windows platforms", async () => {
+  it("does not emit a terminal warning on non-windows platforms when update is available", async () => {
     const promise = warnIfStale();
     respondWith(NEWER_VERSION);
     await promise;
-    expect(String(consoleWarn.mock.calls[0]?.[0])).toContain("rm -rf");
+    // Update notice is surfaced via the UI toast only; no console.warn output.
+    expect(consoleWarn).not.toHaveBeenCalled();
+  });
+});
+
+describe("PLUGIN_CACHE_PATH", () => {
+  it("is a non-empty string", () => {
+    expect(typeof PLUGIN_CACHE_PATH).toBe("string");
+    expect(PLUGIN_CACHE_PATH.length).toBeGreaterThan(0);
+  });
+
+  it("contains the scoped package name", () => {
+    expect(PLUGIN_CACHE_PATH).toContain("@stablekernel");
+    expect(PLUGIN_CACHE_PATH).toContain("opencode-cursor");
+  });
+
+  it("contains the @latest tag", () => {
+    expect(PLUGIN_CACHE_PATH).toContain("opencode-cursor@latest");
+  });
+
+  it("is an absolute path", () => {
+    // On POSIX the path starts with /; on Windows it starts with a drive letter.
+    const isAbsolute =
+      PLUGIN_CACHE_PATH.startsWith("/") || /^[A-Za-z]:[/\\]/.test(PLUGIN_CACHE_PATH);
+    expect(isAbsolute).toBe(true);
+  });
+
+  it("contains the opencode cache directory segment", () => {
+    // Both win32 and POSIX paths include an 'opencode' segment and 'packages'.
+    expect(PLUGIN_CACHE_PATH).toContain("opencode");
+    expect(PLUGIN_CACHE_PATH).toContain("packages");
+  });
+});
+
+describe("warnIfStale with prefetchedLatest", () => {
+  beforeEach(() => {
+    consoleWarn.mockClear();
+    Object.keys(fsState).forEach((k) => delete fsState[k]);
+    requestHandlers = {};
+    get.mockClear();
+    vi.stubEnv("CI", "");
+    vi.stubEnv("NO_UPDATE_NOTIFIER", "");
+    (globalThis as Record<string, unknown>).__PKG_VERSION__ = LOCAL_VERSION;
+  });
+
+  afterEach(() => {
+    consoleWarn.mockReset();
+    vi.unstubAllEnvs();
+    delete (globalThis as Record<string, unknown>).__PKG_VERSION__;
+  });
+
+  it("does NOT call the registry when prefetchedLatest is provided", async () => {
+    await warnIfStale(NEWER_VERSION);
+    // The https.get mock must not have been called — no network request.
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it("does not emit a terminal warning using the prefetched version without a fetch", async () => {
+    await warnIfStale(NEWER_VERSION);
+    // Update notice is surfaced via the UI toast only; no console.warn output.
+    expect(consoleWarn).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when prefetched version equals local", async () => {
+    await warnIfStale(LOCAL_VERSION);
+    expect(get).not.toHaveBeenCalled();
+    expect(consoleWarn).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when prefetched version is older than local", async () => {
+    await warnIfStale(OLDER_VERSION);
+    expect(get).not.toHaveBeenCalled();
+    expect(consoleWarn).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when prefetched version is an invalid semver string", async () => {
+    await warnIfStale("not-a-semver");
+    expect(get).not.toHaveBeenCalled();
+    expect(consoleWarn).not.toHaveBeenCalled();
+  });
+
+  it("still skips the check when CI is set, even with prefetchedLatest", async () => {
+    vi.stubEnv("CI", "true");
+    await warnIfStale(NEWER_VERSION);
+    expect(get).not.toHaveBeenCalled();
+    expect(consoleWarn).not.toHaveBeenCalled();
+  });
+
+  it("calls getLatestVersion (via https.get) when no prefetchedLatest is given", async () => {
+    const promise = warnIfStale();
+    respondWith(NEWER_VERSION);
+    await promise;
+    // Without prefetchedLatest, a network request must be made.
+    expect(get).toHaveBeenCalledOnce();
   });
 });

@@ -23,6 +23,88 @@ All notable changes to this project will be documented in this file.
   `config.skills.urls` (HTTP catalogs) and skills bundled inside opencode
   plugin packages are not yet supported.
 
+## [0.7.0] — 2026-07-30
+
+Structured logging (#85), the stream-watchdog tool-phase budget (#86), and the
+session-pool title-generation race fix (#84).
+
+- **Structured logging via `client.app.log()` instead of raw `console.*`.** The
+  plugin's own diagnostics (transport fallback warnings, per-turn debug traces
+  gated on `OPENCODE_CURSOR_DEBUG=1`) now route through opencode's plugin
+  logging API (`service: "opencode-cursor"`) rather than `console.warn`/
+  `console.error`. Falls back to `console.*` when no client is available
+  (e.g. running the provider standalone).
+- **Cursor SDK's own "rules"/"skills" load diagnostics captured and forwarded.**
+  `@cursor/sdk`'s bundled local-exec runtime writes internal messages like
+  `LocalCursorRulesService load completed meta={durationMs, ruleCount}` and
+  `AgentSkillsCursorRulesService load completed meta={durationMs, ruleCount,
+  skillCount}` straight to `console.log`, with no public logger hook to
+  redirect it. These are now recognized (in-process transport via a narrowly
+  scoped `console.log` interceptor; sidecar transport via the child process's
+  own interceptor forwarding over the existing JSONL protocol) and re-emitted
+  as structured opencode logs instead of raw terminal noise. Every other
+  `console.log` call passes through unchanged.
+- **Fixed: the stream watchdog killed healthy runs during long tool execution.** The watchdog
+  re-armed only on mapped event types, so a long shell command, build, or test suite that streamed
+  nothing for 60s was cancelled and the turn lost. It now uses two budgets — an idle budget
+  (`OPENCODE_CURSOR_STALL_MS`, default raised to `120000`) and a larger tool-phase budget
+  (`OPENCODE_CURSOR_TOOL_STALL_MS`, default `600000`) applied while a tool call is in flight — and
+  re-arms on **any** SDK update, including types the plugin doesn't model (progress/heartbeats). A
+  tool-phase stall is terminal and names the in-flight tool. `OPENCODE_CURSOR_STALL_MS=0` still
+  disables the whole watchdog; the tool-phase bound is independently disabled with
+  `OPENCODE_CURSOR_TOOL_STALL_MS=0`. Open tool calls are reconciled on `turn-ended` and on a forced
+  resend, so a dropped completion can't pin a turn to the 10-minute budget.
+- **Fixed: a non-numeric `OPENCODE_CURSOR_STALL_MS` stalled every turn immediately.**
+  `Number("abc")` is `NaN`; `NaN <= 0` is `false`, so the guard passed and `setTimeout(fn, NaN)`
+  fired at once. Env parsing now falls back to the default for non-finite values (an empty string
+  still disables, preserving the historical escape hatch).
+- **Fixed: an over-large stall budget overflowed to a ~1 ms deadline.** A `setTimeout` delay is
+  stored as a signed 32-bit int, so anything above `2147483647` is silently clamped to `1` — and the
+  tool-phase stall message tells operators to *raise* `OPENCODE_CURSOR_TOOL_STALL_MS`, making the
+  trap reachable by following the plugin's own advice. Setting it to e.g. `999999999999` stalled
+  every tool-bearing turn within milliseconds while reporting `no events for 999999999999ms`. Both
+  budgets are now capped at `2147483647`.
+- **Fixed: opencode's title-generation call could poison a session's pool entry.** opencode forks a
+  title-generation call on the same `sessionID` as the session's real first turn, concurrently and
+  with an empty system prompt. `classifyTurn`'s side-call detection only fires once a prior pool
+  record exists, so on turn 1 both calls classified as "new" and both wrote to the pool — whichever
+  agent-creation round-trip resolved last silently overwrote the other, leaving the session
+  fingerprinted against the title prompt. Two fixes: the plugin's `chat.params` hook now marks
+  opencode's `title` agent call as `providerOptions.cursor.ephemeral = true` (the provider already
+  honored this flag but nothing set it), and `withSessionLock` (a per-`sessionID` async lock) now
+  wraps `agentRun`'s classify-then-acquire span so concurrent turns for one session serialize and
+  the second call always observes the first's completed pool write.
+- **Dependency bumps:** `@cursor/sdk` 1.0.24 → 1.0.26, `@opencode-ai/plugin` (opencode-ai group).
+
+## [0.6.2] — 2026-07-28
+
+Version-check UX cleanup from #79.
+
+- **Fixed: startup toast no longer suspends into the user's first prompt on slow networks.**
+  The version-check toast previously ran `setTimeout(callback, 2000)` and then `await
+  _versionCheckPromise` inside the callback, so a slow npm registry fetch could block the
+  callback until after the user's first message was sent. The delay now runs *after* the
+  promise resolves: `_versionCheckPromise.then(async (result) => { await sleep(2000); showToast() })`.
+  The 2 s TUI-init pause is preserved; only the ordering changes.
+- **Removed: terminal `console.warn` for update notifications.** The `warnIfStale` function
+  previously printed a multi-line warning to stderr on every startup when the plugin was
+  outdated. This message is removed — the UI toast (introduced in 0.4.5) is the sole
+  notification channel, avoiding duplicate noise in the terminal.
+- **New: `scripts/opencode-plugins-refresh`.** Helper script that compares cached `@latest` plugin
+  versions against npm and optionally clears outdated caches so opencode re-fetches the latest on
+  next launch. Supports `--check` (exit 1 if outdated, CI/cron-friendly) and `--force` (clear
+  without prompting).
+- **`install.sh` now offers to install `opencode-plugins-refresh` to `~/.local/bin` (step 4).**
+- **`PLUGIN_CACHE_PATH` exported from `src/version-check.ts`.** Single source of truth for the
+  opencode plugin cache path (cross-platform). Used by both the startup warning and the
+  `cursor_update_plugin` tool to build the removal command / actually clear the cache — removes
+  the duplication that could cause them to diverge.
+- **`warnIfStale` accepts an optional pre-fetched version string.** `warnIfStale(prefetchedLatest?)`
+  now skips the registry call when the caller has already resolved it. Paired with a single
+  `_latestVersionPromise` in the plugin that is shared by the console warning, the UI toast, and
+  the system-prompt notice — so only one npm registry fetch happens per startup regardless of how
+  many paths consume it.
+
 ## [0.6.1] — 2026-07-24
 
 - **Fixed: reasoning/thinking variants showed as meaningless numbered entries for

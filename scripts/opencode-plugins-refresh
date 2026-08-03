@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+# Check and/or refresh opencode's @latest plugin cache.
+# Compares each cached plugin version against npm and optionally clears
+# outdated entries so opencode re-fetches the latest on next launch.
+#
+# Usage:
+#   opencode-plugins-refresh                                    # check for updates, prompt to clear cache
+#   opencode-plugins-refresh --check                           # check only, no changes
+#   opencode-plugins-refresh --force                           # clear all @latest caches without prompting
+#   opencode-plugins-refresh --package <name>                  # check/update one specific plugin
+#   opencode-plugins-refresh --package <name> --check         # check only for that plugin
+#   opencode-plugins-refresh --package <name> --force         # force-clear that plugin's cache
+
+set -euo pipefail
+
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/opencode/packages"
+MODE=""
+PACKAGE=""
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --check|--force)
+      MODE="$1"
+      shift
+      ;;
+    --package)
+      [[ $# -ge 2 ]] || { echo "Error: --package requires a package name argument."; exit 1; }
+      PACKAGE="$2"
+      shift 2
+      ;;
+    --help|-h)
+      sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1"
+      echo "Usage: $(basename "$0") [--package <name>] [--check|--force]"
+      exit 1
+      ;;
+  esac
+done
+
+if [[ ! -d "$CACHE_DIR" ]]; then
+  echo "No opencode plugin cache found at $CACHE_DIR — nothing to do."
+  exit 0
+fi
+
+# Build the list of entries to check
+entries=()
+
+if [[ -n "$PACKAGE" ]]; then
+  # Build the cache path for the given package.
+  # Most plugins: $CACHE_DIR/my-plugin@latest or $CACHE_DIR/@scope/name@latest
+  # Some scoped plugins omit the @latest suffix: $CACHE_DIR/@scope/name
+  pkg_cache_path="$CACHE_DIR/${PACKAGE}@latest"
+  if [[ ! -d "$pkg_cache_path" ]]; then
+    pkg_cache_path="$CACHE_DIR/${PACKAGE}"
+  fi
+  if [[ ! -d "$pkg_cache_path" ]]; then
+    echo "Plugin '$PACKAGE' not found in cache — nothing to do."
+    exit 0
+  fi
+  entries=("$pkg_cache_path")
+else
+  # Collect all @latest cache dirs (top-level and scoped).
+  # Also include scoped packages that lack the @latest suffix (e.g. @stablekernel/opencode-cursor).
+  while IFS= read -r line; do entries+=("$line"); done < <(
+    find "$CACHE_DIR" -mindepth 1 -maxdepth 1 -name '*@latest' -print
+    find "$CACHE_DIR" -mindepth 2 -maxdepth 2 -name '*@latest' -print
+    # Scoped packages without @latest suffix: @scope/pkg dirs that contain a package.json
+    find "$CACHE_DIR" -mindepth 2 -maxdepth 2 -not -name '*@latest' -type d -print | while read -r d; do
+      [[ -f "$d/package.json" ]] && echo "$d"
+    done
+  )
+fi
+
+if [[ ${#entries[@]} -eq 0 ]]; then
+  echo "No @latest plugin caches found."
+  exit 0
+fi
+
+outdated=()
+
+for entry in "${entries[@]}"; do
+  pkg_json="$entry/package.json"
+  [[ -f "$pkg_json" ]] || continue
+
+  # Installed version is the value under .dependencies (first key)
+  pkg_name=$(python3 -c "import json,sys; d=json.load(open('$pkg_json')); print(list(d.get('dependencies',{}).keys())[0])" 2>/dev/null) || continue
+  installed=$(python3 -c "import json,sys; d=json.load(open('$pkg_json')); print(list(d.get('dependencies',{}).values())[0])" 2>/dev/null) || continue
+
+  latest=$(npm view "$pkg_name" version 2>/dev/null) || { echo "  ⚠ could not fetch npm version for $pkg_name"; continue; }
+
+  if [[ "$installed" == "$latest" ]]; then
+    echo "  ✓ $pkg_name $installed (up to date)"
+  else
+    echo "  ✗ $pkg_name $installed → $latest"
+    outdated+=("$entry")
+  fi
+done
+
+if [[ ${#outdated[@]} -eq 0 ]]; then
+  echo ""
+  echo "All plugins are up to date."
+  exit 0
+fi
+
+echo ""
+
+if [[ "$MODE" == "--check" ]]; then
+  echo "${#outdated[@]} plugin(s) have updates available. Run opencode-plugins-refresh to upgrade."
+  exit 1
+fi
+
+if [[ "$MODE" != "--force" ]]; then
+  read -r -p "Clear cache for ${#outdated[@]} outdated plugin(s) and restart opencode to upgrade? [y/N] " confirm
+  [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+fi
+
+for entry in "${outdated[@]}"; do
+  echo "  rm -rf $entry"
+  rm -rf "$entry"
+done
+
+echo ""
+echo "Done. Restart opencode to pull the latest versions."

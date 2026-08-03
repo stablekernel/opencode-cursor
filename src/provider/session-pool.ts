@@ -68,6 +68,35 @@ export function resetSessionPoolMemory(): void {
 	hydrated = false;
 }
 
+/**
+ * Per-session chain of pending lock holders, so concurrent turns for the same
+ * opencode session serialize across the classify-then-acquire-then-pool-write
+ * span instead of racing on the shared `pool` map. Two calls for the SAME
+ * sessionID (e.g. opencode's forked title-generation call racing the real
+ * first turn) can otherwise both read "no prior record", both classify as
+ * "new", and both write to the pool — whichever's agent-creation round-trip
+ * resolves last silently overwrites the other's entry, permanently. Calls for
+ * different sessionIDs are unaffected and run fully concurrently.
+ */
+const sessionLocks = new Map<string, Promise<unknown>>();
+
+export function withSessionLock<T>(
+	sessionID: string | undefined,
+	fn: () => Promise<T>,
+): Promise<T> {
+	if (!sessionID) return fn();
+	const prior = sessionLocks.get(sessionID) ?? Promise.resolve();
+	const run = prior.then(fn, fn);
+	// Chained promise for ordering only; errors are handled by the caller via
+	// the returned `run`, not here.
+	const guarded = run.catch(() => {});
+	sessionLocks.set(sessionID, guarded);
+	void guarded.finally(() => {
+		if (sessionLocks.get(sessionID) === guarded) sessionLocks.delete(sessionID);
+	});
+	return run;
+}
+
 export interface AcquireAgentParams {
 	apiKey: string;
 	modelSelection: ModelSelection;
