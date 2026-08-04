@@ -187,6 +187,7 @@ See [SECURITY.md](./SECURITY.md) for the full threat model.
 | `toolDisplay` | `"blocks"` | How Cursor's internal tool activity is shown — see [Tool display](#tool-display) |
 | `systemPrompt` | `"rules"` | How opencode's system prompt reaches the agent — see [System prompt](#system-prompt) |
 | `transport` | — | Cursor agent transport (`"http1"` \| `"http2-direct"` \| `"sidecar"`) — see [Transport](#transport) |
+| `autoCompaction` | `false` | Let opencode drive auto-compaction. Off by default because the Cursor agent self-compacts — see [Compaction](#compaction) |
 
 | Environment variable | Default | Meaning |
 | --- | --- | --- |
@@ -421,6 +422,42 @@ To force the fallback:
 
 ```json
 { "provider": { "cursor": { "options": { "toolDisplay": "reasoning" } } } }
+```
+
+## Compaction
+
+**opencode's threshold-triggered auto-compaction is suppressed for Cursor models by default.** The
+Cursor agent runtime compacts its own conversation as it approaches its context threshold, so a
+second, opencode-driven pass is redundant — and it is actively harmful here:
+
+- The compaction turn asks the model to summarize with **no tools available**. The Cursor agent runs
+  its own tools regardless, which opencode rejects outright
+  (`Tool call not allowed while generating summary`).
+- Compaction rewrites the transcript, so the next turn no longer matches what the Cursor agent saw.
+  The plugin correctly treats that as a divergence and creates a **fresh Cursor agent** — and every
+  distinct agent permanently holds its own SQLite store open for the life of the process, which has
+  been observed to crash opencode outright.
+
+The suppression works by emitting a very large `limit.input`, which is what opencode uses as its
+compaction threshold. The real `limit.context` is left untouched, so the TUI's context-window gauge
+and cost reporting keep working.
+
+> [!IMPORTANT]
+> This suppresses the **proactive** threshold trigger only, and opencode has no reactive
+> context-overflow recovery wired up for this provider. In exchange, opencode's transcript is no
+> longer trimmed automatically, so it grows for the life of the session. Ordinary turns send only
+> the new message to an already-running agent, but a *cold replay* — a new session, an expired
+> agent, or a changed MCP server set — resends the whole transcript. If that ever overflows the
+> model, the turn fails with a provider error and the fix is to run `/compact` manually.
+>
+> Set `autoCompaction: true` if you would rather have opencode keep bounding the transcript for you.
+
+Manual `/compact` is unaffected and still works — it has no threshold gate.
+
+To hand compaction back to opencode:
+
+```json
+{ "provider": { "cursor": { "options": { "autoCompaction": true } } } }
 ```
 
 ## Transport

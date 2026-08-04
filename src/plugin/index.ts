@@ -126,6 +126,11 @@ export const CursorPlugin: Plugin = async (input) => {
 	let resolvedCwd = directory ?? process.cwd();
 	let forwardMcp = true;
 	let userMcp: Record<string, McpServerConfig> = {};
+	// Whether to let opencode drive auto-compaction. Default false: the Cursor
+	// agent self-compacts (preCompact hook, trigger:"auto"), so opencode's
+	// compaction is redundant and is what mints a fresh agentId per compaction.
+	// Opt in with `provider.cursor.options.autoCompaction: true`.
+	let autoCompaction = false;
 	// Skill forwarding state, mirroring the MCP forwarding pattern.
 	let forwardSkills = true;
 	let skillFilterOptions: SkillFilterOptions | undefined;
@@ -183,6 +188,7 @@ export const CursorPlugin: Plugin = async (input) => {
 			// Forward opencode's configured MCP servers to the Cursor
 			// agent so it can use the same servers. Opt out via
 			// `provider.cursor.options.forwardMcp: false`.
+			autoCompaction = existingOptions["autoCompaction"] === true;
 			forwardMcp = existingOptions["forwardMcp"] !== false;
 			userMcp = (existingOptions["mcpServers"] ?? {}) as Record<
 				string,
@@ -265,7 +271,10 @@ export const CursorPlugin: Plugin = async (input) => {
 						? { skillsCatalogue: currentSkillsCatalogue }
 						: {}),
 				},
-				models: { ...toOpencodeModels(models), ...(existing.models ?? {}) },
+				models: {
+					...toOpencodeModels(models, { autoCompaction }),
+					...(existing.models ?? {}),
+				},
 			};
 		},
 
@@ -274,7 +283,7 @@ export const CursorPlugin: Plugin = async (input) => {
 			models: async (_provider, ctx) => {
 				const apiKey = apiKeyFromAuth(ctx.auth);
 				const { models } = await discoverModels({ apiKey });
-				return buildModelV2Map(models);
+				return buildModelV2Map(models, { autoCompaction });
 			},
 		},
 

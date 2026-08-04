@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ModelListItem } from "@cursor/sdk";
 import { buildModelV2Map } from "../src/plugin/model-v2.js";
+import { NO_AUTO_COMPACTION_INPUT_LIMIT } from "../src/model-limits.js";
 
 describe("buildModelV2Map", () => {
   it("seeds the fast-off default into options and exposes a fast opt-in variant", () => {
@@ -44,6 +45,24 @@ describe("buildModelV2Map", () => {
       { id: "claude-opus-4-8", displayName: "Opus 4.8" },
     ]);
     expect(map["claude-opus-4-5"]!.limit.context).toBe(200_000);
+    expect(map["claude-opus-4-8"]!.limit.context).toBe(300_000);
+  });
+
+  it("emits the no-auto-compaction input sentinel by default, keeping context honest", () => {
+    // The Cursor agent self-compacts; opencode's compaction mints a fresh
+    // agentId per cycle, which permanently leaks guarded SQLite descriptors.
+    const map = buildModelV2Map([{ id: "claude-opus-4-8", displayName: "Opus 4.8" }]);
+    expect(map["claude-opus-4-8"]!.limit.input).toBe(NO_AUTO_COMPACTION_INPUT_LIMIT);
+    // context stays real so the TUI gauge keeps working
+    expect(map["claude-opus-4-8"]!.limit.context).toBe(300_000);
+    expect(map["claude-opus-4-8"]!.limit.output).toBe(64_000);
+  });
+
+  it("omits the input sentinel when autoCompaction is opted in", () => {
+    const map = buildModelV2Map([{ id: "claude-opus-4-8", displayName: "Opus 4.8" }], {
+      autoCompaction: true,
+    });
+    expect(map["claude-opus-4-8"]!.limit.input).toBeUndefined();
     expect(map["claude-opus-4-8"]!.limit.context).toBe(300_000);
   });
 

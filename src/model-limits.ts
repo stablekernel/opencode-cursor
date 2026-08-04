@@ -75,6 +75,41 @@ const MODEL_CONTEXT_LIMITS: Record<string, number> = {
 const DEFAULT_CONTEXT_LIMIT = 200_000;
 
 /**
+ * Sentinel `limit.input` that pushes opencode's auto-compaction threshold out
+ * of reach, so auto-compaction never fires. opencode computes the threshold as
+ * `limit.input ? limit.input - reserved : limit.context - maxOutput`, so a huge
+ * `input` makes it unreachable while `limit.context` stays honest — the TUI
+ * context gauge keeps working.
+ *
+ * Why suppress it: the Cursor agent runtime self-compacts on its own context
+ * threshold (`@cursor/sdk` `dist/esm/357.js`, `preCompact` hook with
+ * `trigger: "auto"`), so opencode-driven compaction is redundant. It is also
+ * harmful — each opencode compaction rewrites the transcript, which classifies
+ * as `divergence` and mints a fresh Cursor agentId, and every distinct agentId
+ * permanently adds a guarded SQLite `store.db`/`-wal`/`-shm` triple that
+ * `agent.close()` cannot release.
+ *
+ * This is NOT a real model capability. Verified against the opencode 1.18.11
+ * binary by enumerating the call sites of `Is()` (the threshold function) rather
+ * than textual hits on `limit.input`, since consumers reach it transitively:
+ *   - `vl()`         — the proactive auto-compaction trigger. Suppressed here.
+ *   - `Pd()`         — preserve-recent-tokens budget, also used by manual
+ *                      `/compact`. Inert: it is `min(8000, max(2000,
+ *                      floor(Is*0.25)))`, which saturates at 8000 for any
+ *                      `Is >= 32000` — true both before and after the sentinel.
+ * Everything else that touches `limit.input` is catalog merge/serialization.
+ *
+ * Also verified end-to-end (isolated HOME, `opencode models cursor --verbose`)
+ * that a config-channel `limit.input` survives validation and reaches
+ * `Provider.list()` with `limit.context` intact.
+ *
+ * Caveat: `Is()` is `max(0, input - reserved)`, so a user setting
+ * `compaction.reserved >= this value` would drive the threshold to 0 and make
+ * compaction fire every turn. Absurd but user-settable.
+ */
+export const NO_AUTO_COMPACTION_INPUT_LIMIT = 1_000_000_000;
+
+/**
  * Resolve a model's context window by longest-prefix match against
  * {@link MODEL_CONTEXT_LIMITS}. Falls back to 200K for unknown models.
  */

@@ -1,7 +1,12 @@
 import type { Model as ModelV2 } from "@opencode-ai/sdk/v2";
 import type { ModelListItem } from "@cursor/sdk";
 import { modelSupportsReasoning } from "../model-discovery.js";
-import { resolveContextLimit, resolveCost, resolveOutputLimit } from "../model-limits.js";
+import {
+  NO_AUTO_COMPACTION_INPUT_LIMIT,
+  resolveContextLimit,
+  resolveCost,
+  resolveOutputLimit,
+} from "../model-limits.js";
 import { buildModelVariants, defaultModelParams } from "../model-variants.js";
 
 export const PROVIDER_ID = "cursor";
@@ -24,7 +29,10 @@ export function providerNpm(): string {
  * limits are resolved per model from the shared maps in `../model-limits.js`,
  * falling back to $0 / 200K context / 32K output for models absent from them.
  */
-export function buildModelV2Map(items: ModelListItem[]): Record<string, ModelV2> {
+export function buildModelV2Map(
+  items: ModelListItem[],
+  opts: { autoCompaction?: boolean } = {},
+): Record<string, ModelV2> {
   const out: Record<string, ModelV2> = {};
   for (const item of items) {
     const params = defaultModelParams(item);
@@ -46,7 +54,13 @@ export function buildModelV2Map(items: ModelListItem[]): Record<string, ModelV2>
         const c = resolveCost(item.id);
         return { input: c.input, output: c.output, cache: { read: c.cacheRead, write: c.cacheWrite } };
       })(),
-      limit: { context: resolveContextLimit(item.id), output: resolveOutputLimit(item.id) },
+      limit: {
+        context: resolveContextLimit(item.id),
+        ...(opts.autoCompaction
+          ? {}
+          : { input: NO_AUTO_COMPACTION_INPUT_LIMIT }),
+        output: resolveOutputLimit(item.id),
+      },
       status: "active",
       options: Object.keys(params).length > 0 ? { params } : {},
       headers: {},

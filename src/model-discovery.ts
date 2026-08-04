@@ -1,7 +1,12 @@
 import type { ModelListItem } from "@cursor/sdk";
 import type { Config } from "@opencode-ai/plugin";
 import { fingerprintApiKey, resolveCursorApiKey } from "./api-key.js";
-import { resolveContextLimit, resolveCost, resolveOutputLimit } from "./model-limits.js";
+import {
+  NO_AUTO_COMPACTION_INPUT_LIMIT,
+  resolveContextLimit,
+  resolveCost,
+  resolveOutputLimit,
+} from "./model-limits.js";
 import { readLatestModelCache, readModelCache, writeModelCache } from "./model-cache.js";
 import { FALLBACK_MODELS } from "./fallback-models.js";
 import { loadCursorSdk } from "./cursor-runtime.js";
@@ -111,9 +116,17 @@ export interface OpencodeModelConfigEntry {
    * Per-model context/output window. opencode's config channel is the only
    * one that reaches the model registry for providers absent from
    * models.dev, so the TUI session header's context-window percentage
-   * depends on this being present. Both fields are required by the schema.
+   * depends on this being present. `context` and `output` are required by
+   * the schema.
+   *
+   * `input` is an undocumented-but-runtime-honored field used only as
+   * opencode's auto-compaction threshold. We emit
+   * {@link NO_AUTO_COMPACTION_INPUT_LIMIT} to suppress auto-compaction while
+   * keeping `context` honest so the TUI gauge still works. The published
+   * `@opencode-ai/sdk` config types omit it, so it is excluded from
+   * `_limitKeyGuard` below.
    */
-  limit: { context: number; output: number };
+  limit: { context: number; input?: number; output: number };
   /**
    * Per-model API pricing, USD per million tokens. Note the FLAT snake_case
    * cache keys — the config schema (`ProviderConfig` in
@@ -154,8 +167,11 @@ const _costKeyGuard: _KeysAccepted<
   NonNullable<AcceptedModelConfig["cost"]>
 > = true;
 void _costKeyGuard;
+// `input` is deliberately excluded: opencode's runtime reads it (verified in
+// the 1.18.11 binary and end-to-end via `Provider.list()`), but the published
+// config types don't declare it. The guard still protects `context`/`output`.
 const _limitKeyGuard: _KeysAccepted<
-  OpencodeModelConfigEntry["limit"],
+  Omit<OpencodeModelConfigEntry["limit"], "input">,
   NonNullable<AcceptedModelConfig["limit"]>
 > = true;
 void _limitKeyGuard;
@@ -165,7 +181,10 @@ void _limitKeyGuard;
  * Cursor SDK runs an agent (it calls tools itself), so every model is marked
  * `tool_call: true` and `temperature: false`.
  */
-export function toOpencodeModels(items: ModelListItem[]): Record<string, OpencodeModelConfigEntry> {
+export function toOpencodeModels(
+  items: ModelListItem[],
+  opts: { autoCompaction?: boolean } = {},
+): Record<string, OpencodeModelConfigEntry> {
   const out: Record<string, OpencodeModelConfigEntry> = {};
   for (const item of items) {
     const params = defaultModelParams(item);
@@ -181,6 +200,12 @@ export function toOpencodeModels(items: ModelListItem[]): Record<string, Opencod
       options: Object.keys(params).length > 0 ? { params } : {},
       limit: {
         context: resolveContextLimit(item.id),
+        // Suppress opencode's auto-compaction unless the user opts in: the
+        // Cursor agent self-compacts, and opencode's compaction mints a
+        // fresh agentId per cycle, permanently leaking guarded SQLite fds.
+        ...(opts.autoCompaction
+          ? {}
+          : { input: NO_AUTO_COMPACTION_INPUT_LIMIT }),
         output: resolveOutputLimit(item.id),
       },
       cost: {

@@ -73,6 +73,29 @@ fi
 
 echo "PASS: opencode loaded the plugin and listed $CURSOR_COUNT Cursor model(s)."
 
+# Drift gate for the auto-compaction suppression. We disable opencode's
+# threshold-triggered compaction by emitting a large `limit.input`, which is what
+# opencode uses as that threshold. That field is honored by opencode's runtime
+# but is NOT declared in the published @opencode-ai/sdk config types, so nothing
+# in `tsc` or the unit suite can notice if opencode ever stops reading it.
+# Without this check, such a regression is silent: auto-compaction quietly
+# resumes, and with it the per-compaction agentId churn that leaks guarded
+# SQLite descriptors and has crashed opencode outright.
+VERBOSE_OUT="$("$OPENCODE" models cursor --verbose 2>/dev/null)"
+if ! printf '%s\n' "$VERBOSE_OUT" | grep -q '"input": 1000000000'; then
+  echo "FAIL: limit.input sentinel did not survive into opencode's model registry."
+  echo "      Auto-compaction suppression is broken — see 'Compaction' in README.md."
+  echo "----- limit blocks as resolved by opencode -----"
+  printf '%s\n' "$VERBOSE_OUT" | grep -A4 '"limit"' | head -20
+  exit 1
+fi
+# The gauge must still work: context has to stay a real value, not be zeroed.
+if printf '%s\n' "$VERBOSE_OUT" | grep -A4 '"limit"' | grep -q '"context": 0'; then
+  echo "FAIL: limit.context was zeroed — the TUI context gauge would be dead."
+  exit 1
+fi
+echo "PASS: limit.input sentinel reaches opencode's registry with limit.context intact."
+
 # Assert the packed artifact actually ships the delegation tools.
 PLUGIN_JS="$WORK/node_modules/@stablekernel/opencode-cursor/dist/plugin/index.js"
 for TOOL in cursor_cloud_agent cursor_delegate; do

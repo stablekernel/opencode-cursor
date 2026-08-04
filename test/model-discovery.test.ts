@@ -11,6 +11,7 @@ vi.mock("../src/model-cache.js", () => ({
 const { discoverModels, modelSupportsReasoning, toOpencodeModels } = await import(
   "../src/model-discovery.js"
 );
+const { NO_AUTO_COMPACTION_INPUT_LIMIT } = await import("../src/model-limits.js");
 
 afterEach(() => readLatestModelCache.mockReset());
 
@@ -83,14 +84,28 @@ describe("toOpencodeModels", () => {
 
 describe("toOpencodeModels config-channel limits and cost", () => {
   it("emits per-model limit with both context and output", () => {
-    const out = toOpencodeModels([
-      { id: "claude-opus-4-8", displayName: "Opus 4.8" },
-      { id: "gpt-5.5", displayName: "GPT-5.5" },
-      { id: "grok-4.5", displayName: "Grok 4.5" },
-    ] satisfies ModelListItem[]);
+    const out = toOpencodeModels(
+      [
+        { id: "claude-opus-4-8", displayName: "Opus 4.8" },
+        { id: "gpt-5.5", displayName: "GPT-5.5" },
+        { id: "grok-4.5", displayName: "Grok 4.5" },
+      ] satisfies ModelListItem[],
+      { autoCompaction: true },
+    );
     expect(out["claude-opus-4-8"]!.limit).toEqual({ context: 300_000, output: 64_000 });
     expect(out["gpt-5.5"]!.limit).toEqual({ context: 272_000, output: 64_000 });
     expect(out["grok-4.5"]!.limit).toEqual({ context: 256_000, output: 32_000 });
+  });
+
+  it("emits the no-auto-compaction input sentinel by default, keeping context honest", () => {
+    const out = toOpencodeModels([
+      { id: "claude-opus-4-8", displayName: "Opus 4.8" },
+    ] satisfies ModelListItem[]);
+    expect(out["claude-opus-4-8"]!.limit).toEqual({
+      context: 300_000,
+      input: NO_AUTO_COMPACTION_INPUT_LIMIT,
+      output: 64_000,
+    });
   });
 
   it("emits cost with FLAT snake_case cache keys, not nested cache object", () => {
@@ -119,10 +134,12 @@ describe("toOpencodeModels config-channel limits and cost", () => {
   });
 
   it("falls back to 200K/32K and $0 for unknown models", () => {
-    const out = toOpencodeModels([
-      { id: "brand-new-model", displayName: "New" },
-    ] satisfies ModelListItem[]);
+    const out = toOpencodeModels(
+      [{ id: "brand-new-model", displayName: "New" }] satisfies ModelListItem[],
+      { autoCompaction: true },
+    );
     expect(out["brand-new-model"]!.limit).toEqual({ context: 200_000, output: 32_000 });
+    expect(out["brand-new-model"]!.limit.input).toBeUndefined();
     expect(out["brand-new-model"]!.cost).toEqual({
       input: 0,
       output: 0,
