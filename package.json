@@ -72,10 +72,10 @@
     "@ai-sdk/provider": "^3.0.0"
   },
   "devDependencies": {
-    "@ai-sdk/provider": "^3.0.13",
-    "@opencode-ai/sdk": "^1.18.4",
-    "@types/node": "^26.0.0",
-    "@types/semver": "^7.7.1",
+    "@ai-sdk/provider": "^3.0.15",
+    "@opencode-ai/sdk": "^1.18.18",
+    "@types/node": "^26.2.0",
+    "@types/semver": "^7.8.0",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"
