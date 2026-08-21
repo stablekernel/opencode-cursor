@@ -6,7 +6,14 @@ import type {
 	LanguageModelV3Usage,
 } from "@ai-sdk/provider";
 import type { CursorEvent, CursorUsage } from "./agent-events.js";
-import { linkSubagentSession } from "./subagent-bridge.js";
+import {
+	activityLine,
+	linkSubagentSession,
+	linkSubagentSessionLive,
+	registerSubagentCall,
+	unregisterSubagentCall,
+} from "./subagent-bridge.js";
+import { SubagentTranscriptSink } from "./subagent-stream.js";
 
 /** Per-turn context threaded from the language model into the stream mapper. */
 export interface StreamContext {
@@ -202,11 +209,23 @@ function numField(v: unknown, key: string): number | undefined {
 		: undefined;
 }
 
+/** Any JSON-deserializable value; Cursor tool results are arbitrary JSON. */
+type JsonValue =
+	| string
+	| number
+	| boolean
+	| null
+	| JsonValue[]
+	| { [key: string]: JsonValue };
+
 /** Unwrap a Cursor `{ status:"success", value }` result to its `value`. */
-function successValue(result: unknown): unknown {
-	return isRecord(result) && result["status"] === "success"
-		? result["value"]
-		: undefined;
+function successValue(result: unknown): JsonValue | undefined {
+	if (!isRecord(result) || result["status"] !== "success") return undefined;
+	const value = result["value"];
+	if (value === undefined) return undefined;
+	// SAFETY: `value` crossed a JSON-deserialization boundary inside the Cursor
+	// SDK, so it can only contain JSON values; the cast narrows, never invents.
+	return value as JsonValue;
 }
 
 /**
@@ -283,8 +302,8 @@ function mcpFold(result: unknown): FoldedResult | null {
 }
 
 /** Cursor MCP call args nest the real tool input under `args.args`. */
-function mcpInputArgs(args: unknown): unknown {
-	return isRecord(args) ? args["args"] : undefined;
+function mcpInputArgs(args: unknown): Record<string, unknown> | undefined {
+	return isRecord(args) && isRecord(args["args"]) ? args["args"] : undefined;
 }
 
 /** Map a Cursor MCP `providerIdentifier` to a websearch provider label key. */
@@ -309,7 +328,7 @@ const WEBSEARCH_ADAPTER: NativeToolAdapter = {
 	tool: "websearch",
 	input: (args) => {
 		const query = strField(mcpInputArgs(args), "query");
-		return query !== undefined ? { query } : {};
+		return query === undefined ? {} : { query };
 	},
 	result: (value, args) => {
 		const provider = webSearchProvider(args);
@@ -411,17 +430,17 @@ const NATIVE_ADAPTERS: Record<string, NativeToolAdapter> = {
 			const fileSize = numField(value, "fileSize");
 			const linesReturned = content.split("\n").length;
 			const lineLabel =
-				totalLines !== undefined
-					? `${linesReturned}/${totalLines} lines`
-					: `${linesReturned} lines`;
+				totalLines === undefined
+					? `${linesReturned} lines`
+					: `${linesReturned}/${totalLines} lines`;
 			return {
 				title: `${filePath} (${lineLabel})`,
 				metadata: {
 					preview: content.split("\n").slice(0, 20).join("\n"),
 					loaded: [] as string[],
 					linesReturned,
-					...(totalLines !== undefined ? { totalLines } : {}),
-					...(fileSize !== undefined ? { fileSize } : {}),
+					...(totalLines === undefined ? {} : { totalLines }),
+					...(fileSize === undefined ? {} : { fileSize }),
 				},
 				output: content,
 			};
@@ -438,9 +457,9 @@ const NATIVE_ADAPTERS: Record<string, NativeToolAdapter> = {
 			const filePath = strField(args, "path") ?? "";
 			const lines = numField(value, "linesCreated");
 			const output =
-				lines !== undefined
-					? `Wrote ${lines} line${lines === 1 ? "" : "s"}.`
-					: "Wrote file successfully.";
+				lines === undefined
+					? "Wrote file successfully."
+					: `Wrote ${lines} line${lines === 1 ? "" : "s"}.`;
 			return {
 				title: filePath,
 				metadata: { diagnostics: {}, filepath: filePath, exists: false },
@@ -513,9 +532,7 @@ const NATIVE_ADAPTERS: Record<string, NativeToolAdapter> = {
 							current = file;
 							lines.push(`${file}:`);
 						}
-						lines.push(
-							line !== undefined ? `  Line ${line}: ${text}` : `  ${text}`,
-						);
+						lines.push(line === undefined ? `  ${text}` : `  Line ${line}: ${text}`);
 						total++;
 					}
 				} else if (
@@ -542,11 +559,9 @@ const NATIVE_ADAPTERS: Record<string, NativeToolAdapter> = {
 				metadata: { matches: total, truncated: false },
 				output:
 					total > 0
-						? [
-								`Found ${total} match${total === 1 ? "" : "es"}`,
-								"",
-								...lines,
-							].join("\n")
+						? [`Found ${total} match${total === 1 ? "" : "es"}`, "", ...lines].join(
+								"\n",
+							)
 						: "No matches found",
 			};
 		},
@@ -555,15 +570,22 @@ const NATIVE_ADAPTERS: Record<string, NativeToolAdapter> = {
 	// + results body instead of the raw `{results}` JSON.
 	semSearch: {
 		input: (args) => {
-			const out: Record<string, unknown> = { query: strField(args, "query") ?? "" };
-			const dirs = isRecord(args) && Array.isArray(args["targetDirectories"]) ? args["targetDirectories"] : undefined;
+			const out: Record<string, unknown> = {
+				query: strField(args, "query") ?? "",
+			};
+			const dirs =
+				isRecord(args) && Array.isArray(args["targetDirectories"])
+					? args["targetDirectories"]
+					: undefined;
 			if (dirs && dirs.length > 0) out["targetDirectories"] = dirs;
 			return out;
 		},
 		result: (value, args) => {
 			const query = strField(args, "query") ?? "";
 			const results = strField(value, "results") ?? "";
-			const count = results ? results.split("\n").filter((l) => l.trim().length > 0).length : 0;
+			const count = results
+				? results.split("\n").filter((l) => l.trim().length > 0).length
+				: 0;
 			return {
 				title: query,
 				metadata: { matches: count, truncated: false },
@@ -671,18 +693,16 @@ const NATIVE_ADAPTERS: Record<string, NativeToolAdapter> = {
 					const line = numField(start, "line");
 					const char = numField(start, "character");
 					const loc =
-						line !== undefined
-							? ` L${line + 1}${char !== undefined ? `:${char + 1}` : ""}`
-							: "";
+						line === undefined
+							? ""
+							: ` L${line + 1}${char === undefined ? "" : `:${char + 1}`}`;
 					lines.push(`  ${severity}${loc}: ${strField(d, "message") ?? ""}`);
 					total++;
 				}
 			}
 			return {
 				title:
-					total > 0
-						? `${total} problem${total === 1 ? "" : "s"}`
-						: "No problems",
+					total > 0 ? `${total} problem${total === 1 ? "" : "s"}` : "No problems",
 				metadata: { count: total },
 				output: total > 0 ? lines.join("\n") : "No problems found.",
 			};
@@ -699,9 +719,9 @@ const NATIVE_ADAPTERS: Record<string, NativeToolAdapter> = {
 				title: path,
 				metadata: {},
 				output:
-					size !== undefined
-						? `Deleted ${path} (${size} bytes).`
-						: `Deleted ${path}.`,
+					size === undefined
+						? `Deleted ${path}.`
+						: `Deleted ${path} (${size} bytes).`,
 			};
 		},
 	},
@@ -901,7 +921,8 @@ function blockToolInputPartialParts(
 		prev && serialized.startsWith(prev.serialized)
 			? serialized.slice(prev.serialized.length)
 			: serialized;
-	if (delta) parts.push({ type: "tool-input-delta", id, delta } as BlockToolPart);
+	if (delta)
+		parts.push({ type: "tool-input-delta", id, delta } as BlockToolPart);
 	return parts;
 }
 
@@ -1107,6 +1128,10 @@ export function cursorEventsToStream(
 			let compactions = 0;
 			// Blocks-mode tool bookkeeping (open non-edit calls + buffered edits).
 			const toolState = newBlockToolState();
+			// Live subagent sinks keyed by the parent `task` tool-call id. A sink
+			// exists only when a child session was created up-front (bridge present
+			// + parent sessionID); otherwise the post-completion link is used.
+			const subagentSinks = new Map<string, SubagentTranscriptSink>();
 			const closeDanglingToolCalls = () => {
 				for (const part of blockDanglingParts(toolState)) {
 					controller.enqueue(part);
@@ -1214,6 +1239,33 @@ export function cursorEventsToStream(
 								toolState.dropped.add(event.id);
 								break;
 							}
+							// A Cursor subagent is starting. Create the child session
+							// up-front so its nested activity can stream into the TUI
+							// subagent view live, and register the call→child mapping
+							// so the plugin's event hook can stamp the RUNNING task
+							// part's `state.metadata.sessionId` (the native task tool
+							// publishes it at execute time via `session.updatePart`;
+							// provider-side metadata channels can't reach
+							// `state.metadata`). Blocks mode only (a reasoning-mode
+							// turn renders no task card to stamp the child id on).
+							// Best-effort: on failure the sink is absent and the
+							// post-completion link (tool-result path) degrades to the
+							// previous behavior.
+							if (
+								toolDisplay === "blocks" &&
+								event.name === TASK_TOOL_NAME &&
+								!subagentSinks.has(event.id) &&
+								ctx.sessionID
+							) {
+								const live = await linkSubagentSessionLive({
+									parentSessionID: ctx.sessionID,
+									args: event.input,
+								});
+								if (live) {
+									subagentSinks.set(event.id, new SubagentTranscriptSink(live));
+									registerSubagentCall(event.id, live.childId);
+								}
+							}
 							if (toolDisplay === "blocks") {
 								if (toolState.partials.delete(event.id)) {
 									controller.enqueue({
@@ -1236,9 +1288,7 @@ export function cursorEventsToStream(
 									closeText();
 									closeReasoning();
 								}
-								for (const part of parts) {
-									controller.enqueue(part);
-								}
+								for (const part of parts) controller.enqueue(part);
 							} else {
 								reasoningLine(`\n${formatToolCall(event.name, event.input)}\n`);
 							}
@@ -1269,17 +1319,39 @@ export function cursorEventsToStream(
 								// card at it so it's clickable / ctrl+x-navigable. Best-effort:
 								// linkSubagentSession swallows all failures and returns
 								// undefined, leaving the card exactly as before.
-								if (
-									event.name === TASK_TOOL_NAME &&
-									!event.isError &&
-									ctx.sessionID
-								) {
-									const childId = await linkSubagentSession({
-										parentSessionID: ctx.sessionID,
-										args: taskArgs,
-										result: event.result,
-									});
-									if (childId) injectSubagentSessionId(parts, childId);
+								if (event.name === TASK_TOOL_NAME && !event.isError) {
+									const sink = subagentSinks.get(event.id);
+									if (sink) {
+										// Live path: the child session already exists and has
+										// been streaming nested activity. Finalize it (flush any
+										// remaining content + the subagent's final answer + its
+										// conversation steps + the activity line) and stamp the
+										// card with the child id.
+										const value =
+											isRecord(event.result) && event.result["status"] === "success"
+												? event.result["value"]
+												: undefined;
+										await sink.finalize(value, activityLine(value));
+										injectSubagentSessionId(parts, sink.childId);
+										subagentSinks.delete(event.id);
+										unregisterSubagentCall(event.id);
+									} else if (ctx.sessionID) {
+										// No live sink (no bridge / creation failed / background
+										// task): fall back to the post-completion link so the
+										// card is still navigable.
+										const childId = await linkSubagentSession({
+											parentSessionID: ctx.sessionID,
+											args: taskArgs,
+											result: event.result,
+										});
+										if (childId) injectSubagentSessionId(parts, childId);
+									}
+								} else if (event.name === TASK_TOOL_NAME) {
+									// The task errored (or a dropped task): release any
+									// pending call→child mapping so the plugin's event hook
+									// can't stamp a later part that reuses this call id.
+									subagentSinks.delete(event.id);
+									unregisterSubagentCall(event.id);
 								}
 								for (const part of parts) {
 									controller.enqueue(part);
@@ -1288,13 +1360,18 @@ export function cursorEventsToStream(
 								reasoningLine(`[tool] ${event.name} failed\n`);
 							}
 							break;
+						case "subagent-event": {
+							// Route a nested subagent update to the matching live sink.
+							const sink = subagentSinks.get(event.callId);
+							if (sink) sink.push(event.event);
+							break;
+						}
 						case "usage":
 							usage = mapUsage(event.usage);
 							break;
 						case "reasoning-complete":
 							closeReasoning();
-							if (typeof event.durationMs === "number")
-								thinkingMs += event.durationMs;
+							if (typeof event.durationMs === "number") thinkingMs += event.durationMs;
 							break;
 						case "compaction":
 							compactions++;
@@ -1432,6 +1509,9 @@ export async function cursorEventsToContent(
 				case "reasoning-complete":
 					break;
 				case "compaction":
+					break;
+				case "subagent-event":
+					// Non-streaming path: no live subagent activity to surface.
 					break;
 				case "finish":
 					if (!text && event.text) text = event.text;

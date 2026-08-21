@@ -1,6 +1,7 @@
 import { tool, type ToolContext, type ToolDefinition } from "@opencode-ai/plugin";
 import { runCloudAgent } from "../provider/cloud-agent.js";
 import { runDelegate } from "../provider/delegate.js";
+import { linkDelegateSession } from "../provider/subagent-bridge.js";
 
 const s = tool.schema;
 
@@ -206,6 +207,27 @@ export function buildCursorTools(deps: CursorToolDeps): Record<string, ToolDefin
             ? `\n\n(${result.toolActivity.length} tool call(s)` +
               `${result.toolActivity.some((t) => t.isError) ? ", some failed" : ""})`
             : "";
+
+        // Surface the delegate's work in a child session so it's discoverable
+        // in the TUI's subagent panel. Best-effort: a failed link never breaks
+        // the turn. The result card itself stays a tool block (a custom tool
+        // can't render a navigable `task` part), so the child session is
+        // reached via the subagent panel, not by clicking the result.
+        if (context.sessionID) {
+          const transcript = [
+            result.text || "(no text output)",
+            ...(result.reasoning ? [`\n> ${result.reasoning}`] : []),
+            ...(result.toolActivity.length > 0
+              ? [`\n(${result.toolActivity.length} tool call(s))`]
+              : []),
+          ].join("\n");
+          await linkDelegateSession({
+            parentSessionID: context.sessionID,
+            title: `Cursor delegate (${args.model})`,
+            prompt: args.prompt,
+            transcript,
+          });
+        }
 
         return {
           title: `Cursor delegate (${args.model})`,

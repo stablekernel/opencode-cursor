@@ -116,6 +116,7 @@ export async function runDelegate(
 					break;
 				case "reasoning-complete":
 				case "compaction":
+				case "subagent-event":
 					break;
 				case "finish":
 					// The aggregated result text; prefer it when deltas were absent.

@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LanguageModelV3StreamPart } from "@ai-sdk/provider";
+
 import type { CursorEvent } from "../src/provider/agent-events.js";
 import {
 	cursorEventsToContent,
@@ -10,6 +11,7 @@ import {
 import {
 	clearSubagentBridge,
 	setSubagentBridge,
+	subagentCallChildId,
 } from "../src/provider/subagent-bridge.js";
 
 async function* gen(events: CursorEvent[]): AsyncGenerator<CursorEvent> {
@@ -291,12 +293,8 @@ describe("cursorEventsToStream", () => {
 
 		const reasoning = parts
 			.filter(
-				(
-					p,
-				): p is Extract<
-					LanguageModelV3StreamPart,
-					{ type: "reasoning-delta" }
-				> => p.type === "reasoning-delta",
+				(p): p is Extract<LanguageModelV3StreamPart, { type: "reasoning-delta" }> =>
+					p.type === "reasoning-delta",
 			)
 			.map((p) => p.delta)
 			.join("");
@@ -428,10 +426,7 @@ describe("cursorEventsToStream", () => {
 			{ type: "tool-call", id: "c1", name: "semSearch", input: { query: "x" } },
 		];
 		const parts = await collect(
-			cursorEventsToStream(
-				genThenThrow(events, new Error("run died")),
-				"blocks",
-			),
+			cursorEventsToStream(genThenThrow(events, new Error("run died")), "blocks"),
 		);
 		const result = parts.find((p) => p.type === "tool-result") as Record<
 			string,
@@ -796,9 +791,10 @@ describe("native edit mapping (blocks)", () => {
 			]),
 			"blocks",
 		);
-		const call = content.find(
-			(c) => c.type === "tool-call",
-		) as unknown as Record<string, unknown>;
+		const call = content.find((c) => c.type === "tool-call") as unknown as Record<
+			string,
+			unknown
+		>;
 		const result = content.find((c) => c.type === "tool-result") as unknown as {
 			result: Record<string, unknown>;
 		};
@@ -983,9 +979,7 @@ describe("native tool mapping (blocks)", () => {
 						ws: {
 							type: "content",
 							output: {
-								matches: [
-									{ file: "/src/a.ts", lineNumber: 3, line: "const foo = 1" },
-								],
+								matches: [{ file: "/src/a.ts", lineNumber: 3, line: "const foo = 1" }],
 								totalMatches: 1,
 							},
 						},
@@ -1161,8 +1155,6 @@ describe("native tool mapping (blocks)", () => {
 			input: JSON.stringify({ description: "Pull current branch" }),
 		});
 	});
-
-
 
 	it("formats Cursor `readLints` as a `cursor_readLints` diagnostics list", async () => {
 		const { call, result } = await mapTool(
@@ -1602,8 +1594,8 @@ describe("subagent child-session linking (blocks)", () => {
 	];
 
 	const foldedMetadata = (part: LanguageModelV3StreamPart) =>
-		(part as unknown as { result: { metadata?: Record<string, unknown> } })
-			.result.metadata ?? {};
+		(part as unknown as { result: { metadata?: Record<string, unknown> } }).result
+			.metadata ?? {};
 
 	// Minimal opencode client stub capturing the create/prompt calls the bridge
 	// makes; returns a fake child session id.
@@ -1620,7 +1612,9 @@ describe("subagent child-session linking (blocks)", () => {
 				},
 				prompt: async (opts: unknown) => {
 					calls.prompt.push(opts);
-					return { data: {} };
+					// A real noReply prompt resolves `{ info: { id } }` — the seeded user
+					// message, which child tool parts attach to.
+					return { data: { info: { id: "msg_seed" } } };
 				},
 			},
 		};
@@ -1643,18 +1637,21 @@ describe("subagent child-session linking (blocks)", () => {
 		// The linked child session id makes the card clickable / ctrl+x-navigable.
 		expect(foldedMetadata(result)).toMatchObject({ sessionId: "ses_child" });
 		// Child created under the parent with the "(@agent subagent)" title, then
-		// seeded with the prompt + transcript (two noReply prompts).
+		// seeded with the prompt + the subagent's final answer + the activity
+		// line (three noReply prompts on the live path).
 		expect(calls.create[0]).toMatchObject({
 			body: { parentID: "ses_parent", title: expect.stringContaining("(@") },
 			query: { directory: "/repo" },
 		});
-		expect(calls.prompt.length).toBe(2);
-		// The transcript message carries Cursor's result + its real duration.
-		const transcript = calls.prompt[1] as {
-			body: { parts: Array<{ text: string }> };
-		};
-		expect(transcript.body.parts[0]!.text).toContain("done");
-		expect(transcript.body.parts[0]!.text).toContain("5.0s");
+		expect(calls.prompt.length).toBe(3);
+		const texts = (
+			calls.prompt as Array<{ body: { parts: Array<{ text: string }> } }>
+		)
+			.map((p) => p.body.parts[0]!.text)
+			.join("\n");
+		// The transcript carries Cursor's result + its real duration.
+		expect(texts).toContain("done");
+		expect(texts).toContain("5.0s");
 	});
 
 	it("degrades to a non-navigable card when no bridge is published", async () => {
@@ -1696,26 +1693,219 @@ describe("subagent child-session linking (blocks)", () => {
 		const result = toolResults(parts)[0]!;
 		expect(foldedMetadata(result)["sessionId"]).toBeUndefined();
 	});
+
+	it("streams nested subagent activity into a live child session", async () => {
+		const { client, calls } = stubClient();
+		// Capture tool-part upserts (the live `↳ <Tool> <title>` subtitle source).
+		const partWrites: Array<Record<string, unknown>> = [];
+		(client as Record<string, unknown>)["_client"] = {
+			request: async (opts: Record<string, unknown>) => {
+				partWrites.push(opts);
+				return {};
+			},
+		};
+		setSubagentBridge({
+			client: client as never,
+			directory: "/repo",
+		});
+		const liveEvents: CursorEvent[] = [
+			{
+				type: "tool-call",
+				id: "t1",
+				name: "task",
+				input: {
+					description: "Pull current branch",
+					prompt: "pull dev",
+					subagentType: { kind: "unspecified" },
+				},
+			},
+			{
+				type: "subagent-event",
+				callId: "t1",
+				event: { type: "text", text: "working on it" },
+			},
+			{
+				type: "subagent-event",
+				callId: "t1",
+				event: {
+					type: "tool-start",
+					id: "s1",
+					name: "shell",
+					input: { command: "git status" },
+				},
+			},
+			{
+				type: "subagent-event",
+				callId: "t1",
+				event: {
+					type: "tool-result",
+					id: "s1",
+					name: "shell",
+					result: { status: "success", value: { stdout: "clean" } },
+					isError: false,
+				},
+			},
+			{
+				type: "tool-result",
+				id: "t1",
+				name: "task",
+				result: {
+					status: "success",
+					value: {
+						isBackground: false,
+						durationMs: 5000,
+						resultSuffix: "done",
+						conversationSteps: [{ assistantMessage: { text: "subagent text" } }],
+					},
+				},
+				isError: false,
+			},
+			{ type: "finish" },
+		];
+
+		// Assert the call→child mapping is registered WHILE the subagent runs:
+		// the mapper registers it when it processes the tool-call (before the
+		// tool-result unregisters it). The provider cannot carry the id on the
+		// tool-call part itself — providerMetadata on V3 tool-call parts would
+		// land in part-level metadata, and opencode's ProviderMetadata schema
+		// rejects bare strings — while the TUI card reads state.metadata. The
+		// plugin's event hook patches the running part from this registry.
+		async function* liveGen(): AsyncGenerator<CursorEvent> {
+			for (const e of liveEvents) {
+				yield e;
+				if (e.type === "tool-call") {
+					expect(subagentCallChildId("t1")).toBe("ses_child");
+				}
+			}
+		}
+		const parts = await collect(
+			cursorEventsToStream(liveGen(), "blocks", {
+				sessionID: "ses_parent",
+			}),
+		);
+		const result = toolResults(parts)[0]!;
+		// The live child session id makes the card navigable.
+		expect(foldedMetadata(result)).toMatchObject({ sessionId: "ses_child" });
+		// The mapping is released once the task completes.
+		expect(subagentCallChildId("t1")).toBeUndefined();
+		// Child created up-front (on the tool-call), not at the result.
+		expect(calls.create.length).toBe(1);
+		// The prompt was seeded, then the nested activity flushed as markdown.
+		const promptTexts = (
+			calls.prompt as Array<{ body: { parts: Array<{ text: string }> } }>
+		)
+			.map((p) => p.body.parts[0]!.text)
+			.join("\n");
+		expect(promptTexts).toContain("pull dev");
+		expect(promptTexts).toContain("working on it");
+		expect(promptTexts).toContain("shell");
+		expect(promptTexts).toContain("git status");
+		// The subagent's own text and final answer land in the child session.
+		expect(promptTexts).toContain("subagent text");
+		expect(promptTexts).toContain("done");
+		// The activity line is appended on finalize.
+		expect(promptTexts).toContain("5.0s");
+		// The nested tool call produced a running then completed tool part, the
+		// completion reusing the running part's id (upsert, not a second part).
+		const bodies = partWrites.map((w) => w["body"] as Record<string, unknown>);
+		const toolStates = bodies
+			.filter((b) => b["type"] === "tool")
+			.map((b) => ({
+				id: b["id"],
+				tool: b["tool"],
+				status: (b["state"] as Record<string, unknown>)["status"],
+				title: (b["state"] as Record<string, unknown>)["title"],
+			}));
+		expect(toolStates).toEqual([
+			{
+				id: expect.stringMatching(/^prt_/),
+				tool: "shell",
+				status: "running",
+				title: "git status",
+			},
+			{
+				id: expect.stringMatching(/^prt_/),
+				tool: "shell",
+				status: "completed",
+				title: "git status",
+			},
+		]);
+		expect(toolStates[1]!["id"]).toBe(toolStates[0]!["id"]);
+	});
+
+	it("falls back to post-completion linking when no live sink was created", async () => {
+		// No bridge → no live sink; the post-completion link is skipped entirely
+		// (matching the "no bridge" degrade), so the card stays non-navigable.
+		const parts = await collect(
+			cursorEventsToStream(gen(taskEvents), "blocks", {
+				sessionID: "ses_parent",
+			}),
+		);
+		const result = toolResults(parts)[0]!;
+		expect(foldedMetadata(result)["sessionId"]).toBeUndefined();
+	});
+
+	it("releases the call→child mapping when the task errors", async () => {
+		const { client } = stubClient();
+		setSubagentBridge({
+			client: client as never,
+			directory: "/repo",
+		});
+		const failingEvents: CursorEvent[] = [
+			{
+				type: "tool-call",
+				id: "t9",
+				name: "task",
+				input: { description: "Failing task", prompt: "boom" },
+			},
+			{
+				type: "tool-result",
+				id: "t9",
+				name: "task",
+				result: { status: "error", value: { message: "failed" } },
+				isError: true,
+			},
+			{ type: "finish" },
+		];
+		async function* failingGen(): AsyncGenerator<CursorEvent> {
+			for (const e of failingEvents) {
+				yield e;
+				if (e.type === "tool-call") {
+					expect(subagentCallChildId("t9")).toBe("ses_child");
+				}
+			}
+		}
+		await collect(
+			cursorEventsToStream(failingGen(), "blocks", {
+				sessionID: "ses_parent",
+			}),
+		);
+		expect(subagentCallChildId("t9")).toBeUndefined();
+	});
 });
 
 describe("effectiveToolDisplay", () => {
-	it("returns \"reasoning\" when tools are undefined", () => {
+	it('returns "reasoning" when tools are undefined', () => {
 		expect(effectiveToolDisplay("blocks", undefined)).toBe("reasoning");
 	});
 
-	it("returns \"reasoning\" when tools are an empty array", () => {
+	it('returns "reasoning" when tools are an empty array', () => {
 		expect(effectiveToolDisplay("blocks", [])).toBe("reasoning");
 	});
 
 	it("returns the configured mode when tools are present", () => {
-		expect(effectiveToolDisplay("blocks", [{ type: "function", name: "read" } as never])).toBe(
-			"blocks",
-		);
+		expect(
+			effectiveToolDisplay("blocks", [
+				{ type: "function", name: "read" } as never,
+			]),
+		).toBe("blocks");
 	});
 
-	it("defaults to \"blocks\" when configured is undefined and tools are present", () => {
+	it('defaults to "blocks" when configured is undefined and tools are present', () => {
 		expect(
-			effectiveToolDisplay(undefined, [{ type: "function", name: "read" } as never]),
+			effectiveToolDisplay(undefined, [
+				{ type: "function", name: "read" } as never,
+			]),
 		).toBe("blocks");
 	});
 });

@@ -11,6 +11,18 @@ export interface CursorUsage {
   cacheWriteTokens: number;
 }
 
+/**
+ * A single nested update streamed from a Cursor subagent (the `task` tool).
+ * The SDK surfaces these via the `tool-call-delta` interaction update; we
+ * normalize the nested `taskUpdate` union into this small shape so the stream
+ * layer can render it without depending on SDK internals.
+ */
+export type SubagentNestedEvent =
+  | { type: "text"; text: string }
+  | { type: "reasoning"; text: string }
+  | { type: "tool-start"; id: string; name: string; input: unknown }
+  | { type: "tool-result"; id: string; name: string; result: unknown; isError: boolean };
+
 /** Normalized events bridged from the Cursor SDK's push callbacks. */
 export type CursorEvent =
   | { type: "text-delta"; text: string }
@@ -21,7 +33,13 @@ export type CursorEvent =
   | { type: "usage"; usage: CursorUsage }
   | { type: "reasoning-complete"; durationMs?: number }
   | { type: "compaction" }
-  | { type: "finish"; text?: string };
+  | { type: "finish"; text?: string }
+  /**
+   * A nested update from a Cursor subagent. `callId` is the parent's `task`
+   * tool-call id, so the stream layer can route the event to the right child
+   * session. Only one level of nesting is surfaced by the SDK.
+   */
+  | { type: "subagent-event"; callId: string; event: SubagentNestedEvent };
 
 export interface StreamAgentTurnOptions {
   mode: AgentModeOption;
@@ -34,6 +52,10 @@ export interface StreamAgentTurnOptions {
    * reported usage includes everything spent replaying earlier messages.
    */
   usageBase?: CursorUsage;
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
 }
 
 /** Sum two usage reports (either may be absent). */
@@ -63,6 +85,56 @@ function toolDisplayName(toolCall: ({ type?: string } & Record<string, any>) | u
     return "mcp";
   }
   return toolCall.type ?? "tool";
+}
+
+/**
+ * Normalize a nested subagent `taskUpdate` (from the SDK's `tool-call-delta`
+ * interaction update) into a {@link SubagentNestedEvent}, or `undefined` when
+ * the update carries nothing the stream layer renders (partials, step
+ * bookkeeping, thinking-completed). The nested union is read defensively —
+ * the SDK types are the contract, but the shape is opaque at runtime.
+ */
+function normalizeNestedTaskUpdate(update: unknown): SubagentNestedEvent | undefined {
+  if (!isRecord(update)) return undefined;
+  switch (update["type"]) {
+    case "text-delta":
+      return typeof update["text"] === "string"
+        ? { type: "text", text: update["text"] }
+        : undefined;
+    case "thinking-delta":
+      return typeof update["text"] === "string"
+        ? { type: "reasoning", text: update["text"] }
+        : undefined;
+    case "tool-call-started": {
+      const toolCall = isRecord(update["toolCall"]) ? update["toolCall"] : undefined;
+      const id = typeof update["callId"] === "string" ? update["callId"] : "";
+      return {
+        type: "tool-start",
+        id,
+        name: toolDisplayName(toolCall),
+        input: toolCall?.args ?? {},
+      };
+    }
+    case "tool-call-completed": {
+      const toolCall = isRecord(update["toolCall"]) ? update["toolCall"] : undefined;
+      const id = typeof update["callId"] === "string" ? update["callId"] : "";
+      const result = toolCall?.result;
+      const resultValue = isRecord(result) ? result["value"] : undefined;
+      const mcpError =
+        toolCall?.type === "mcp" && isRecord(resultValue) && resultValue["isError"] === true;
+      return {
+        type: "tool-result",
+        id,
+        name: toolDisplayName(toolCall),
+        result: result ?? null,
+        isError: (isRecord(result) && result["status"] === "error") || mcpError,
+      };
+    }
+    default:
+      // partial-tool-call, thinking-completed, step-started, step-completed:
+      // nothing to render (the final tool-call carries full args).
+      return undefined;
+  }
 }
 
 /**
@@ -201,6 +273,21 @@ export async function* streamAgentTurn(
           result: result ?? null,
           isError: result?.status === "error" || mcpError,
         });
+        break;
+      }
+      case "tool-call-delta": {
+        // Nested updates from a Cursor subagent (the `task` tool). `callId` is
+        // the parent task tool-call id; the stream layer routes the event to
+        // the matching child session. Ignored when the nested update carries
+        // nothing renderable.
+        const nested = normalizeNestedTaskUpdate(update.taskUpdate);
+        if (nested) {
+          push({
+            type: "subagent-event",
+            callId: String(update.callId),
+            event: nested,
+          });
+        }
         break;
       }
       case "turn-ended":

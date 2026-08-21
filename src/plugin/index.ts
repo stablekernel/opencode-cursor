@@ -13,9 +13,18 @@ import {
 	translateMcpServers,
 } from "./mcp-config.js";
 import { buildCursorTools } from "./cursor-tools.js";
-import { getLocalVersion, getLatestVersion, clearVersionCache, PLUGIN_CACHE_PATH } from "../version-check.js";
+import {
+	getLocalVersion,
+	getLatestVersion,
+	clearVersionCache,
+	PLUGIN_CACHE_PATH,
+} from "../version-check.js";
 import { removeSystemRule } from "../provider/system-rule.js";
-import { clearLogBridge, pluginLog, setLogBridge } from "../provider/log-bridge.js";
+import {
+	clearLogBridge,
+	pluginLog,
+	setLogBridge,
+} from "../provider/log-bridge.js";
 import {
 	writeSkillMirror,
 	removeSkillMirror,
@@ -29,6 +38,8 @@ import {
 import {
 	clearSubagentBridge,
 	setSubagentBridge,
+	subagentCallChildId,
+	stampTaskPartSessionId,
 } from "../provider/subagent-bridge.js";
 
 function apiKeyFromAuth(auth: Auth | undefined): string | undefined {
@@ -62,17 +73,18 @@ export const CursorPlugin: Plugin = async (input) => {
 
 	// Surfaces the update notice in the UI (toast). Resolved once per plugin
 	// instance using the shared fetch above.
-	const _versionCheckPromise: Promise<{ local: string; latest: string } | null> = (async () => {
-		try {
-			if (process.env.CI || process.env.NO_UPDATE_NOTIFIER) return null;
-			const local = getLocalVersion();
-			const latest = await _latestVersionPromise;
-			if (!local || !latest || !semver.gt(latest, local)) return null;
-			return { local, latest };
-		} catch {
-			return null;
-		}
-	})();
+	const _versionCheckPromise: Promise<{ local: string; latest: string } | null> =
+		(async () => {
+			try {
+				if (process.env.CI || process.env.NO_UPDATE_NOTIFIER) return null;
+				const local = getLocalVersion();
+				const latest = await _latestVersionPromise;
+				if (!local || !latest || !semver.gt(latest, local)) return null;
+				return { local, latest };
+			} catch {
+				return null;
+			}
+		})();
 	let _toastShown = false;
 
 	// The Cursor API key resolved by opencode's auth loader, captured so the
@@ -107,7 +119,6 @@ export const CursorPlugin: Plugin = async (input) => {
 				.catch(() => {});
 		})
 		.catch(() => {});
-
 
 	const directory = input?.directory;
 	// Publish the opencode client + directory so the provider stream layer can
@@ -180,10 +191,7 @@ export const CursorPlugin: Plugin = async (input) => {
 			const { models } = await discoverModels({});
 			config.provider ??= {};
 			const existing = config.provider[PROVIDER_ID] ?? {};
-			const existingOptions = (existing.options ?? {}) as Record<
-				string,
-				unknown
-			>;
+			const existingOptions = (existing.options ?? {}) as Record<string, unknown>;
 
 			// Forward opencode's configured MCP servers to the Cursor
 			// agent so it can use the same servers. Opt out via
@@ -340,10 +348,9 @@ export const CursorPlugin: Plugin = async (input) => {
 						// Cursor agent can't connect. Only those without a shareable
 						// client registration are skipped; ones with a clientId are
 						// forwarded with an `auth` block for the agent's own OAuth flow.
-						const unshareable = findUnshareableOAuthServers(
-							liveMcp,
-							status,
-						).filter((name) => !warnedOAuth.has(name));
+						const unshareable = findUnshareableOAuthServers(liveMcp, status).filter(
+							(name) => !warnedOAuth.has(name),
+						);
 						if (unshareable.length > 0) {
 							for (const name of unshareable) warnedOAuth.add(name);
 							const plural = unshareable.length > 1;
@@ -382,8 +389,7 @@ export const CursorPlugin: Plugin = async (input) => {
 							writeSkillMirror(resolvedCwd, resolved.skills, (msg) =>
 								pluginLog("warn", msg),
 							);
-							currentSkillsCatalogue =
-								buildSkillsCatalogue(resolved.skills) ?? "";
+							currentSkillsCatalogue = buildSkillsCatalogue(resolved.skills) ?? "";
 							lastSkillHash = hash;
 						}
 					} catch {
@@ -396,6 +402,31 @@ export const CursorPlugin: Plugin = async (input) => {
 			}
 		},
 
+		// Stamp the child session id on the RUNNING `task` part. The provider
+		// creates the child session when the Cursor subagent starts and
+		// publishes call→child on the bridge registry; when opencode's
+		// processor lands the task part (`message.part.updated`), patch it
+		// (`part.update`, the native `ctx.metadata` equivalent) so the TUI
+		// card carries `state.metadata.sessionId` from the start — matching
+		// the native task tool, which publishes the id at execute time. The
+		// processor emits a running-state part update for every streamed
+		// tool part, so this fires early; the stamp is idempotent.
+		event: async (input) => {
+			const evt = input.event;
+			if (evt.type !== "message.part.updated") return;
+			const part = evt.properties.part;
+			if (!part || part.type !== "tool" || part.tool !== "task") return;
+			const childId = subagentCallChildId(part.callID);
+			if (!childId) return;
+			void stampTaskPartSessionId({
+				sessionID: part.sessionID,
+				messageID: part.messageID,
+				partID: part.id,
+				part,
+				childId,
+			});
+		},
+
 		tool: {
 			cursor_update_plugin: {
 				description:
@@ -406,7 +437,11 @@ export const CursorPlugin: Plugin = async (input) => {
 						return {
 							title: "cursor plugin (checks disabled)",
 							output: "Update checks are disabled (CI or NO_UPDATE_NOTIFIER is set).",
-							metadata: { local: undefined, latest: undefined, status: "disabled" as const },
+							metadata: {
+								local: undefined,
+								latest: undefined,
+								status: "disabled" as const,
+							},
 						};
 					}
 
@@ -423,7 +458,8 @@ export const CursorPlugin: Plugin = async (input) => {
 					if (!latest || !semver.valid(latest)) {
 						return {
 							title: "cursor plugin (registry unavailable)",
-							output: "Could not fetch the latest version from npm. Check your network connection and try again.",
+							output:
+								"Could not fetch the latest version from npm. Check your network connection and try again.",
 							metadata: { local, latest, status: "failed" as const },
 						};
 					}
@@ -436,11 +472,12 @@ export const CursorPlugin: Plugin = async (input) => {
 						};
 					}
 
-				// Plugin is outdated — clear the opencode plugin cache so it re-fetches on next launch.
-				const cachePath = PLUGIN_CACHE_PATH;
-				const removeCommand = process.platform === "win32"
-					? `rmdir /s /q "${cachePath}"`
-					: `rm -rf ${cachePath}`;
+					// Plugin is outdated — clear the opencode plugin cache so it re-fetches on next launch.
+					const cachePath = PLUGIN_CACHE_PATH;
+					const removeCommand =
+						process.platform === "win32"
+							? `rmdir /s /q "${cachePath}"`
+							: `rm -rf ${cachePath}`;
 
 					try {
 						rmSync(cachePath, { recursive: true, force: true });
@@ -472,9 +509,7 @@ export const CursorPlugin: Plugin = async (input) => {
 				args: {},
 				execute: async () => {
 					const result = await discoverModels({ forceRefresh: true });
-					const lines = result.models.map(
-						(m) => `- ${m.id} — ${m.displayName}`,
-					);
+					const lines = result.models.map((m) => `- ${m.id} — ${m.displayName}`);
 					const header =
 						result.source === "live"
 							? `Refreshed ${result.models.length} Cursor models (live):`

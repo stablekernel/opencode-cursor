@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- **Cursor subagent transcripts in the TUI subagent view.** The child session
+  created for a Cursor subagent (`task` tool) is now seeded with the subagent's
+  own activity — its assistant text, thinking, and tool calls with args and
+  results — rendered from Cursor's `conversationSteps`, plus the final answer
+  and duration. Previously only a post-completion activity summary appeared.
+  Steps arrive as raw protobuf JSON, where `agent.v1.ConversationStep`'s `message`
+  oneof serialises to a single camelCase key (`{ assistantMessage: … }`,
+  `{ toolCall: { shellToolCall: … } }`) rather than the `{ type, message }` shape
+  of the SDK's public type; both are accepted. Transcript content is never
+  truncated — the child session carries the subagent's full output.
+- **Live activity on the Cursor subagent card.** The SDK streams a local
+  subagent's nested activity via `taskUpdate` payloads on the parent task's
+  `tool-call-delta` updates (text, thinking, tool-start/tool-result with
+  id + name + input). Those events now write real `tool` parts into the child
+  session via `part.update` (an upsert — `session/processor.ts` creates parts
+  the same way), so the `task` card shows a live `↳ <Tool> <title>` subtitle
+  while the subagent runs (the TUI builds that line purely from `tool` parts
+  in the child session — `tui/routes/session/index.tsx:2227-2279`).
+  The child session is created up-front when the `task` call starts and the
+  task card's `state.metadata.sessionId` is stamped while the subagent is still
+  running (via opencode's `part.update` endpoint, mirroring the native task
+  tool's execute-time metadata publication), so the card is clickable /
+  `ctrl+x`-navigable live. Tool calls complete when their tool-result event
+  arrives; any call left open is completed at finalize.
+  `cursor_delegate` also creates a child session seeded with its transcript,
+  discoverable via the TUI's subagent panel.
+
 ## [0.7.1] — 2026-08-05
 
 The skills bridge (#90), per-model context limits and pricing (#89), and the

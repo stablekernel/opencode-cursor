@@ -323,6 +323,85 @@ describe("streamAgentTurn MCP error surfacing", () => {
 	});
 });
 
+describe("streamAgentTurn nested subagent (tool-call-delta)", () => {
+	it("normalizes nested text/tool updates into subagent-event", async () => {
+		const agent = fakeAgent({
+			updates: [
+				{
+					type: "tool-call-delta",
+					callId: "task-1",
+					modelCallId: "m1",
+					taskUpdate: { type: "text-delta", text: "hello " },
+				},
+				{
+					type: "tool-call-delta",
+					callId: "task-1",
+					modelCallId: "m1",
+					taskUpdate: {
+						type: "tool-call-started",
+						callId: "sub-1",
+						toolCall: { type: "shell", args: { command: "git status" } },
+					},
+				},
+				{
+					type: "tool-call-delta",
+					callId: "task-1",
+					modelCallId: "m1",
+					taskUpdate: {
+						type: "tool-call-completed",
+						callId: "sub-1",
+						modelCallId: "m1",
+						toolCall: {
+							type: "shell",
+							args: { command: "git status" },
+							result: { status: "success", value: { stdout: "clean" } },
+						},
+					},
+				},
+			],
+			result: { status: "finished", result: "" },
+		});
+
+		const events = await collect(streamAgentTurn(agent, MESSAGE, { mode: "agent" }));
+		const sub = events.filter((e) => e.type === "subagent-event");
+		expect(sub).toHaveLength(3);
+		expect(sub[0]).toMatchObject({ callId: "task-1", event: { type: "text", text: "hello " } });
+		expect(sub[1]).toMatchObject({
+			callId: "task-1",
+			event: { type: "tool-start", name: "shell", id: "sub-1" },
+		});
+		expect(sub[2]).toMatchObject({
+			callId: "task-1",
+			event: { type: "tool-result", name: "shell", id: "sub-1", isError: false },
+		});
+	});
+
+	it("normalizes nested thinking deltas and drops non-renderable updates", async () => {
+		const agent = fakeAgent({
+			updates: [
+				{
+					type: "tool-call-delta",
+					callId: "task-1",
+					modelCallId: "m1",
+					taskUpdate: { type: "thinking-delta", text: "reasoning…" },
+				},
+				{
+					type: "tool-call-delta",
+					callId: "task-1",
+					modelCallId: "m1",
+					taskUpdate: { type: "step-started", stepId: 1 },
+				},
+			],
+			result: { status: "finished", result: "" },
+		});
+
+		const events = await collect(streamAgentTurn(agent, MESSAGE, { mode: "agent" }));
+		const sub = events.filter((e) => e.type === "subagent-event");
+		expect(sub).toHaveLength(1);
+		expect(sub[0]).toMatchObject({ event: { type: "reasoning", text: "reasoning…" } });
+	});
+});
+
 describe("streamAgentTurn idempotency key", () => {
 	it("passes idempotencyKey through to agent.send", async () => {
 		const sendCalls: Array<Record<string, unknown> | undefined> = [];

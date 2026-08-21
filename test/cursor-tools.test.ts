@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const runCloudAgent = vi.fn();
 const runDelegate = vi.fn();
+const linkDelegateSession = vi.fn();
 
 vi.mock("../src/provider/cloud-agent.js", () => ({ runCloudAgent }));
 vi.mock("../src/provider/delegate.js", () => ({ runDelegate }));
+vi.mock("../src/provider/subagent-bridge.js", () => ({ linkDelegateSession }));
 
 const { buildCursorTools } = await import("../src/plugin/cursor-tools.js");
 
@@ -27,6 +29,7 @@ const noKey = { resolveApiKey: () => undefined, defaultCwd: () => "/work" };
 afterEach(() => {
   runCloudAgent.mockReset();
   runDelegate.mockReset();
+  linkDelegateSession.mockReset();
 });
 
 describe("buildCursorTools", () => {
@@ -102,6 +105,52 @@ describe("buildCursorTools", () => {
     expect(out.output).toContain("result text");
     expect(out.output).toContain("1 tool call");
     expect(out.metadata.agentId).toBe("a1");
+  });
+
+  it("links the delegate to a child session seeded with the transcript", async () => {
+    runDelegate.mockResolvedValue({
+      agentId: "a1",
+      text: "result text",
+      reasoning: "thinking…",
+      toolActivity: [{ name: "read", isError: false }],
+      usage: undefined,
+    });
+    linkDelegateSession.mockResolvedValue("ses_child");
+    const ask = vi.fn().mockResolvedValue(undefined);
+    const tools = buildCursorTools(withKey);
+
+    await tools.cursor_delegate!.execute(
+      { prompt: "p", model: "m" } as any,
+      ctx(ask),
+    );
+
+    expect(linkDelegateSession).toHaveBeenCalledOnce();
+    const linkArgs = linkDelegateSession.mock.calls[0]![0];
+    expect(linkArgs).toMatchObject({
+      parentSessionID: "s",
+      title: "Cursor delegate (m)",
+      prompt: "p",
+    });
+    expect(linkArgs.transcript).toContain("result text");
+    expect(linkArgs.transcript).toContain("thinking…");
+    expect(linkArgs.transcript).toContain("1 tool call");
+  });
+
+  it("skips child-session linking when the delegate has no sessionID", async () => {
+    runDelegate.mockResolvedValue({
+      agentId: "a1",
+      text: "result text",
+      reasoning: "",
+      toolActivity: [],
+      usage: undefined,
+    });
+    const ask = vi.fn().mockResolvedValue(undefined);
+    const tools = buildCursorTools(withKey);
+    const context = { ...ctx(ask), sessionID: undefined };
+
+    await tools.cursor_delegate!.execute({ prompt: "p", model: "m" } as any, context);
+
+    expect(linkDelegateSession).not.toHaveBeenCalled();
   });
 
   it("returns needs-auth for the cloud agent tool when no API key is available", async () => {
