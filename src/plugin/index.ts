@@ -58,6 +58,43 @@ function apiKeyFromAuth(auth: Auth | undefined): string | undefined {
 }
 
 /**
+ * Fetch opencode's live skill inventory. The instance route is `GET /skill`
+ * (OpenApi identifier `app.skills`); newer SDK clients expose it as
+ * `client.app.skills(...)`, but the V1 SDK typings this repo builds against
+ * (1.18.18) predate it, so fall back to a raw `client.get` (hey-api).
+ *
+ * SAFETY: both casts widen typed surfaces to probe for methods that may not
+ * exist at runtime — the probe is optional-chained and the caller catches, so
+ * a host without the route degrades to the filesystem scan.
+ */
+async function fetchLiveSkills(
+	client: unknown,
+	query?: { query?: { directory?: string } },
+): Promise<{ data?: unknown } | undefined> {
+	const app = (client as { app?: unknown }).app as
+		| { skills?: (params?: unknown) => Promise<{ data?: unknown } | undefined> }
+		| undefined;
+	if (typeof app?.skills === "function") {
+		return app.skills(query);
+	}
+	// Fallback: the typed group predates the route, so reach the hey-api core
+	// client underneath (`_client`) and hit the route by URL. Verified against
+	// SDK 1.18.18: `_client.get({ url: "/skill" })` returns `{ data: Skill[] }`.
+	const inner = (client as { _client?: unknown })._client as
+		| {
+				get?: (opts?: {
+					url?: string;
+					query?: unknown;
+				}) => Promise<{ data?: unknown } | undefined>;
+			}
+		| undefined;
+	return inner?.get?.({
+		url: "/skill",
+		...(query?.query ? { query: query.query } : {}),
+	});
+}
+
+/**
  * opencode plugin that adds a "Cursor" provider backed by the official Cursor
  * SDK (`@cursor/sdk`).
  *
@@ -675,14 +712,8 @@ export const CursorPlugin: Plugin = async (input) => {
 						// scan can't see. Merged at lowest priority.
 						let liveSkills: LiveSkill[] | undefined;
 						try {
-							// SAFETY: `app.skills` is the V2 endpoint (/app/skills); the V1
-							// client typings this repo imports predate it, so widen here.
-							// The call is optional-chained and caught, so a host without the
-							// endpoint degrades to the filesystem scan.
-							const app = client.app as unknown as {
-								skills?: (params?: unknown) => Promise<{ data?: unknown } | undefined>;
-							};
-							const skillsRes = await app.skills?.(query);
+							let skillsRes: { data?: unknown } | undefined;
+							skillsRes = await fetchLiveSkills(client, query);
 							liveSkills = skillsRes?.data as LiveSkill[] | undefined;
 						} catch {
 							// Live inventory is best-effort; the filesystem scan stands.
