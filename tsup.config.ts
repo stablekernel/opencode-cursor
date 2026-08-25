@@ -1,9 +1,18 @@
 import { readFileSync } from "node:fs";
 import { defineConfig } from "tsup";
 
-const pkg = JSON.parse(
-	readFileSync(new URL("./package.json", import.meta.url), "utf8"),
-) as { version: string };
+let pkg: { version: string };
+try {
+	pkg = JSON.parse(
+		readFileSync(new URL("./package.json", import.meta.url), "utf8"),
+	) as { version: string };
+} catch (error) {
+	throw new Error(
+		`tsup: failed to read/parse package.json: ${
+			error instanceof Error ? error.message : String(error)
+		}`,
+	);
+}
 
 export default defineConfig({
 	// Emit config (src-only rootDir + declaration); the root tsconfig.json is the
@@ -15,6 +24,9 @@ export default defineConfig({
 		// Node sidecar hosting @cursor/sdk traffic when the plugin runs under Bun
 		// (Bun's node:http2 breaks Cursor's streaming RPC). Spawned, not imported.
 		"sidecar/agent-host": "src/sidecar/agent-host.mjs",
+		// stdio MCP server exposing other plugins' custom tools to the Cursor
+		// agent. Spawned by Cursor (via mcpServers) when the bridge is active.
+		"sidecar/plugin-tools-mcp": "src/sidecar/plugin-tools-mcp.mjs",
 	},
 	format: ["esm"],
 	target: "node22",
