@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
 	mkdtempSync,
 	mkdirSync,
@@ -17,6 +17,21 @@ const fakeHome = mkdtempSync(join(tmpdir(), "cursor-skill-home-"));
 vi.mock("node:os", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:os")>();
 	return { ...actual, homedir: () => fakeHome };
+});
+
+// SAFETY: XDG env vars leak past the fakeHome mock (the discovery code
+// prefers `process.env.XDG_CONFIG_HOME` over the mocked homedir), so any
+// real XDG_* on the host/CI would contaminate these tests. Point them at
+// per-file fake dirs for the duration of this worker.
+const realXdgConfig = process.env["XDG_CONFIG_HOME"];
+const realXdgCache = process.env["XDG_CACHE_HOME"];
+process.env["XDG_CONFIG_HOME"] = join(fakeHome, ".config");
+process.env["XDG_CACHE_HOME"] = join(fakeHome, ".cache");
+afterAll(() => {
+	if (realXdgConfig === undefined) delete process.env["XDG_CONFIG_HOME"];
+	else process.env["XDG_CONFIG_HOME"] = realXdgConfig;
+	if (realXdgCache === undefined) delete process.env["XDG_CACHE_HOME"];
+	else process.env["XDG_CACHE_HOME"] = realXdgCache;
 });
 
 const { discoverSkills, filterSkills, resolveSkills, skillSetHash } =
