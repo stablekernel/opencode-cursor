@@ -318,14 +318,19 @@ The mirror includes:
 - **opencode's live skill inventory** — on every turn the mirror also consults
   opencode's `app.skills` endpoint (when reachable) and merges any skill it
   knows about that the filesystem scan missed, at the same lowest priority.
+- **opencode's built-in skills** — skills opencode registers in code rather
+  than on disk (currently `customize-opencode`, its own config-authoring
+  guide). They only exist in the live inventory, so the mirror materialises
+  them from the endpoint's content into `.cursor/skills/` like any other
+  skill; the materialised copy updates whenever opencode's version changes.
 - **Supporting files** alongside each `SKILL.md` (preserving relative paths).
 - An `<available_skills>` catalogue appended to the generated system rule,
   listing each skill's id and description so the Cursor agent can load them on
   demand.
 
-> **Note:** `config.skills.urls` (HTTP skill catalogs) are not yet supported by
-> the mirror. If you rely on URL-sourced skills, they will not appear in
-> `.cursor/skills/`.
+> **Note:** URL-sourced skills (`config.skills.urls`) that are also present in
+> opencode's live inventory reach the mirror through that route; the mirror
+> does not fetch `skills.urls` catalogs on its own.
 
 ### Permission filtering
 
@@ -359,10 +364,12 @@ user explicitly asked for them). `exclude` always drops the listed skills.
 
 ### Limitations
 
-- Plugin-bundled skills are resolved from the plugin package cache by
-  filesystem scan (`@opencode-ai/sdk` exposes no skills API), so they update
-  only when the cache is refreshed — run `opencode-plugins-refresh` after
-  installing/updating a plugin that ships skills, then restart opencode.
+- Skills served via `skills.urls` that opencode itself hasn't loaded (the
+  endpoint is reachable but the catalog wasn't pulled this session) won't
+  appear until opencode sees them.
+- Built-in skills require the live `app.skills` endpoint (i.e. a running
+  opencode server reachable by this plugin); the filesystem scan can't see
+  them on its own.
 - A user-owned `.cursor/skills/<id>/SKILL.md` (without the `generated:
   opencode-cursor` sentinel) is never overwritten or deleted.
 - Individual files larger than 1 MB are skipped (the rest of the skill is still

@@ -6,6 +6,8 @@ import {
 	rmSync,
 	existsSync,
 	symlinkSync,
+	readFileSync,
+	statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -34,8 +36,13 @@ afterAll(() => {
 	else process.env["XDG_CACHE_HOME"] = realXdgCache;
 });
 
-const { discoverSkills, filterSkills, resolveSkills, skillSetHash } =
-	await import("../src/plugin/skill-discovery.js");
+const {
+	discoverSkills,
+	filterSkills,
+	resolveSkills,
+	skillSetHash,
+	resetLiveSkillScratch,
+} = await import("../src/plugin/skill-discovery.js");
 import type { DiscoveredSkill } from "../src/plugin/skill-discovery.js";
 import type { Config } from "@opencode-ai/plugin";
 
@@ -46,6 +53,8 @@ function tmp(): string {
 	return d;
 }
 afterEach(() => {
+	// Drop the content-only live-skill scratch root between tests.
+	resetLiveSkillScratch();
 	for (const d of dirs.splice(0)) {
 		rmSync(d, { recursive: true, force: true });
 	}
@@ -881,5 +890,86 @@ describe("live skills merge (app.skills)", () => {
 		});
 		expect(result.skills).toHaveLength(0);
 		expect(result.withheld.find((w) => w.id === "live-denied")).toBeDefined();
+	});
+});
+
+describe("live built-in (content-only) skills", () => {
+	it("materialises a <built-in> skill so the mirror can copy it", () => {
+		const cwd = tmp();
+		const cacheRoot = tmp();
+		const result = resolveSkills(cwd, undefined, undefined, {
+			cacheRoot,
+			liveSkills: [
+				{
+					name: "customize-opencode",
+					description: "Use ONLY when editing opencode config.",
+					location: "<built-in>",
+					content: "# Customizing opencode\n\nBody here.",
+				},
+			],
+		});
+		const skill = result.skills.find((s) => s.id === "customize-opencode");
+		expect(skill).toBeDefined();
+		expect(skill!.description).toBe("Use ONLY when editing opencode config.");
+		// The materialised dir holds a real SKILL.md with frontmatter + body.
+		const md = readFileSync(join(skill!.sourceDir, "SKILL.md"), "utf8");
+		expect(md).toContain("name: customize-opencode");
+		expect(md).toContain("# Customizing opencode");
+		// Second resolve with identical input must not rewrite the file
+		// (mtimes stable → skillSetHash stable → no per-turn mirror churn).
+		const mtimeBefore = statSync(join(skill!.sourceDir, "SKILL.md")).mtimeMs;
+		resolveSkills(cwd, undefined, undefined, {
+			cacheRoot,
+			liveSkills: [
+				{
+					name: "customize-opencode",
+					description: "Use ONLY when editing opencode config.",
+					location: "<built-in>",
+					content: "# Customizing opencode\n\nBody here.",
+				},
+			],
+		});
+		const mtimeAfter = statSync(join(skill!.sourceDir, "SKILL.md")).mtimeMs;
+		expect(mtimeAfter).toBe(mtimeBefore);
+	});
+
+	it("rewrites the materialised copy when opencode's content changes", () => {
+		const cwd = tmp();
+		const cacheRoot = tmp();
+		const mk = (content: string) =>
+			resolveSkills(cwd, undefined, undefined, {
+				cacheRoot,
+				liveSkills: [
+					{
+						name: "builtin-v2",
+						description: "Built-in.",
+						location: "<built-in>",
+						content,
+					},
+				],
+			});
+		const first = mk("# v1");
+		expect(first.skills.find((s) => s.id === "builtin-v2")).toBeDefined();
+		const dir = first.skills.find((s) => s.id === "builtin-v2")!.sourceDir;
+		const second = mk("# v2 updated");
+		const md = readFileSync(join(dir, "SKILL.md"), "utf8");
+		expect(md).toContain("# v2 updated");
+		expect(second.skills).toHaveLength(1);
+	});
+
+	it("skips content-only entries without content or description", () => {
+		const cwd = tmp();
+		const result = resolveSkills(cwd, undefined, undefined, {
+			cacheRoot: tmp(),
+			liveSkills: [
+				{ name: "no-content", description: "d", location: "<built-in>" },
+				{
+					name: "no-description",
+					location: "<built-in>",
+					content: "# body",
+				},
+			],
+		});
+		expect(result.skills).toHaveLength(0);
 	});
 });

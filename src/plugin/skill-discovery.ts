@@ -4,6 +4,10 @@ import {
 	statSync,
 	existsSync,
 	realpathSync,
+	mkdtempSync,
+	mkdirSync,
+	rmSync,
+	writeFileSync,
 } from "node:fs";
 import type { Dirent } from "node:fs";
 import {
@@ -13,7 +17,7 @@ import {
 	resolve as resolvePath,
 	isAbsolute,
 } from "node:path";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { execSync } from "node:child_process";
 import type { Config } from "@opencode-ai/plugin";
 
@@ -740,26 +744,110 @@ export interface LiveSkill {
 	name: string;
 	description?: string;
 	location: string;
+	/**
+	 * The skill's full body. Present for content-only skills (e.g. opencode's
+	 * `<built-in>` skills, which have no on-disk SKILL.md).
+	 */
+	content?: string;
 }
 
 /**
- * Convert live `app.skills` entries into {@link DiscoveredSkill}s, pointing
- * at each skill's on-disk directory (derived from `location`). Entries whose
- * location can't be resolved are skipped — the filesystem scan already
- * covers anything reachable.
+ * Scratch root holding materialised copies of skills that only exist in
+ * opencode's live inventory (no on-disk SKILL.md — e.g. opencode's own
+ * `<built-in>` skills, whose content is registered in code). Stable across
+ * calls so `skillSetHash` mtime checks don't churn per turn; wiped on exit.
+ */
+let liveScratchRoot: string | undefined;
+let liveScratchCleanupRegistered = false;
+
+/** Test hook: drop the scratch root so tests don't share state. */
+export function resetLiveSkillScratch(): void {
+	const root = liveScratchRoot;
+	if (root) {
+		try {
+			rmSync(root, { recursive: true, force: true });
+		} catch {
+			// best effort
+		}
+	}
+	liveScratchRoot = undefined;
+}
+
+function liveScratchDir(): string {
+	if (!liveScratchRoot) {
+		liveScratchRoot = mkdtempSync(join(tmpdir(), "opencode-cursor-skills-"));
+		if (!liveScratchCleanupRegistered) {
+			liveScratchCleanupRegistered = true;
+			const rootAtExit = liveScratchRoot;
+			process.once("exit", () => {
+				rmSync(rootAtExit, { recursive: true, force: true });
+			});
+		}
+	}
+	return liveScratchRoot;
+}
+
+/**
+ * Convert live `app.skills` entries into {@link DiscoveredSkill}s.
+ *
+ * Disk-backed entries point at the skill's on-disk directory (derived from
+ * `location`); entries whose location isn't resolvable are skipped — the
+ * filesystem scan already covers anything reachable.
+ *
+ * Content-only entries (no on-disk SKILL.md — opencode's `<built-in>` skills
+ * and anything else opencode serves from memory) are materialised into a
+ * scratch dir so the mirror can stamp and copy them like any other skill.
+ * The rewritten file carries frontmatter (the live `description`) + the
+ * live `content` body, keeping the mirror in sync with opencode's version.
  */
 export function liveSkillsToDiscovered(live: LiveSkill[]): DiscoveredSkill[] {
 	const out: DiscoveredSkill[] = [];
 	for (const skill of live) {
-		if (!skill.location) continue;
+		if (!skill.location || !skill.name) continue;
 		const sourceDir = skill.location.endsWith("SKILL.md")
 			? dirname(skill.location)
 			: skill.location;
-		if (!existsSync(join(sourceDir, "SKILL.md"))) continue;
-		const loaded = loadSkill(skill.name, sourceDir);
+		if (existsSync(join(sourceDir, "SKILL.md"))) {
+			const loaded = loadSkill(skill.name, sourceDir);
+			if (loaded) out.push(loaded);
+			continue;
+		}
+		// Not on disk: materialise if opencode gave us content.
+		if (!skill.content) continue;
+		const scratchDir = join(liveScratchDir(), skill.name);
+		const scratchMd = join(scratchDir, "SKILL.md");
+		// Rewrite only when the content or description actually changed, so
+		// per-turn calls don't touch mtimes and invalidate the skill hash.
+		let needsWrite = true;
+		if (existsSync(scratchMd)) {
+			try {
+				const existing = readFileSync(scratchMd, "utf8");
+				if (existing === renderLiveSkillMd(skill)) needsWrite = false;
+			} catch {
+				// unreadable → rewrite
+			}
+		}
+		if (needsWrite) {
+			try {
+				mkdirSync(scratchDir, { recursive: true });
+				writeFileSync(scratchMd, renderLiveSkillMd(skill), "utf8");
+			} catch {
+				continue; // scratch fs unavailable — skip this skill
+			}
+		}
+		const loaded = loadSkill(skill.name, scratchDir);
 		if (loaded) out.push(loaded);
 	}
 	return out;
+}
+
+/** Render a live (content-only) skill as a stamped SKILL.md. */
+function renderLiveSkillMd(skill: LiveSkill): string {
+	// YAML: quote the description to survive colons/quotes inside it.
+	const escaped = (skill.description ?? "").replace(/"/g, '\\"');
+	const body = skill.content ?? "";
+	const separator = body.startsWith("\n") ? "" : "\n";
+	return `---\nname: ${skill.name}\ndescription: "${escaped}"\n---\n${separator}${body}`;
 }
 
 /**
