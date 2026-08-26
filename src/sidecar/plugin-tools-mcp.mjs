@@ -75,7 +75,11 @@ async function listTools() {
 
 async function callTool(name, args) {
   try {
-    const data = await controlRequest("/call", { id: name, args: args ?? {} }, 300_000);
+    const data = await controlRequest(
+      "/call",
+      { id: name, args: args ?? {} },
+      300_000,
+    );
     if (data?.ok === false) {
       return {
         isError: true,

@@ -86,7 +86,7 @@ async function fetchLiveSkills(
 					url?: string;
 					query?: unknown;
 				}) => Promise<{ data?: unknown } | undefined>;
-			}
+		  }
 		| undefined;
 	return inner?.get?.({
 		url: "/skill",
@@ -244,6 +244,9 @@ export const CursorPlugin: Plugin = async (input) => {
 				pluginLog("warn", "plugin tool mirror skipped some plugins", result.failed);
 			}
 			if (result.tools.length === 0) {
+				if (!Array.isArray(config?.plugin) && pluginToolsMcpServer) {
+					return pluginToolsMcpServer;
+				}
 				await pluginToolsBridge?.close();
 				pluginToolsBridge = undefined;
 				mirroredTools = [];

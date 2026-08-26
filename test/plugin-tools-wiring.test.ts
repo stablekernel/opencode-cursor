@@ -7,6 +7,7 @@ import { join } from "node:path";
 vi.mock("../src/model-discovery.js", () => ({
 	discoverModels: async () => ({ models: [], source: "fallback" }),
 	toOpencodeModels: () => ({}),
+	modelSupportsReasoning: () => false,
 }));
 
 describe("CursorPlugin plugin-tools wiring", () => {
@@ -75,7 +76,7 @@ describe("CursorPlugin plugin-tools wiring", () => {
 		const prevCache = process.env.XDG_CACHE_HOME;
 		process.env.HOME = home;
 		process.env.XDG_CONFIG_HOME = join(home, ".config");
-		delete process.env.XDG_CACHE_HOME;
+		process.env.XDG_CACHE_HOME = join(home, ".cache");
 		try {
 			const cwd = tmp();
 			const hooks = await plugin({
@@ -254,6 +255,81 @@ describe("CursorPlugin plugin-tools wiring", () => {
 			expect(deniedCall.ok).toBe(false);
 			expect(deniedCall.error).toMatch(/ask/);
 			await hooks4.dispose!();
+		} finally {
+			process.env.HOME = prevHome;
+			process.env.XDG_CONFIG_HOME = prevXdg;
+			process.env.XDG_CACHE_HOME = prevCache;
+		}
+	});
+
+	it("keeps the plugin-tools bridge when live config.get omits plugin", async () => {
+		const { default: plugin } = await import("../src/plugin/index.js");
+		const home = tmp();
+		const cacheRoot = join(home, ".cache", "opencode", "packages");
+		await writeToolPlugin(cacheRoot);
+		const prevHome = process.env.HOME;
+		const prevXdg = process.env.XDG_CONFIG_HOME;
+		const prevCache = process.env.XDG_CACHE_HOME;
+		process.env.HOME = home;
+		process.env.XDG_CONFIG_HOME = join(home, ".config");
+		process.env.XDG_CACHE_HOME = join(home, ".cache");
+		try {
+			const cwd = tmp();
+			const client = {
+				app: { log: async () => ({}) },
+				config: {
+					get: async () => ({ data: {} }),
+				},
+				mcp: {
+					status: async () => ({
+						data: { "context-mode": { status: "connected" } },
+					}),
+				},
+			};
+			const hooks = await plugin({
+				directory: cwd,
+				client,
+				project: {},
+				worktree: cwd,
+				serverUrl: new URL("http://localhost:4096"),
+				experimental_workspace: { register() {} },
+			} as never);
+			const config = {
+				plugin: ["wire-plugin@latest"],
+				provider: {},
+				mcp: {},
+			} as never;
+			await hooks.config!(config);
+			const servers = (
+				config as {
+					provider: Record<string, { options?: Record<string, unknown> }>;
+				}
+			).provider["cursor"]!.options!["mcpServers"] as Record<
+				string,
+				{ env: Record<string, string> }
+			>;
+			const bridgeServer = servers["opencode-plugin-tools"];
+			expect(bridgeServer).toBeDefined();
+			const port = Number(bridgeServer!.env["OPENCODE_PLUGIN_TOOLS_PORT"]);
+			const token = bridgeServer!.env["OPENCODE_PLUGIN_TOOLS_TOKEN"];
+			const output = { options: {} as Record<string, unknown> };
+			await hooks["chat.params"]!(
+				{
+					model: { providerID: "cursor" },
+					sessionID: "s1",
+					agent: "build",
+				} as never,
+				output as never,
+			);
+			const liveServers = output.options["mcpServers"] as
+				| Record<string, { env: Record<string, string> }>
+				| undefined;
+			expect(liveServers?.["opencode-plugin-tools"]).toBeDefined();
+			const listed = await fetch(`http://127.0.0.1:${port}/tools`, {
+				headers: { authorization: `Bearer ${token}` },
+			});
+			expect(listed.ok).toBe(true);
+			await hooks.dispose!();
 		} finally {
 			process.env.HOME = prevHome;
 			process.env.XDG_CONFIG_HOME = prevXdg;

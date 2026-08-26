@@ -18,6 +18,7 @@ import { createServer, type Server } from "node:http";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { execSync } from "node:child_process";
 import type { ToolContext } from "@opencode-ai/plugin";
 import type { MirroredTool } from "./plugin-tool-registry.js";
 import { pluginLog } from "../provider/log-bridge.js";
@@ -81,6 +82,32 @@ export function resolvePluginToolsScript(): string | undefined {
 	return undefined;
 }
 
+function execBasename(execPath: string): string {
+	const base = execPath.split(/[/\\]/).pop() ?? "";
+	return base.replace(/\.exe$/i, "").toLowerCase();
+}
+
+export function resolvePluginToolsNodeCommand(
+	execPath = process.execPath,
+	lookupNode?: () => string | undefined,
+): string | undefined {
+	const name = execBasename(execPath);
+	if (name === "node" || name === "bun") return execPath;
+	if (lookupNode) return lookupNode() || undefined;
+	try {
+		const out = execSync(
+			process.platform === "win32" ? "where node" : "command -v node",
+			{
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "ignore"],
+			},
+		).trim();
+		return out.split("\n")[0] || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 export interface StartBridgeOptions {
 	tools: MirroredTool[];
 	/** Directory the mirrored tools should see as `context.directory`. */
@@ -108,6 +135,11 @@ export async function startPluginToolsBridge(
 	const scriptPath = resolvePluginToolsScript();
 	if (!scriptPath) {
 		pluginLog("warn", "plugin-tools MCP script not found; bridge disabled");
+		return { close: async () => {} };
+	}
+	const nodePath = resolvePluginToolsNodeCommand();
+	if (!nodePath) {
+		pluginLog("warn", "plugin-tools MCP needs node on PATH; bridge disabled");
 		return { close: async () => {} };
 	}
 
@@ -207,7 +239,6 @@ export async function startPluginToolsBridge(
 		return { close: async () => {} };
 	}
 
-	const nodePath = process.execPath;
 	return {
 		mcpServer: {
 			type: "stdio",

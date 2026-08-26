@@ -11,6 +11,7 @@ import {
 	mirrorPluginTools,
 } from "../src/plugin/plugin-tool-registry.js";
 import {
+	resolvePluginToolsNodeCommand,
 	resolvePluginToolsScript,
 	startPluginToolsBridge,
 } from "../src/plugin/plugin-tools-bridge.js";
@@ -295,6 +296,30 @@ describe("plugin-tools bridge", () => {
 		expect(resolvePluginToolsScript()).toMatch(/plugin-tools-mcp\.mjs$/);
 	});
 
+	it("uses execPath when it is node or bun", () => {
+		expect(resolvePluginToolsNodeCommand("/opt/homebrew/bin/node")).toBe(
+			"/opt/homebrew/bin/node",
+		);
+		expect(resolvePluginToolsNodeCommand("/Users/me/.bun/bin/bun")).toBe(
+			"/Users/me/.bun/bin/bun",
+		);
+		expect(
+			resolvePluginToolsNodeCommand("C:\\Program Files\\nodejs\\node.exe"),
+		).toBe("C:\\Program Files\\nodejs\\node.exe");
+	});
+
+	it("looks up node when execPath is a compiled host binary", () => {
+		expect(
+			resolvePluginToolsNodeCommand(
+				"/opt/homebrew/bin/opencode",
+				() => "/usr/local/bin/node",
+			),
+		).toBe("/usr/local/bin/node");
+		expect(
+			resolvePluginToolsNodeCommand("/opt/homebrew/bin/opencode", () => undefined),
+		).toBeUndefined();
+	});
+
 	it("serves tools/list and tools/call through the MCP child", async () => {
 		const bridge = await startPluginToolsBridge({
 			tools: [fakeTool("fake_echo")],
@@ -443,7 +468,9 @@ describe("plugin-tools bridge", () => {
 		}
 	});
 
-	it("tools/list fails fast against a hung control port", { timeout: 20_000 }, async () => {
+	it("tools/list fails fast against a hung control port", {
+		timeout: 20_000,
+	}, async () => {
 		// A control port that accepts connections but never responds (stale
 		// server) must not hang Cursor's MCP discovery — listTools aborts after
 		// its 5s budget and degrades to an empty tool list.
@@ -457,18 +484,14 @@ describe("plugin-tools bridge", () => {
 		const address = hung.address();
 		const port = typeof address === "object" && address ? address.port : 0;
 		try {
-			const child = spawn(
-				process.execPath,
-				["src/sidecar/plugin-tools-mcp.mjs"],
-				{
-					env: {
-						...process.env,
-						OPENCODE_PLUGIN_TOOLS_PORT: String(port),
-						OPENCODE_PLUGIN_TOOLS_TOKEN: "t",
-					},
-					stdio: ["pipe", "pipe", "pipe"],
+			const child = spawn(process.execPath, ["src/sidecar/plugin-tools-mcp.mjs"], {
+				env: {
+					...process.env,
+					OPENCODE_PLUGIN_TOOLS_PORT: String(port),
+					OPENCODE_PLUGIN_TOOLS_TOKEN: "t",
 				},
-			);
+				stdio: ["pipe", "pipe", "pipe"],
+			});
 			const started = Date.now();
 			const reply = await new Promise<string>((resolve, reject) => {
 				let buf = "";
