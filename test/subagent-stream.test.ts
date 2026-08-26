@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { SubagentLiveSession } from "../src/provider/subagent-bridge.js";
 import { SubagentTranscriptSink } from "../src/provider/subagent-stream.js";
 
-/** A fake live session capturing flushed markdown and tool-part writes. */
+/**
+ * A fake live session capturing flushed transcript snapshots and tool-part
+ * writes. Each `flush` entry is a CUMULATIVE snapshot (the full transcript so
+ * far), matching the growing-message contract.
+ */
 function fakeSession(): {
 	session: SubagentLiveSession;
 	flushed: string[];
@@ -54,11 +58,22 @@ function fakeSession(): {
 }
 
 describe("SubagentTranscriptSink", () => {
-	it("renders text, reasoning, and tool activity into markdown", async () => {
+	it("renders text and reasoning into the transcript", async () => {
 		const { session, flushed } = fakeSession();
 		const sink = new SubagentTranscriptSink(session);
 		sink.push({ type: "text", text: "hello world" });
 		sink.push({ type: "reasoning", text: "thinking hard" });
+		await sink.finalize();
+
+		const body = flushed.join("\n");
+		expect(body).toContain("hello world");
+		expect(body).toContain("> thinking hard");
+	});
+
+	it("keeps tool activity out of the transcript — tool parts render it", async () => {
+		const { session, flushed, parts } = fakeSession();
+		const sink = new SubagentTranscriptSink(session);
+		sink.push({ type: "text", text: "before" });
 		sink.push({
 			type: "tool-start",
 			id: "s1",
@@ -72,51 +87,50 @@ describe("SubagentTranscriptSink", () => {
 			result: { status: "success", value: { stdout: "clean" } },
 			isError: false,
 		});
-		await sink.finalize(
-			{ resultSuffix: "done", conversationSteps: [] },
-			"_Subagent ran 1 step in 5.0s._",
-		);
-
-		const body = flushed.join("\n");
-		expect(body).toContain("hello world");
-		expect(body).toContain("> thinking hard");
-		expect(body).toContain("shell");
-		expect(body).toContain("git status");
-		expect(body).toContain("clean");
-		expect(body).toContain("done");
-	});
-
-	it("marks failed tool results and keeps long output intact", async () => {
-		const { session, flushed } = fakeSession();
-		const sink = new SubagentTranscriptSink(session);
-		sink.push({
-			type: "tool-start",
-			id: "s1",
-			name: "shell",
-			input: { command: "x".repeat(5000) },
-		});
-		sink.push({
-			type: "tool-result",
-			id: "s1",
-			name: "shell",
-			result: { status: "error", error: "boom" },
-			isError: true,
-		});
+		sink.push({ type: "text", text: "after" });
 		await sink.finalize();
 
 		const body = flushed.join("\n");
-		expect(body).toContain("failed");
-		// The child session carries the full transcript: nothing is truncated.
-		expect(body).toContain("x".repeat(5000));
+		expect(body).toContain("before");
+		expect(body).toContain("after");
+		// Tool args/results appear via `tool` parts, not markdown in the
+		// transcript (writing both duplicates them in the subagent pane).
+		expect(body).not.toContain("git status");
+		expect(body).not.toContain("clean");
+		expect(parts.map((p) => p.status)).toEqual(["running", "completed"]);
 	});
 
-	it("flushes tool results promptly and coalesces text on a timer", async () => {
+	it("each flush carries the FULL cumulative transcript", async () => {
+		vi.useFakeTimers();
+		try {
+			const { session, flushed } = fakeSession();
+			const sink = new SubagentTranscriptSink(session);
+			sink.push({ type: "text", text: "first fragment" });
+			await vi.advanceTimersByTimeAsync(2000);
+			expect(flushed).toHaveLength(1);
+			expect(flushed[0]).toContain("first fragment");
+			sink.push({ type: "text", text: " second fragment" });
+			await vi.advanceTimersByTimeAsync(2000);
+			expect(flushed).toHaveLength(2);
+			// The second snapshot still carries the first — the growing message
+			// is replaced wholesale, never appended to piece by piece.
+			expect(flushed[1]).toContain("first fragment");
+			expect(flushed[1]).toContain("second fragment");
+			await sink.finalize();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("coalesces text on a timer and does not flush on tool events", async () => {
 		vi.useFakeTimers();
 		try {
 			const { session, flushed } = fakeSession();
 			const sink = new SubagentTranscriptSink(session);
 			sink.push({ type: "text", text: "a" });
-			// A tool result triggers an immediate flush of the buffered text.
+			expect(flushed).toHaveLength(0);
+			// Tool events no longer force a flush — they only write tool parts,
+			// so a flowing paragraph is never cut at a tool boundary.
 			sink.push({
 				type: "tool-result",
 				id: "s1",
@@ -124,13 +138,11 @@ describe("SubagentTranscriptSink", () => {
 				result: { status: "success", value: { fileContentAfterWrite: "data" } },
 				isError: false,
 			});
-			expect(flushed.join("\n")).toContain("a");
-			expect(flushed.join("\n")).toContain("data");
-			// Text pushed after the flush is buffered until the timer fires.
-			sink.push({ type: "text", text: "b" });
-			expect(flushed.join("\n")).not.toContain("b");
+			expect(flushed).toHaveLength(0);
 			await vi.advanceTimersByTimeAsync(2000);
-			expect(flushed.join("\n")).toContain("b");
+			expect(flushed).toHaveLength(1);
+			expect(flushed[0]).toContain("a");
+			await sink.finalize();
 		} finally {
 			vi.useRealTimers();
 		}
@@ -147,28 +159,36 @@ describe("SubagentTranscriptSink", () => {
 		expect(flushed.join("\n")).not.toContain("again");
 	});
 
-	it("renders conversation steps on finalize", async () => {
+	it("merges the final answer, steps, and activity into ONE flush", async () => {
 		const { session, flushed } = fakeSession();
 		const sink = new SubagentTranscriptSink(session);
-		await sink.finalize({
-			resultSuffix: "final answer",
-			conversationSteps: [
-				{ assistantMessage: { text: "working on it" } },
-				{
-					toolCall: {
-						shellToolCall: {
-							args: { command: "git status" },
-							result: { stdout: "clean" },
+		sink.push({ type: "text", text: "working on it" });
+		await sink.finalize(
+			{
+				resultSuffix: "final answer",
+				conversationSteps: [
+					{ assistantMessage: { text: "step text" } },
+					{
+						toolCall: {
+							shellToolCall: {
+								args: { command: "git status" },
+								result: { stdout: "clean" },
+							},
 						},
 					},
-				},
-			],
-		});
-		const body = flushed.join("\n");
-		expect(body).toContain("final answer");
+				],
+			},
+			"_Subagent ran 1 step in 5.0s._",
+		);
+		// Everything lands in a single final snapshot, not three extra messages.
+		expect(flushed).toHaveLength(1);
+		const body = flushed[0]!;
 		expect(body).toContain("working on it");
+		expect(body).toContain("final answer");
+		expect(body).toContain("step text");
 		expect(body).toContain("git status");
 		expect(body).toContain("clean");
+		expect(body).toContain("5.0s");
 	});
 
 	it("writes a running then completed tool part per nested tool call", async () => {

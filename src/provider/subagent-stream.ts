@@ -1,7 +1,6 @@
 import type { SubagentNestedEvent } from "./agent-events.js";
 import {
 	renderConversationSteps,
-	resultText,
 	type SubagentLiveSession,
 } from "./subagent-bridge.js";
 
@@ -24,14 +23,20 @@ function toolTitle(input: unknown): string | undefined {
 }
 
 /**
- * Accumulate a Cursor subagent's nested activity (text, reasoning, tool calls)
- * and flush it into the linked child session in batched markdown messages.
+ * Accumulate a Cursor subagent's nested activity (text, reasoning) and flush
+ * it into the linked child session as a single growing transcript message.
  *
  * The opencode public API can only add user-role messages to a child session
- * (`session.prompt({ noReply: true })`), so the transcript renders as a
- * sequence of user messages. Batching keeps the session API load low while
- * still surfacing activity live: text deltas are coalesced on a time window,
- * and tool results flush promptly so tool activity appears as it happens.
+ * (`session.prompt({ noReply: true })`), and posting each buffer snapshot as a
+ * new message fragments a flowing paragraph across many messages. Instead the
+ * live session grows the seeded message's text part in place (`flush` takes
+ * the FULL cumulative transcript each time), so the child session renders as
+ * prompt + one live-updating message. Tool activity is deliberately NOT
+ * rendered as markdown — the TUI's subagent card already shows it live via
+ * the `tool` parts this sink writes (`tool-start`/`tool-result`).
+ *
+ * Batching keeps the PATCH load low while still surfacing activity live:
+ * text deltas are coalesced on a time window.
  */
 export class SubagentTranscriptSink {
 	/** Flush when this much time has elapsed since the last flush. */
@@ -40,7 +45,6 @@ export class SubagentTranscriptSink {
 	private readonly session: SubagentLiveSession;
 	private text = "";
 	private reasoning = "";
-	private readonly tools: string[] = [];
 	private pending = false;
 	private lastFlush = 0;
 	private timer: ReturnType<typeof setTimeout> | undefined;
@@ -97,8 +101,9 @@ export class SubagentTranscriptSink {
 				this.pending = true;
 				break;
 			case "tool-start": {
-				this.tools.push(`**\`${event.name}\`** ${formatArgs(event.input)}`);
-				this.pending = true;
+				// Tool activity renders via the child session's `tool` parts, not
+				// markdown in the transcript — writing both duplicates it in the
+				// subagent pane.
 				// A real `tool` part in the child session — this is what the TUI's
 				// subagent card reads for its live `↳ <Tool> <title>` subtitle.
 				const key = this.nestedKey(event.id);
@@ -126,8 +131,6 @@ export class SubagentTranscriptSink {
 				break;
 			}
 			case "tool-result": {
-				this.tools.push(formatResult(event.name, event.result, event.isError));
-				this.pending = true;
 				// Complete the matching running part. A result with no observed
 				// start (sink attached late) still gets a completed part so the
 				// child session reflects every call the subagent made.
@@ -146,34 +149,35 @@ export class SubagentTranscriptSink {
 						end: Date.now(),
 					});
 				});
-				// Tool results flush promptly so activity appears as it happens.
-				this.flushNow();
-				return;
+				break;
 			}
 		}
 		this.armTimer();
 	}
 
 	/**
-	 * Flush any buffered content, then append the subagent's final answer
-	 * (`resultSuffix`), a render of its `conversationSteps` (its own
-	 * text/thinking/tool activity), and the optional activity line, and mark
-	 * the sink done. Further pushes and flushes become no-ops.
+	 * Merge the subagent's final answer (`resultSuffix`), a render of its
+	 * `conversationSteps` (its own text/thinking/tool activity), and the
+	 * optional activity line into the cumulative transcript, flush once, and
+	 * mark the sink done. Further pushes and flushes become no-ops.
 	 */
 	async finalize(resultValue?: unknown, activity?: string): Promise<void> {
 		if (this.done) return;
 		this.done = true;
 		if (this.timer) clearTimeout(this.timer);
 		this.timer = undefined;
-		const body = this.render();
-		if (body) await this.session.flush(body);
 		const suffix =
 			typeof resultValue === "object" && resultValue !== null
 				? (resultValue as Record<string, unknown>)["resultSuffix"]
 				: undefined;
-		if (typeof suffix === "string" && suffix) await this.session.flush(suffix);
+		if (typeof suffix === "string" && suffix) this.text += `\n\n${suffix}`;
 		const steps = renderConversationSteps(resultValue);
-		if (steps) await this.session.flush(steps);
+		if (steps) this.text += `\n\n${steps}`;
+		if (activity) this.text += `\n\n${activity}`;
+		if (this.text.trim() || this.reasoning.trim()) {
+			this.pending = false;
+			await this.session.flush(this.render());
+		}
 		// Complete any tool calls still open — a subagent that ended without a
 		// tool-result event would otherwise leave parts `running` forever. Must
 		// precede session.finalize(), which closes the handle to further writes.
@@ -191,8 +195,7 @@ export class SubagentTranscriptSink {
 			});
 		}
 		this.partHandles.clear();
-		if (activity) await this.session.finalize(activity);
-		else await this.session.finalize();
+		await this.session.finalize();
 	}
 
 	private armTimer(): void {
@@ -219,37 +222,15 @@ export class SubagentTranscriptSink {
 		if (body) void this.session.flush(body);
 	}
 
-	/** Render the accumulated activity into a single markdown message. */
+	/**
+	 * Render the FULL cumulative transcript (everything pushed so far, plus
+	 * finalize additions). `flush` replaces the growing message's text with
+	 * this, so each flush carries the whole transcript, not just new content.
+	 */
 	private render(): string {
 		const parts: string[] = [];
 		if (this.text.trim()) parts.push(this.text.trim());
 		if (this.reasoning.trim()) parts.push(`> ${this.reasoning.trim()}`);
-		if (this.tools.length > 0) parts.push(this.tools.join("\n\n"));
-		const body = parts.join("\n\n").trim();
-		// Consume the rendered buffers so a later flush only carries new content.
-		this.text = "";
-		this.reasoning = "";
-		this.tools.length = 0;
-		return body;
+		return parts.join("\n\n").trim();
 	}
-}
-
-/** Render a tool call's arguments as a compact inline string. */
-function formatArgs(input: unknown): string {
-	let s = "";
-	try {
-		s = typeof input === "string" ? input : JSON.stringify(input);
-	} catch {
-		return "";
-	}
-	if (!s || s === "{}" || s === '""') return "";
-	return s;
-}
-
-/** Render a tool result as a fenced block (or an error marker). */
-function formatResult(name: string, result: unknown, isError: boolean): string {
-	if (isError) return `**\`${name}\`** — _failed_`;
-	const text = resultText(result);
-	if (!text) return `**\`${name}\`** — _done_`;
-	return `**\`${name}\`**\n\n\`\`\`\n${text}\n\`\`\``;
 }

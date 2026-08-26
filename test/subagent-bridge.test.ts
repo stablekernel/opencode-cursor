@@ -17,8 +17,12 @@ describe("linkSubagentSessionLive tool parts", () => {
 	/** `session.prompt` with `noReply` returns the created USER message
 	 *  (`session/prompt.ts:1069`), whose id owns the child's parts. */
 	function bridge() {
-		const request = vi.fn(async (_options: Record<string, unknown>): Promise<unknown> => ({}));
-		const prompt = vi.fn(async () => ({ data: { info: { id: "msg_seed" }, parts: [] } }));
+		const request = vi.fn(
+			async (_options: Record<string, unknown>): Promise<unknown> => ({}),
+		);
+		const prompt = vi.fn(async () => ({
+			data: { info: { id: "msg_seed" }, parts: [] },
+		}));
 		const create = vi.fn(async () => ({ data: { id: "ses_child" } }));
 		setSubagentBridge({
 			client: { session: { create, prompt }, _client: { request } } as never,
@@ -88,6 +92,137 @@ describe("linkSubagentSessionLive tool parts", () => {
 	});
 });
 
+describe("linkSubagentSessionLive transcript flush", () => {
+	afterEach(() => clearSubagentBridge());
+
+	/** Bridge whose noReply prompt returns the seed message + its text part,
+	 *  and whose `_client.request` records PATCH calls (returns success). */
+	function bridgeWithSeed() {
+		const request = vi.fn(
+			async (_options: Record<string, unknown>): Promise<unknown> => ({}),
+		);
+		const prompt = vi.fn(async () => ({
+			data: {
+				info: { id: "msg_seed" },
+				parts: [{ id: "prt_seed", type: "text", text: "the prompt" }],
+			},
+		}));
+		const create = vi.fn(async () => ({ data: { id: "ses_child" } }));
+		setSubagentBridge({
+			client: { session: { create, prompt }, _client: { request } } as never,
+			directory: "/w",
+		});
+		return { request, prompt };
+	}
+
+	it("flush grows the seed message's text part in place instead of posting new messages", async () => {
+		const { request, prompt } = bridgeWithSeed();
+		const live = await linkSubagentSessionLive({
+			parentSessionID: "ses_parent",
+			args: { description: "d", prompt: "the prompt" },
+		});
+		await live?.flush("cumulative transcript v1");
+		await live?.flush("cumulative transcript v2");
+		// Seed prompt only — no per-flush noReply messages.
+		expect(prompt).toHaveBeenCalledTimes(1);
+		expect(request).toHaveBeenCalledTimes(2);
+		const opts = request.mock.calls[0]![0] as Record<string, unknown>;
+		expect(opts["method"]).toBe("PATCH");
+		expect(opts["path"]).toEqual({
+			sessionID: "ses_child",
+			messageID: "msg_seed",
+			partID: "prt_seed",
+		});
+		const body = opts["body"] as Record<string, unknown>;
+		expect(body).toMatchObject({
+			id: "prt_seed",
+			messageID: "msg_seed",
+			sessionID: "ses_child",
+			type: "text",
+			text: "cumulative transcript v1",
+		});
+		// Each PATCH carries the FULL transcript (replace, not append).
+		expect(
+			(request.mock.calls[1]![0]["body"] as Record<string, unknown>)["text"],
+		).toBe("cumulative transcript v2");
+	});
+
+	it("falls back to posting a new message when the seed response has no parts", async () => {
+		const request = vi.fn(
+			async (_options: Record<string, unknown>): Promise<unknown> => ({}),
+		);
+		// Seed response deliberately omits `parts` so no text-part id is
+		// captured — flush must degrade to posting new messages.
+		const prompt = vi.fn(async (_opts?: unknown) => ({
+			data: { info: { id: "msg_seed" } },
+		}));
+		const create = vi.fn(async () => ({ data: { id: "ses_child" } }));
+		setSubagentBridge({
+			client: { session: { create, prompt }, _client: { request } } as never,
+		});
+		const live = await linkSubagentSessionLive({
+			parentSessionID: "ses_parent",
+			args: { description: "d", prompt: "the prompt" },
+		});
+		await live?.flush("fallback body");
+		// No part id → no PATCH attempt; degrades to the previous behavior.
+		expect(request).not.toHaveBeenCalled();
+		expect(prompt).toHaveBeenCalledTimes(2);
+		const fallbackCall = prompt.mock.calls[1]![0] as unknown as {
+			body: { parts: Array<{ text: string }> };
+		};
+		expect(fallbackCall.body.parts[0]!.text).toBe("fallback body");
+	});
+
+	it("falls back to posting when the PATCH is rejected with an error body", async () => {
+		// hey-api's runtime resolves `{ error }` on a 4xx instead of rejecting.
+		const request = vi.fn(
+			async (_options: Record<string, unknown>): Promise<unknown> => ({
+				error: { message: "bad" },
+			}),
+		);
+		const prompt = vi.fn(async () => ({
+			data: {
+				info: { id: "msg_seed" },
+				parts: [{ id: "prt_seed", type: "text", text: "the prompt" }],
+			},
+		}));
+		const create = vi.fn(async () => ({ data: { id: "ses_child" } }));
+		setSubagentBridge({
+			client: { session: { create, prompt }, _client: { request } } as never,
+		});
+		const live = await linkSubagentSessionLive({
+			parentSessionID: "ses_parent",
+			args: { description: "d", prompt: "the prompt" },
+		});
+		await live?.flush("rejected body");
+		expect(request).toHaveBeenCalledTimes(1);
+		expect(prompt).toHaveBeenCalledTimes(2);
+		// A repeat of the identical flush must not re-post the same fallback
+		// message (cumulative flushes supersede it).
+		await live?.flush("rejected body");
+		expect(request).toHaveBeenCalledTimes(1);
+		expect(prompt).toHaveBeenCalledTimes(2);
+		// A later cumulative flush retries the PATCH and, while broken, posts
+		// once (its supersedes the stale fallback marker).
+		await live?.flush("rejected body + more");
+		expect(request).toHaveBeenCalledTimes(2);
+		expect(prompt).toHaveBeenCalledTimes(3);
+	});
+
+	it("does not flush after finalize", async () => {
+		const { request, prompt } = bridgeWithSeed();
+		const live = await linkSubagentSessionLive({
+			parentSessionID: "ses_parent",
+			args: { description: "d", prompt: "the prompt" },
+		});
+		await live?.finalize();
+		await live?.flush("late");
+		expect(prompt).toHaveBeenCalledTimes(1);
+		expect(request).not.toHaveBeenCalled();
+	});
+});
+
 /**
  * Cursor returns `conversationSteps` as raw protobuf-es `toJson()` output of
  * `agent.v1.ConversationStep`, whose `message` oneof serializes to a single
@@ -104,7 +239,9 @@ describe("renderConversationSteps (proto oneof shape)", () => {
 
 	it("renders thinking text as a blockquote", () => {
 		const out = renderConversationSteps({
-			conversationSteps: [{ thinkingMessage: { text: "considering options", durationMs: 12 } }],
+			conversationSteps: [
+				{ thinkingMessage: { text: "considering options", durationMs: 12 } },
+			],
 		});
 		expect(out).toBe("> considering options");
 	});
@@ -139,7 +276,10 @@ describe("renderConversationSteps (proto oneof shape)", () => {
 			conversationSteps: [
 				{
 					toolCall: {
-						shellToolCall: { args: { command: "git status" }, result: { stdout: "clean" } },
+						shellToolCall: {
+							args: { command: "git status" },
+							result: { stdout: "clean" },
+						},
 					},
 				},
 			],
@@ -152,7 +292,11 @@ describe("renderConversationSteps (proto oneof shape)", () => {
 		const long = "x".repeat(5000);
 		const out = renderConversationSteps({
 			conversationSteps: [
-				{ toolCall: { shellToolCall: { args: { command: "cat big" }, result: { stdout: long } } } },
+				{
+					toolCall: {
+						shellToolCall: { args: { command: "cat big" }, result: { stdout: long } },
+					},
+				},
 			],
 		});
 		expect(out).toContain(long);
@@ -161,7 +305,9 @@ describe("renderConversationSteps (proto oneof shape)", () => {
 
 	it("does not truncate long assistant text", () => {
 		const long = "y".repeat(5000);
-		const out = renderConversationSteps({ conversationSteps: [{ assistantMessage: { text: long } }] });
+		const out = renderConversationSteps({
+			conversationSteps: [{ assistantMessage: { text: long } }],
+		});
 		expect(out).toBe(long);
 	});
 
@@ -170,7 +316,9 @@ describe("renderConversationSteps (proto oneof shape)", () => {
 	// steps can reach us in this runtime form rather than as proto JSON.
 	it("renders assistant text from the protobuf-es runtime oneof", () => {
 		const out = renderConversationSteps({
-			conversationSteps: [{ message: { case: "assistantMessage", value: { text: "hi there" } } }],
+			conversationSteps: [
+				{ message: { case: "assistantMessage", value: { text: "hi there" } } },
+			],
 		});
 		expect(out).toBe("hi there");
 	});
@@ -208,13 +356,19 @@ describe("renderConversationSteps (proto oneof shape)", () => {
 
 	it("still renders the SDK's public zod shape", () => {
 		const out = renderConversationSteps({
-			conversationSteps: [{ type: "assistantMessage", message: { text: "legacy" } }],
+			conversationSteps: [
+				{ type: "assistantMessage", message: { text: "legacy" } },
+			],
 		});
 		expect(out).toBe("legacy");
 	});
 
 	it("returns undefined when no step carries content", () => {
-		expect(renderConversationSteps({ conversationSteps: [{}, { assistantMessage: {} }] })).toBeUndefined();
+		expect(
+			renderConversationSteps({
+				conversationSteps: [{}, { assistantMessage: {} }],
+			}),
+		).toBeUndefined();
 	});
 });
 
@@ -253,9 +407,10 @@ describe("stampTaskPartSessionId", () => {
 	};
 
 	it("PATCHes the running part with state.metadata.sessionId", async () => {
-		const request = vi.fn(
-			async (_opts: Record<string, unknown>) => ({ data: undefined, response: new Response() }),
-		);
+		const request = vi.fn(async (_opts: Record<string, unknown>) => ({
+			data: undefined,
+			response: new Response(),
+		}));
 		setSubagentBridge({
 			client: {
 				_client: { request },
@@ -275,15 +430,20 @@ describe("stampTaskPartSessionId", () => {
 			childId: "ses_child",
 		});
 		expect(request).toHaveBeenCalledTimes(1);
-		const opts = request.mock.calls[0]![0] as Record<string, unknown>;		expect(opts["method"]).toBe("PATCH");
-		expect(opts["url"]).toBe("/session/{sessionID}/message/{messageID}/part/{partID}");
+		const opts = request.mock.calls[0]![0] as Record<string, unknown>;
+		expect(opts["method"]).toBe("PATCH");
+		expect(opts["url"]).toBe(
+			"/session/{sessionID}/message/{messageID}/part/{partID}",
+		);
 		expect(opts["path"]).toMatchObject({
 			sessionID: "ses_parent",
 			messageID: "msg-1",
 			partID: "part-1",
 		});
 		expect(opts["query"]).toEqual({ directory: "/repo" });
-		const body = opts["body"] as { state: { status: string; metadata?: Record<string, unknown> } };
+		const body = opts["body"] as {
+			state: { status: string; metadata?: Record<string, unknown> };
+		};
 		expect(body.state["status"]).toBe("running");
 		expect(body.state["metadata"]).toMatchObject({ sessionId: "ses_child" });
 	});
@@ -298,7 +458,17 @@ describe("stampTaskPartSessionId", () => {
 			sessionID: "ses_parent",
 			messageID: "msg-1",
 			partID: "part-1",
-			part: { ...runningPart, state: { status: "completed", input: {}, output: "x", title: "t", metadata: {}, time: { start: 1, end: 2 } } },
+			part: {
+				...runningPart,
+				state: {
+					status: "completed",
+					input: {},
+					output: "x",
+					title: "t",
+					metadata: {},
+					time: { start: 1, end: 2 },
+				},
+			},
 			childId: "ses_child",
 		});
 		expect(request).not.toHaveBeenCalled();
@@ -411,9 +581,10 @@ describe("stampTaskPartSessionId", () => {
 
 describe("plugin event hook — running task stamp", () => {
 	it("patches a registered running task part with the child session id", async () => {
-		const request = vi.fn(
-			async (_opts: Record<string, unknown>) => ({ data: undefined, response: new Response() }),
-		);
+		const request = vi.fn(async (_opts: Record<string, unknown>) => ({
+			data: undefined,
+			response: new Response(),
+		}));
 		setSubagentBridge({
 			client: {
 				_client: { request },
@@ -467,7 +638,9 @@ describe("plugin event hook — running task stamp", () => {
 			} as never,
 		});
 		expect(request).toHaveBeenCalledTimes(1);
-		const opts = request.mock.calls[0]![0] as { body: { state: { metadata?: Record<string, unknown> } } };
+		const opts = request.mock.calls[0]![0] as {
+			body: { state: { metadata?: Record<string, unknown> } };
+		};
 		expect(opts.body.state["metadata"]).toMatchObject({ sessionId: "ses_child" });
 	});
 
