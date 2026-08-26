@@ -158,6 +158,7 @@ The plugin also registers two **delegation tools**:
 > `edit: deny`, `bash: ask`) do **not** apply to them.
 >
 > Options if you need a permission boundary:
+>
 > - Set `sandbox: true` in `provider.cursor.options` to run Cursor's tools in Cursor's sandbox.
 > - Use `cursor_delegate` instead of the provider path — it is gated by opencode's `permission`
 >   config.
@@ -302,17 +303,34 @@ The mirror includes:
 - **Global skills** from `~/.config/opencode/skills/` and `~/.config/opencode/skill/`,
   `~/.claude/skills/`, `~/.agents/skills/`, `~/.opencode/skills/` and `~/.opencode/skill/`.
 - **Configured paths** from `config.skills.paths` in your `opencode.json` — additional
-  directories scanned at the lowest priority (project and standard global locations
+  directories scanned at low priority (project and standard global locations
   win on duplicate ids). `~/` prefixes are expanded to your home directory; relative
   paths are resolved against the project directory.
+- **Plugin-bundled skills** — skills that ship inside installed opencode plugins,
+  scanned from the opencode plugin cache (`~/.cache/opencode/packages/` on
+  macOS/Linux; `%LocalAppData%\opencode\cache\packages\` on Windows) and from
+  `skills/`/`skill/` dirs alongside file-based plugins
+  (`~/.config/opencode/plugin/`, `~/.config/opencode/plugins/`, and the project's
+  `.opencode/plugin/`). Handles npm specs (`pkg@latest`, `@scope/pkg@latest`) and
+  git specs (`pkg@git+https:...`). Plugin-bundled skills are the **lowest**
+  priority: a project, global, or `skills.paths` skill with the same id always
+  wins, so you can shadow a plugin's skill by defining your own.
+- **opencode's live skill inventory** — on every turn the mirror also consults
+  opencode's `app.skills` endpoint (when reachable) and merges any skill it
+  knows about that the filesystem scan missed, at the same lowest priority.
+- **opencode's built-in skills** — skills opencode registers in code rather
+  than on disk (currently `customize-opencode`, its own config-authoring
+  guide). They only exist in the live inventory, so the mirror materialises
+  them from the endpoint's content into `.cursor/skills/` like any other
+  skill; the materialised copy updates whenever opencode's version changes.
 - **Supporting files** alongside each `SKILL.md` (preserving relative paths).
 - An `<available_skills>` catalogue appended to the generated system rule,
   listing each skill's id and description so the Cursor agent can load them on
   demand.
 
-> **Note:** `config.skills.urls` (HTTP skill catalogs) are not yet supported by
-> the mirror. If you rely on URL-sourced skills, they will not appear in
-> `.cursor/skills/`.
+> **Note:** URL-sourced skills (`config.skills.urls`) that are also present in
+> opencode's live inventory reach the mirror through that route; the mirror
+> does not fetch `skills.urls` catalogs on its own.
 
 ### Permission filtering
 
@@ -346,13 +364,12 @@ user explicitly asked for them). `exclude` always drops the listed skills.
 
 ### Limitations
 
-- **Skills bundled inside opencode plugins are not mirrored.** Those ship under
-  `<opencode-package-cache>/<pkg>/node_modules/<pkg>/skills/` (on macOS/Linux
-  `~/.cache/opencode/packages/`; on Windows `%LocalAppData%\opencode\cache\packages\`),
-  which is not a scanned location — `@opencode-ai/sdk` exposes no skills API, so
-  the mirror resolves skills from the filesystem itself. Skills that reach
-  opencode only through a plugin will be absent from `.cursor/skills/`. To
-  mirror one, add its directory to `config.skills.paths`.
+- Skills served via `skills.urls` that opencode itself hasn't loaded (the
+  endpoint is reachable but the catalog wasn't pulled this session) won't
+  appear until opencode sees them.
+- Built-in skills require the live `app.skills` endpoint (i.e. a running
+  opencode server reachable by this plugin); the filesystem scan can't see
+  them on its own.
 - A user-owned `.cursor/skills/<id>/SKILL.md` (without the `generated:
   opencode-cursor` sentinel) is never overwritten or deleted.
 - Individual files larger than 1 MB are skipped (the rest of the skill is still
@@ -361,6 +378,88 @@ user explicitly asked for them). `exclude` always drops the listed skills.
   mirror skills into that cwd (but does pass `settingSources: ["project"]` so
   any pre-existing `.cursor/skills/` there still loads).
 - `cursor_cloud_agent` targets a remote repo and does not inherit skills.
+
+## Plugin tools
+
+Other opencode plugins can register custom tools (e.g. `opencode-pty`'s
+`pty_spawn`, `context-mode`'s `ctx_execute`). With `forwardPluginTools: true`
+(default), this plugin **mirrors those tools to the Cursor agent** via a local
+stdio MCP server (`opencode-plugin-tools`) that is added to the forwarded
+`mcpServers`. When the Cursor agent calls one, the call runs through the
+plugin's *real* implementation inside opencode's runtime — same code path
+opencode itself uses.
+
+How it works:
+
+1. At startup (and re-checked each turn) the plugin reads your `plugin: []`
+   list, re-imports each plugin from the opencode package cache, and reads its
+   `tool` map. Plugins that can't be imported are skipped and logged once.
+2. A loopback-only HTTP control channel (random port, per-session bearer
+   token) connects the MCP child process to the host plugin, which owns the
+   tool closures. Nothing is reachable from outside the machine.
+3. The Cursor agent sees the tools through its normal MCP surface and calls
+   them like any other MCP tool.
+
+### Permissions
+
+Mirrored calls are evaluated against your opencode `permission` config,
+keyed by the tool id — with the same semantics opencode itself uses:
+permission keys are wildcard-matched, and every pattern a tool's `ask`
+requests is matched against the rule's pattern; the **last** matching rule
+wins. `~`/`$HOME` prefixes in patterns expand against your home directory.
+
+- **`allow`** → runs without prompting (every requested pattern must allow).
+- **`deny`** → rejected.
+- **`ask`** (or no rule) → rejected with a clear message. The interactive
+  prompt is anchored to opencode's session/TUI and can't be surfaced to the
+  Cursor agent, so ask-permissioned tools are withheld rather than run
+  unattended. Set the tool to `allow` to use it from Cursor:
+
+```json
+{ "permission": { "pty_spawn": "allow", "ctx_*": "allow" } }
+```
+
+Pattern-scoped rules work too — e.g. allow spawning ptys only under `/tmp`
+(specific patterns must come **after** the wildcard they narrow):
+
+```json
+{ "permission": { "pty_spawn": { "*": "ask", "/tmp/*": "allow" } } }
+```
+
+If a tool's execution calls `ask` internally and no gate is available, the
+call fails closed.
+
+### Filtering
+
+```json
+{
+  "provider": {
+    "cursor": {
+      "options": {
+        "forwardPluginTools": true,
+        "pluginTools": {
+          "include": ["pty_*"],
+          "exclude": ["ctx_execute"]
+        }
+      }
+    }
+  }
+}
+```
+
+`include` keeps only matching tool ids (wildcards supported); `exclude` always
+drops. `forwardPluginTools: false` disables the bridge entirely.
+
+### Limitations
+
+- Plugins that fail to re-import under the bridge (e.g. native modules that
+  only load under Bun, or plugins that throw when initialised twice) are
+  skipped and reported in the opencode log; their tools stay unavailable to
+  Cursor. Skills and MCP servers from those plugins are unaffected.
+- Tool definitions are snapshotted at startup and re-checked per turn; a
+  plugin installed mid-session is picked up on the next turn.
+- `cursor_cloud_agent` targets a remote repo and does not inherit plugin
+  tools.
 
 ## Delegation tools
 

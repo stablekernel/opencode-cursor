@@ -1,7 +1,8 @@
-import type { Config, Plugin } from "@opencode-ai/plugin";
+import type { Config, Plugin, ToolContext } from "@opencode-ai/plugin";
 import type { Auth } from "@opencode-ai/sdk/v2";
 import type { McpServerConfig } from "@cursor/sdk";
 import { rmSync } from "node:fs";
+import { homedir } from "node:os";
 import semver from "semver";
 import { resolveCursorApiKey } from "../api-key.js";
 import { discoverModels, toOpencodeModels } from "../model-discovery.js";
@@ -32,7 +33,9 @@ import {
 } from "../provider/skill-mirror.js";
 import {
 	resolveSkills,
+	resolvePluginSkillSources,
 	skillSetHash,
+	type LiveSkill,
 	type SkillFilterOptions,
 } from "../plugin/skill-discovery.js";
 import {
@@ -41,9 +44,54 @@ import {
 	subagentCallChildId,
 	stampTaskPartSessionId,
 } from "../provider/subagent-bridge.js";
+import {
+	mirrorPluginTools,
+	type MirroredTool,
+} from "./plugin-tool-registry.js";
+import {
+	startPluginToolsBridge,
+	type PluginToolsBridge,
+} from "./plugin-tools-bridge.js";
 
 function apiKeyFromAuth(auth: Auth | undefined): string | undefined {
 	return auth?.type === "api" ? auth.key : undefined;
+}
+
+/**
+ * Fetch opencode's live skill inventory. The instance route is `GET /skill`
+ * (OpenApi identifier `app.skills`); newer SDK clients expose it as
+ * `client.app.skills(...)`, but the V1 SDK typings this repo builds against
+ * (1.18.18) predate it, so fall back to a raw `client.get` (hey-api).
+ *
+ * SAFETY: both casts widen typed surfaces to probe for methods that may not
+ * exist at runtime — the probe is optional-chained and the caller catches, so
+ * a host without the route degrades to the filesystem scan.
+ */
+async function fetchLiveSkills(
+	client: unknown,
+	query?: { query?: { directory?: string } },
+): Promise<{ data?: unknown } | undefined> {
+	const app = (client as { app?: unknown }).app as
+		| { skills?: (params?: unknown) => Promise<{ data?: unknown } | undefined> }
+		| undefined;
+	if (typeof app?.skills === "function") {
+		return app.skills(query);
+	}
+	// Fallback: the typed group predates the route, so reach the hey-api core
+	// client underneath (`_client`) and hit the route by URL. Verified against
+	// SDK 1.18.18: `_client.get({ url: "/skill" })` returns `{ data: Skill[] }`.
+	const inner = (client as { _client?: unknown })._client as
+		| {
+				get?: (opts?: {
+					url?: string;
+					query?: unknown;
+				}) => Promise<{ data?: unknown } | undefined>;
+		  }
+		| undefined;
+	return inner?.get?.({
+		url: "/skill",
+		...(query?.query ? { query: query.query } : {}),
+	});
 }
 
 /**
@@ -135,6 +183,23 @@ export const CursorPlugin: Plugin = async (input) => {
 	// provider options (respecting a user-configured `cwd` option) so write and
 	// cleanup can never diverge.
 	let resolvedCwd = directory ?? process.cwd();
+	// Skills bundled inside installed opencode plugins ship under the plugin
+	// package cache, and optionally alongside file-based plugins — resolve the
+	// plugin-side sources here so the skill mirror includes them. Set to
+	// undefined when any source throws so the mirror falls back to its default
+	// filesystem scan instead of mirroring nothing.
+	let pluginSkillSources:
+		| { cacheRoot?: string; filePluginRoots?: string[] }
+		| undefined;
+	try {
+		pluginSkillSources = resolvePluginSkillSources();
+	} catch (error) {
+		pluginLog("warn", "plugin skill source discovery failed", {
+			error: error instanceof Error ? error.message : String(error),
+			impact: "plugin-bundled skills unavailable to the Cursor agent",
+		});
+		pluginSkillSources = undefined;
+	}
 	let forwardMcp = true;
 	let userMcp: Record<string, McpServerConfig> = {};
 	// Whether to let opencode drive auto-compaction. Default false: the Cursor
@@ -150,6 +215,223 @@ export const CursorPlugin: Plugin = async (input) => {
 	// OAuth servers we've already warned about, so the toast fires once per
 	// server rather than on every turn.
 	const warnedOAuth = new Set<string>();
+
+	// Plugin-tool bridge state: mirrored tools from other opencode plugins,
+	// exposed to the Cursor agent via a local stdio MCP server. Populated by
+	// the config hook; re-checked in chat.params so plugins added mid-session
+	// are picked up on the next turn.
+	let forwardPluginTools = true;
+	let pluginToolOptions: { include?: string[]; exclude?: string[] } | undefined;
+	let mirroredTools: MirroredTool[] = [];
+	let pluginToolsBridge: PluginToolsBridge | undefined;
+	let lastPermissionKey = "";
+	let pluginToolsMcpServer: McpServerConfig | undefined;
+	let pluginToolsWarned = false;
+
+	/**
+	 * Mirror other plugins' tool maps and (re)start the bridge. Returns the
+	 * MCP server config to merge into the Cursor agent's `mcpServers`, or
+	 * undefined when nothing is mirrored. Never throws.
+	 */
+	async function syncPluginTools(
+		config?: Config,
+	): Promise<McpServerConfig | undefined> {
+		if (!forwardPluginTools) return undefined;
+		try {
+			const result = await mirrorPluginTools(config, input, pluginToolOptions);
+			if (Object.keys(result.failed).length > 0 && !pluginToolsWarned) {
+				pluginToolsWarned = true;
+				pluginLog("warn", "plugin tool mirror skipped some plugins", result.failed);
+			}
+			if (result.tools.length === 0) {
+				if (!Array.isArray(config?.plugin) && pluginToolsMcpServer) {
+					return pluginToolsMcpServer;
+				}
+				await pluginToolsBridge?.close();
+				pluginToolsBridge = undefined;
+				mirroredTools = [];
+				return undefined;
+			}
+			// Restart the bridge when the tool set OR the permission config
+			// changed (the ask gate closes over the config snapshot).
+			const ids = result.tools
+				.map((t) => t.id)
+				.sort()
+				.join("|");
+			// Permission objects are plain config JSON; JSON.stringify on the
+			// raw value is a stable-enough identity for change detection
+			// (config order is stable within a session).
+			const permKey = JSON.stringify(config?.permission ?? null);
+			const currentIds = mirroredTools
+				.map((t) => t.id)
+				.sort()
+				.join("|");
+			if (
+				ids !== currentIds ||
+				permKey !== lastPermissionKey ||
+				!pluginToolsBridge
+			) {
+				await pluginToolsBridge?.close();
+				pluginToolsBridge = await startPluginToolsBridge({
+					tools: result.tools,
+					directory: input?.directory ?? process.cwd(),
+					askGate: makeAskGate(config?.permission),
+				});
+				mirroredTools = result.tools;
+				lastPermissionKey = permKey;
+			}
+			pluginToolsMcpServer = pluginToolsBridge?.mcpServer as
+				| McpServerConfig
+				| undefined;
+			return pluginToolsMcpServer;
+		} catch (error) {
+			pluginLog("warn", "plugin tool mirror failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return undefined;
+		}
+	}
+
+	/**
+	 * Permission gate for mirrored tool execution, evaluated against the
+	 * user's opencode `permission` config exactly like a native tool's
+	 * `context.ask`:
+	 *
+	 *  - `allow` → resolve silently.
+	 *  - `deny`  → reject (the call fails closed).
+	 *  - `ask`   → reject. The interactive prompt is anchored to an opencode
+	 *    session/TUI; a Cursor-originated call has no way to surface it, so —
+	 *    like ask-permissioned skills — it is withheld rather than run
+	 *    unattended. Users who want a tool available to Cursor set it to
+	 *    `allow` (optionally scoped with a pattern).
+	 */
+	function makeAskGate(
+		permissionConfig: unknown,
+	): ToolContext["ask"] | undefined {
+		return async (req) => {
+			// Mirror opencode's Permission.ask loop: evaluate every requested
+			// pattern (default "*"). Any deny → reject immediately; all allow →
+			// run; anything else is "ask", which can't be prompted from Cursor.
+			const patterns =
+				Array.isArray(req.patterns) && req.patterns.length > 0
+					? req.patterns
+					: ["*"];
+			let needsAsk = false;
+			for (const pattern of patterns) {
+				const action = evaluatePermissionAction(
+					permissionConfig,
+					req.permission,
+					pattern,
+				);
+				if (action === "deny") {
+					throw new Error(
+						`permission denied for "${req.permission}" (pattern "${pattern}")`,
+					);
+				}
+				if (action !== "allow") needsAsk = true;
+			}
+			if (!needsAsk) return;
+			throw new Error(
+				`permission for "${req.permission}" is set to "ask", which can't be prompted from the Cursor agent — set it to "allow" to use this tool`,
+			);
+		};
+	}
+
+	/**
+	 * Resolve a permission action from the live opencode permission config,
+	 * matching opencode's own `Permission.evaluate` semantics: rules are
+	 * flattened in config order and the LAST rule whose permission wildcard
+	 * matches `permission` AND whose pattern wildcard matches `pattern` wins;
+	 * no match → "ask". Supported shapes:
+	 *
+	 *  - rule array (V2 ruleset): `[{ permission, pattern, action }, ...]`
+	 *  - map form: `{ "pty_*": "allow" }` or `{ "pty_*": { "*": "allow" } }`
+	 *    (the nested map keys are pattern wildcards)
+	 */
+	function evaluatePermissionAction(
+		permissionConfig: unknown,
+		permission: string,
+		pattern: string,
+	): "allow" | "deny" | "ask" {
+		const wildcardMatch = (pattern: string, value: string): boolean => {
+			if (pattern === "*") return true;
+			if (!pattern.includes("*")) return pattern === value;
+			const regex = pattern
+				.replace(/[.+^${}()|[\]\\]/g, "\\$&")
+				.replace(/\*/g, ".*");
+			return new RegExp(`^${regex}$`).test(value);
+		};
+		const normalize = (value: unknown): "allow" | "deny" | "ask" | undefined =>
+			value === "allow" || value === "deny" || value === "ask" ? value : undefined;
+		// Mirror opencode's `expand` for pattern wildcards (permission/index.ts):
+		// `~`, `~/...`, and `$HOME...` expand against the current user's home.
+		const home = process.env["HOME"] || homedir();
+		const expandPattern = (pattern: string): string => {
+			if (pattern === "~") return home;
+			if (pattern.startsWith("~/")) return home + pattern.slice(1);
+			if (pattern.startsWith("$HOME/")) return home + pattern.slice(5);
+			if (pattern.startsWith("$HOME")) return home + pattern.slice(5);
+			return pattern;
+		};
+
+		// Flatten the config into (permission-wildcard, pattern-wildcard, action)
+		// triples in config order, then take the last match — same as opencode.
+		const rules: Array<{
+			permission: string;
+			pattern: string;
+			action: "allow" | "deny" | "ask";
+		}> = [];
+		const pushRule = (perm: unknown, pattern: unknown, action: unknown): void => {
+			const normalized = normalize(action);
+			if (typeof perm !== "string" || normalized === undefined) return;
+			rules.push({
+				permission: perm,
+				pattern: typeof pattern === "string" ? expandPattern(pattern) : "*",
+				action: normalized,
+			});
+		};
+
+		if (Array.isArray(permissionConfig)) {
+			for (const rule of permissionConfig) {
+				if (rule && typeof rule === "object") {
+					const r = rule as {
+						permission?: unknown;
+						pattern?: unknown;
+						action?: unknown;
+					};
+					pushRule(r.permission, r.pattern, r.action);
+				}
+			}
+		} else if (permissionConfig && typeof permissionConfig === "object") {
+			for (const [perm, value] of Object.entries(
+				permissionConfig as Record<string, unknown>,
+			)) {
+				const direct = normalize(value);
+				if (direct) {
+					pushRule(perm, "*", value);
+					continue;
+				}
+				if (value && typeof value === "object" && !Array.isArray(value)) {
+					for (const [pattern, action] of Object.entries(
+						value as Record<string, unknown>,
+					)) {
+						pushRule(perm, pattern, action);
+					}
+				}
+			}
+		}
+
+		for (let i = rules.length - 1; i >= 0; i--) {
+			const rule = rules[i]!;
+			if (
+				wildcardMatch(rule.permission, permission) &&
+				wildcardMatch(rule.pattern, pattern)
+			) {
+				return rule.action;
+			}
+		}
+		return "ask";
+	}
 
 	return {
 		auth: {
@@ -202,9 +484,24 @@ export const CursorPlugin: Plugin = async (input) => {
 				string,
 				McpServerConfig
 			>;
-			const mcpServers = forwardMcp
+			const baseMcpServers = forwardMcp
 				? { ...userMcp, ...translateMcpServers(config.mcp) }
 				: userMcp;
+
+			// Bridge other plugins' custom tools to the Cursor agent via a
+			// local stdio MCP server. Opt out with
+			// `provider.cursor.options.forwardPluginTools: false`; filter with
+			// `provider.cursor.options.pluginTools: { include, exclude }`.
+			forwardPluginTools = existingOptions["forwardPluginTools"] !== false;
+			pluginToolOptions = existingOptions["pluginTools"] as
+				| { include?: string[]; exclude?: string[] }
+				| undefined;
+			const pluginToolsServer = await syncPluginTools(
+				config as Config | undefined,
+			);
+			const mcpServers = pluginToolsServer
+				? { ...baseMcpServers, "opencode-plugin-tools": pluginToolsServer }
+				: baseMcpServers;
 
 			// opencode forwards a model's own options.params on the normal chat
 			// path, but a subagent inheriting its parent's model reaches the provider
@@ -242,6 +539,7 @@ export const CursorPlugin: Plugin = async (input) => {
 						resolvedCwd,
 						config as Config | undefined,
 						skillFilterOptions,
+						pluginSkillSources,
 					);
 					writeSkillMirror(resolvedCwd, resolved.skills, (msg) =>
 						pluginLog("warn", msg),
@@ -336,13 +634,23 @@ export const CursorPlugin: Plugin = async (input) => {
 						client.config.get(),
 						client.mcp.status(query),
 					]);
-					const liveMcp = (cfgRes?.data as Config | undefined)?.mcp;
+					const liveConfig = cfgRes?.data as Config | undefined;
+					const liveMcp = liveConfig?.mcp;
 					const status = statusRes?.data as McpStatusMap | undefined;
 					if (status) {
-						output.options["mcpServers"] = {
+						// Re-sync the plugin-tools bridge against the live config too,
+						// so plugins added mid-session reach Cursor on the next turn.
+						// (Runs here as well as in the dedicated block below so the
+						// merged server set always carries the latest bridge config.)
+						const liveToolsServer = await syncPluginTools(liveConfig);
+						const liveServers: Record<string, McpServerConfig> = {
 							...userMcp,
 							...translateMcpServers(liveMcp, status),
 						};
+						if (liveToolsServer) {
+							liveServers["opencode-plugin-tools"] = liveToolsServer;
+						}
+						output.options["mcpServers"] = liveServers;
 						// Notify (once) about OAuth servers we can't forward: opencode
 						// holds their token and it never reaches config.mcp, so the
 						// Cursor agent can't connect. Only those without a shareable
@@ -368,6 +676,29 @@ export const CursorPlugin: Plugin = async (input) => {
 				} catch {
 					// Keep the static snapshot; live forwarding is best-effort.
 				}
+			} else if (client && forwardPluginTools && mirroredTools.length > 0) {
+				// `forwardMcp: false` still leaves the plugin-tools bridge live
+				// (it's independent of opencode MCP forwarding), so re-sync it
+				// against the live config and keep it in the forwarded set.
+				// Guard on `mirroredTools` so installs with no plugin tools keep
+				// `mcpServers` entirely absent from the per-turn output.
+				try {
+					const query = directory ? { query: { directory } } : undefined;
+					const cfgRes = await client.config.get(query);
+					const liveConfig = cfgRes?.data as Config | undefined;
+					const liveToolsServer = await syncPluginTools(liveConfig);
+					const liveServers: Record<string, McpServerConfig> = {
+						...userMcp,
+					};
+					if (liveToolsServer) {
+						liveServers["opencode-plugin-tools"] = liveToolsServer;
+					}
+					if (Object.keys(liveServers).length > 0) {
+						output.options["mcpServers"] = liveServers;
+					}
+				} catch {
+					// Keep the static snapshot; live re-sync is best-effort.
+				}
 			}
 
 			// Re-sync the skill mirror from opencode's *live* state so skills
@@ -379,10 +710,22 @@ export const CursorPlugin: Plugin = async (input) => {
 						const query = directory ? { query: { directory } } : undefined;
 						const cfgRes = await client.config.get(query);
 						const liveConfig = cfgRes?.data as Config | undefined;
+						// Live skill inventory from opencode (`app.skills`) — covers
+						// plugin-bundled skills and any other source the filesystem
+						// scan can't see. Merged at lowest priority.
+						let liveSkills: LiveSkill[] | undefined;
+						try {
+							let skillsRes: { data?: unknown } | undefined;
+							skillsRes = await fetchLiveSkills(client, query);
+							liveSkills = skillsRes?.data as LiveSkill[] | undefined;
+						} catch {
+							// Live inventory is best-effort; the filesystem scan stands.
+						}
 						const resolved = resolveSkills(
 							resolvedCwd,
 							liveConfig,
 							skillFilterOptions,
+							{ ...pluginSkillSources, liveSkills },
 						);
 						const hash = skillSetHash(resolved.skills);
 						if (hash !== lastSkillHash) {
@@ -537,6 +880,8 @@ export const CursorPlugin: Plugin = async (input) => {
 			// sentinel-guarded, so user-owned files are never deleted.
 			removeSystemRule(resolvedCwd);
 			removeSkillMirror(resolvedCwd);
+			await pluginToolsBridge?.close();
+			pluginToolsBridge = undefined;
 			clearSubagentBridge();
 			clearLogBridge();
 		},
