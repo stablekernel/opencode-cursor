@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.0-next.0] — 2026-08-26 (pre-release)
+
+The Cursor agent can now use installed opencode plugins (#104), plus
+consolidated opencode-ai dependency bumps (#107). Not yet on `latest`;
+install with `npm install @stablekernel/opencode-cursor@next` to test.
+
+- **Plugin tools bridge: other plugins' custom tools are now exposed to the
+  Cursor agent.** Custom tools from installed opencode plugins (e.g.
+  `opencode-pty`'s `pty_spawn`, `context-mode`'s `ctx_*`) are bridged to
+  Cursor via an `opencode-plugin-tools` MCP server (hand-rolled stdio
+  JSON-RPC, no MCP SDK dependency, running under Bun). Permission handling
+  mirrors opencode's `Permission.evaluate` — last matching rule wins per ask
+  pattern; a rule resolving to `ask` (which can't prompt from Cursor) or no
+  match fails closed. Controlled by `forwardPluginTools` and
+  `pluginTools.include/exclude`.
+- **Plugin-bundled skills are mirrored into `.cursor/skills/` too.** New
+  lowest-priority scan roots in `discoverSkills`: the opencode plugin cache
+  (`~/.cache/opencode/packages/`) and `skills/`/`skill/` dirs alongside
+  file-based plugins, handling npm and git plugin specs. The per-turn re-sync
+  also merges opencode's live skills inventory at the same priority. No new
+  config surface — folds into `forwardSkills`; `skills.include/exclude` and
+  permission filtering apply unchanged. Project/global skills always win on
+  duplicate ids; user-owned skills are never overwritten.
 - **Dependency bumps:** `@opencode-ai/plugin` ^1.18.4 → ^1.18.21 (deps),
   `@opencode-ai/sdk` ^1.18.18 → ^1.18.21 (dev). Consolidates dependabot
   PRs #105 and #106.
