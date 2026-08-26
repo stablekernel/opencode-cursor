@@ -5,13 +5,25 @@ on:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
       - "v[0-9]+.[0-9]+.[0-9]+-*"
+  # Fallback for when a tag push doesn't enqueue a run (GitHub event-delivery
+  # gaps). Triggers are workflow-wide in Actions, so the tag input is
+  # re-derived as RELEASE_REF_NAME (see the `ref` step) and every step below
+  # uses that instead of GITHUB_REF_NAME; the tag is fetched and checked out
+  # at its exact commit.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v0.9.0-next.0 (must exist)"
+        required: true
+        type: string
 
 # Default to no permissions; elevate per-job (least privilege).
 permissions: {}
 
-# Never run two publishes for the same ref concurrently.
+# Never run two publishes for the same release concurrently (dispatch runs
+# carry the branch ref, so key the group on the resolved release ref).
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -22,7 +34,21 @@ jobs:
       contents: write # create the GitHub Release
       id-token: write # npm provenance attestation
     steps:
+      - name: Resolve release ref
+        id: ref
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "RELEASE_REF_NAME=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "RELEASE_REF_NAME=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v7
+        with:
+          # Manual runs dispatch from a branch (usually main); check out the
+          # tag's exact commit so tag and package.json agree.
+          ref: ${{ steps.ref.outputs.RELEASE_REF_NAME }}
+          fetch-depth: 0
 
       - name: Set up Node
         uses: actions/setup-node@v7
@@ -37,9 +63,10 @@ jobs:
       - name: Verify tag matches package.json version
         run: |
           PKG_VERSION="$(node -p "require('./package.json').version")"
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          TAG_NAME="${{ steps.ref.outputs.RELEASE_REF_NAME }}"
+          TAG_VERSION="${TAG_NAME#v}"
           if [[ "$PKG_VERSION" != "$TAG_VERSION" ]]; then
-            echo "::error::git tag $GITHUB_REF_NAME (=$TAG_VERSION) does not match package.json version $PKG_VERSION"
+            echo "::error::tag $TAG_NAME (=$TAG_VERSION) does not match package.json version $PKG_VERSION"
             exit 1
           fi
 
@@ -73,7 +100,8 @@ jobs:
       - name: Classify release from tag
         id: version
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          TAG_NAME="${{ steps.ref.outputs.RELEASE_REF_NAME }}"
+          VERSION="${TAG_NAME#v}"
           echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
           if [[ "$VERSION" == *-* ]]; then
             echo "NPM_TAG=next" >> "$GITHUB_OUTPUT"
