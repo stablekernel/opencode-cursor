@@ -14,6 +14,10 @@
  * src/sidecar/agent-host.mjs / src/provider/cursor-log-intercept.ts), plus
  * one unrelated console.log line, to verify the sidecar's log interception
  * forwards only the recognized lines and passes everything else through.
+ *
+ * `options.emitShellParserWarn` -> Agent.create/resume writes the shell-parser
+ * "tree-sitter natives unavailable" diagnostic to console.warn, as the real
+ * @cursor/sdk does on first shell parse, plus one unrelated console.warn.
  */
 
 function makeAgent(agentId, options) {
@@ -25,6 +29,12 @@ function makeAgent(agentId, options) {
       "16:05:53.036 INFO  AgentSkillsCursorRulesService load completed meta={durationMs: 86, ruleCount: 18, skillCount: 18}",
     );
     console.log("some unrelated cursor sdk output");
+  }
+  if (options?.emitShellParserWarn) {
+    console.warn(
+      "shell-parser: tree-sitter natives are unavailable in this artifact; shell command analysis degrades to parsingFailed",
+    );
+    console.warn("some unrelated cursor sdk warning");
   }
   return {
     agentId,
@@ -45,7 +55,9 @@ function makeAgent(agentId, options) {
         err.helpUrl = "https://example.com/rate-limits";
         throw err;
       }
-      sendOptions?.onDelta?.({ update: { type: "text-delta", text: `echo:${text}` } });
+      sendOptions?.onDelta?.({
+        update: { type: "text-delta", text: `echo:${text}` },
+      });
       if (text === "hang") {
         let resolveWait;
         const waited = new Promise((resolve) => {

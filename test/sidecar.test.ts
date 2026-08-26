@@ -2,13 +2,21 @@ import { afterEach, describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { SidecarClient } from "../src/provider/sidecar-client.js";
 
-const SCRIPT = fileURLToPath(new URL("../src/sidecar/agent-host.mjs", import.meta.url));
-const FAKE_SDK = fileURLToPath(new URL("./fixtures/fake-cursor-sdk.mjs", import.meta.url));
+const SCRIPT = fileURLToPath(
+  new URL("../src/sidecar/agent-host.mjs", import.meta.url),
+);
+const FAKE_SDK = fileURLToPath(
+  new URL("./fixtures/fake-cursor-sdk.mjs", import.meta.url),
+);
 
 const clients: SidecarClient[] = [];
 
 function makeClient(
-  onLog?: (level: "debug" | "info" | "warn" | "error", message: string, meta?: Record<string, unknown>) => void,
+  onLog?: (
+    level: "debug" | "info" | "warn" | "error",
+    message: string,
+    meta?: Record<string, unknown>,
+  ) => void,
 ): SidecarClient {
   const client = new SidecarClient({
     scriptPath: SCRIPT,
@@ -23,7 +31,11 @@ afterEach(() => {
   for (const client of clients.splice(0)) client.dispose();
 });
 
-const CREATE_OPTIONS = { apiKey: "k", model: { id: "m" }, local: { cwd: "/tmp" } };
+const CREATE_OPTIONS = {
+  apiKey: "k",
+  model: { id: "m" },
+  local: { cwd: "/tmp" },
+};
 
 describe("SidecarClient", () => {
   it("creates an agent in the child and streams a turn back", async () => {
@@ -34,7 +46,10 @@ describe("SidecarClient", () => {
     const updates: Array<{ type: string }> = [];
     const run = await agent.send(
       { type: "user", text: "hi" },
-      { mode: "agent", onDelta: ({ update }) => updates.push(update as { type: string }) },
+      {
+        mode: "agent",
+        onDelta: ({ update }) => updates.push(update as { type: string }),
+      },
     );
     const result = await run.wait();
 
@@ -51,15 +66,17 @@ describe("SidecarClient", () => {
   it("preserves error names across the process boundary", async () => {
     const client = makeClient();
     // Resume failure name drives session-pool's create fallback.
-    await expect(client.resumeAgent("missing", CREATE_OPTIONS)).rejects.toMatchObject({
+    await expect(
+      client.resumeAgent("missing", CREATE_OPTIONS),
+    ).rejects.toMatchObject({
       name: "AgentNotFoundError",
     });
 
     // Busy failure name drives agent-events' local.force retry.
     const agent = await client.createAgent(CREATE_OPTIONS);
-    await expect(agent.send({ type: "user", text: "busy" }, { mode: "agent" })).rejects.toMatchObject(
-      { name: "AgentBusyError" },
-    );
+    await expect(
+      agent.send({ type: "user", text: "busy" }, { mode: "agent" }),
+    ).rejects.toMatchObject({ name: "AgentBusyError" });
     // And the retry path (local.force) goes through cleanly.
     const run = await agent.send(
       { type: "user", text: "busy" },
@@ -71,16 +88,16 @@ describe("SidecarClient", () => {
   it("preserves error classification fields across the process boundary", async () => {
     const client = makeClient();
     const agent = await client.createAgent(CREATE_OPTIONS);
-    await expect(agent.send({ type: "user", text: "rich" }, { mode: "agent" })).rejects.toMatchObject(
-      {
-        name: "RateLimitError",
-        message: "rate limited",
-        status: 429,
-        code: "rate_limited",
-        isRetryable: true,
-        helpUrl: "https://example.com/rate-limits",
-      },
-    );
+    await expect(
+      agent.send({ type: "user", text: "rich" }, { mode: "agent" }),
+    ).rejects.toMatchObject({
+      name: "RateLimitError",
+      message: "rate limited",
+      status: 429,
+      code: "rate_limited",
+      isRetryable: true,
+      helpUrl: "https://example.com/rate-limits",
+    });
   });
 
   it("multiplexes concurrent sends over one child", async () => {
@@ -101,13 +118,20 @@ describe("SidecarClient", () => {
   it("cancel() reaches the child and resolves the hung run", async () => {
     const client = makeClient();
     const agent = await client.createAgent(CREATE_OPTIONS);
-    const run = await agent.send({ type: "user", text: "hang" }, { mode: "agent" });
+    const run = await agent.send(
+      { type: "user", text: "hang" },
+      { mode: "agent" },
+    );
     await run.cancel();
     await expect(run.wait()).resolves.toMatchObject({ status: "cancelled" });
   });
 
   it("forwards recognized Cursor rules/skills log lines via onLog, and drops everything else", async () => {
-    const logs: Array<{ level: string; message: string; meta?: Record<string, unknown> }> = [];
+    const logs: Array<{
+      level: string;
+      message: string;
+      meta?: Record<string, unknown>;
+    }> = [];
     const client = makeClient((level, message, meta) => {
       logs.push({ level, message, meta });
     });
@@ -127,10 +151,33 @@ describe("SidecarClient", () => {
     ]);
   });
 
+  it("forwards recognized SDK console.warn diagnostics via onLog, and drops everything else", async () => {
+    const logs: Array<{
+      level: string;
+      message: string;
+      meta?: Record<string, unknown>;
+    }> = [];
+    const client = makeClient((level, message, meta) => {
+      logs.push({ level, message, meta });
+    });
+    await client.createAgent({ ...CREATE_OPTIONS, emitShellParserWarn: true });
+
+    expect(logs).toEqual([
+      {
+        level: "warn",
+        message:
+          "shell-parser: tree-sitter natives are unavailable in this artifact; shell command analysis degrades to parsingFailed",
+      },
+    ]);
+  });
+
   it("rejects in-flight requests when the client is disposed", async () => {
     const client = makeClient();
     const agent = await client.createAgent(CREATE_OPTIONS);
-    const run = await agent.send({ type: "user", text: "hang" }, { mode: "agent" });
+    const run = await agent.send(
+      { type: "user", text: "hang" },
+      { mode: "agent" },
+    );
     const waited = run.wait();
     client.dispose();
     await expect(waited).rejects.toThrow(/sidecar/i);

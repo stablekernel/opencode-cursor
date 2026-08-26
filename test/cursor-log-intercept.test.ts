@@ -50,8 +50,12 @@ describe("parseCursorRuleLoadLine", () => {
   });
 
   it("returns undefined for unrelated log lines", () => {
-    expect(parseCursorRuleLoadLine("some unrelated cursor sdk output")).toBeUndefined();
-    expect(parseCursorRuleLoadLine("Plugins reload completed: 3 plugins loaded")).toBeUndefined();
+    expect(
+      parseCursorRuleLoadLine("some unrelated cursor sdk output"),
+    ).toBeUndefined();
+    expect(
+      parseCursorRuleLoadLine("Plugins reload completed: 3 plugins loaded"),
+    ).toBeUndefined();
   });
 });
 
@@ -83,6 +87,34 @@ describe("installCursorLogInterceptor", () => {
     // reach it, but the recognized line must not.
     expect(passthrough).toHaveBeenCalledTimes(1);
     expect(passthrough).toHaveBeenCalledWith("totally unrelated output", 42);
+    passthrough.mockRestore();
+  });
+
+  it("routes known SDK console.warn diagnostics through pluginLog instead of stderr", () => {
+    const log = vi.fn().mockResolvedValue(undefined);
+    setLogBridge({ client: { app: { log } } } as never);
+
+    const passthrough = vi.spyOn(console, "warn").mockImplementation(() => {});
+    installCursorLogInterceptor();
+
+    console.warn(
+      "shell-parser: tree-sitter natives are unavailable in this artifact; shell command analysis degrades to parsingFailed",
+    );
+    console.warn("unrelated warning");
+
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith({
+      body: {
+        service: "opencode-cursor",
+        level: "warn",
+        message:
+          "shell-parser: tree-sitter natives are unavailable in this artifact; shell command analysis degrades to parsingFailed",
+      },
+    });
+
+    resetCursorLogInterceptor();
+    expect(passthrough).toHaveBeenCalledTimes(1);
+    expect(passthrough).toHaveBeenCalledWith("unrelated warning");
     passthrough.mockRestore();
   });
 
