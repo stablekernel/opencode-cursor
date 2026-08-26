@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.1-next.0] — 2026-08-26 (pre-release)
+
+Fixes the subagent child-session pane fragmenting one flowing answer
+into many small messages. Not on `latest`; install with
+`npm install @stablekernel/opencode-cursor@next` to test.
+
+- **Fix: subagent pane shows one growing transcript instead of fragment
+  messages.** Live activity snapshots were posted as a NEW message on
+  every flush (the 1.5s timer, every tool result, plus up to four more
+  on finalize), so a single subagent turn rendered as 5–20 fragments —
+  a paragraph split mid-sentence across messages. The seeded prompt
+  message's text part now grows in place: each flush PATCHes it via
+  `part.update` with the FULL cumulative transcript (the endpoint the
+  child session's tool parts already use; opencode publishes
+  `part.updated`, so live views re-render). Falls back to the old
+  per-flush message only when the seed response carries no parts or the
+  PATCH fails. Tool activity no longer duplicates into the transcript
+  markdown — the child session's `tool` parts already render it live on
+  the subagent card — and `resultSuffix` + `conversationSteps` + the
+  activity line merge into the single final transcript instead of three
+  extra messages.
+
 ## [0.9.0] — 2026-08-26
 
 The Cursor agent can now use installed opencode plugins (#104), their
