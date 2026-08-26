@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.0-next.1] — 2026-08-26 (pre-release)
+
+Fixes the Cursor SDK's shell-parser diagnostic leaking into the opencode
+TUI prompt (#111). Still not on `latest`; install with
+`npm install @stablekernel/opencode-cursor@next` to test.
+
+- **Fix: `shell-parser: tree-sitter natives are unavailable…` no longer
+  appears in the TUI prompt.** `@cursor/sdk`'s bundled shell-parser emits a
+  one-shot `console.warn` when its vendored tree-sitter natives fail to load
+  (e.g. when opencode runs the plugin under Bun); opencode renders plugin
+  stderr into the prompt, so the line surfaced visually even though it is
+  benign (shell command analysis degrades to `parsingFailed`, which the SDK
+  handles). The existing `console.log` interceptor for the SDK's rules/skills
+  load diagnostics now covers `console.warn` on both transports: in-process,
+  known SDK warnings route through `pluginLog("warn")` to opencode's
+  `app.log` instead of stderr; in the Node sidecar, matched lines forward as
+  structured `{ev:"log", level:"warn"}` events over the JSONL protocol.
+  Unrelated `console.warn` output passes through unchanged, and the message
+  remains visible in opencode logs (service `opencode-cursor`).
+
 ## [0.9.0-next.0] — 2026-08-26 (pre-release)
 
 The Cursor agent can now use installed opencode plugins (#104), plus
