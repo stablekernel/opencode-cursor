@@ -27,7 +27,12 @@ function serializeError(err) {
     const out = { name: err.name, message: err.message };
     for (const k of ["status", "code", "isRetryable", "helpUrl"]) {
       const v = err[k];
-      if (typeof v === "number" || typeof v === "string" || typeof v === "boolean") out[k] = v;
+      if (
+        typeof v === "number" ||
+        typeof v === "string" ||
+        typeof v === "boolean"
+      )
+        out[k] = v;
     }
     return out;
   }
@@ -42,15 +47,22 @@ function write(payload) {
 const ANSI_PATTERN = /\x1b\[[0-9;]*m/g;
 
 // `@cursor/sdk`'s bundled local-exec runtime writes its rules/skills
-// load-completion diagnostics straight to `console.log` (no public logger
-// hook exists to redirect it — see src/provider/cursor-log-intercept.ts,
-// which applies the identical pattern for the in-process transport). This
-// process's own JSONL protocol never uses console.log (only
-// process.stdout.write via write() above), so console.log here is entirely
-// free for the SDK's use: recognized lines are forwarded to the parent as a
-// structured "log" event instead of being written as raw, unparseable text.
+// load-completion diagnostics straight to `console.log`, and its shell-parser
+// emits a one-shot "tree-sitter natives unavailable" diagnostic via
+// `console.warn` (no public logger hook exists to redirect either — see
+// src/provider/cursor-log-intercept.ts, which applies the identical pattern
+// for the in-process transport). This process's own JSONL protocol never uses
+// console.log/console.warn (only process.stdout.write via write() above), so
+// they are entirely free for the SDK's use: recognized lines are forwarded
+// to the parent as a structured "log" event instead of being written as raw,
+// unparseable text.
 const RULE_LOAD_PATTERN =
   /^\d{2}:\d{2}:\d{2}\.\d{3}\s+INFO\s+(LocalCursorRulesService|AgentSkillsCursorRulesService|CursorPluginsAgentSkillsService) load completed(?:\s+ctx=\S+)?\s+meta=\{([^}]*)\}\s*$/;
+
+// One-shot SDK load diagnostics recognized on console.warn (prefix-matched).
+const SDK_WARNING_PREFIXES = [
+  "shell-parser: tree-sitter natives are unavailable in this artifact",
+];
 
 function parseLogMeta(raw) {
   const out = {};
@@ -79,6 +91,18 @@ console.log = (...args) => {
     }
   }
   originalConsoleLog(...args);
+};
+
+const originalConsoleWarn = console.warn.bind(console);
+console.warn = (...args) => {
+  if (args.length === 1 && typeof args[0] === "string") {
+    const line = args[0].replace(ANSI_PATTERN, "");
+    if (SDK_WARNING_PREFIXES.some((prefix) => line.startsWith(prefix))) {
+      write({ ev: "log", level: "warn", message: line });
+      return;
+    }
+  }
+  originalConsoleWarn(...args);
 };
 
 let sdkPromise;
