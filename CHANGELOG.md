@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- **Dependency bumps:** `@opencode-ai/plugin` ^1.18.4 → ^1.18.21 (deps),
+  `@opencode-ai/sdk` ^1.18.18 → ^1.18.21 (dev). Consolidates dependabot
+  PRs #105 and #106.
+
 ## [0.8.0] — 2026-08-21
 
 Live Cursor subagent activity: the `task` card behaves like a native opencode
