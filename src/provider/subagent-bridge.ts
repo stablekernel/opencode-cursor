@@ -1,5 +1,5 @@
 import type { OpencodeClient } from "@opencode-ai/sdk";
-import { createPartID, upsertToolPart } from "./child-parts.js";
+import { createPartID, PART_URL, upsertToolPart } from "./child-parts.js";
 import { pluginLog } from "./log-bridge.js";
 
 /**
@@ -545,9 +545,12 @@ export interface SubagentLiveSession {
 	 */
 	messageID?: string;
 	/**
-	 * Append a rendered markdown chunk as a noReply user message. Calls are
-	 * serialized through an internal promise chain so concurrent flushes post
-	 * in order (no interleaving).
+	 * Replace the child session's transcript with the given cumulative markdown.
+	 * Grows the seeded prompt message's text part in place via `part.update` so
+	 * the whole transcript stays ONE message (flushing new messages per snapshot
+	 * fragments it); degrades to posting a new noReply message when the part id
+	 * is unavailable or the PATCH fails. Calls are serialized through an
+	 * internal promise chain so concurrent flushes post in order.
 	 */
 	flush(markdown: string): Promise<void>;
 	/**
@@ -604,7 +607,10 @@ export async function linkSubagentSessionLive(opts: {
 		// `noReply` short-circuits before the model loop and returns the created
 		// USER message (`session/prompt.ts:1069`), despite the generated SDK
 		// typing it as an AssistantMessage. Its id is what child parts hang off.
+		// The response also carries the message's parts; the text part's id is
+		// what `flush` patches in place so the transcript stays a single message.
 		let messageID: string | undefined;
+		let transcriptID: string | undefined;
 		const prompt = strField(opts.args, "prompt");
 		if (prompt) {
 			const seeded = await client.session.prompt({
@@ -612,32 +618,102 @@ export async function linkSubagentSessionLive(opts: {
 				...(query ? { query } : {}),
 				body: { noReply: true, parts: [{ type: "text", text: prompt }] },
 			});
-			messageID = strField(
-				(seeded?.data as { info?: unknown } | undefined)?.info,
-				"id",
+			const data = seeded?.data as
+				| { info?: unknown; parts?: unknown[] }
+				| undefined;
+			messageID = strField(data?.info, "id");
+			const textPart = data?.parts?.find(
+				(p) => isRecord(p) && p["type"] === "text",
 			);
+			transcriptID = strField(textPart, "id");
 		}
 
 		let done = false;
 		let chain: Promise<void> = Promise.resolve();
-		const post = (text: string): Promise<void> => {
-			chain = chain.then(() =>
-				client.session
-					.prompt({
-						path: { id: childId },
-						...(query ? { query } : {}),
-						body: { noReply: true, parts: [{ type: "text", text }] },
-					})
-					.then(() => undefined)
-					.catch(() => undefined),
-			);
+		const enqueue = (step: () => Promise<void>): Promise<void> => {
+			chain = chain.then(step).catch(() => undefined);
 			return chain;
 		};
+		const postNow = async (text: string): Promise<void> => {
+			await client.session.prompt({
+				path: { id: childId },
+				...(query ? { query } : {}),
+				body: { noReply: true, parts: [{ type: "text", text }] },
+			});
+		};
+		const post = (text: string): Promise<void> => enqueue(() => postNow(text));
+		// PATCH the seeded text part to the full cumulative transcript.
+		// `part.update` decodes the payload as `SessionV1.Part` and patches text
+		// parts in place, publishing `part.updated` (opencode's own streaming
+		// does the same via updatePart+delta), so live views re-render it.
+		const patchTranscript = async (text: string): Promise<boolean> => {
+			if (!messageID || !transcriptID) return false;
+			// SAFETY: the published v1 OpencodeClient type hides the hey-api runtime
+			// client; `_client.request` exists at runtime (optional-chained below)
+			// even though it is absent from the public types.
+			const request = (
+				client as unknown as {
+					_client?: {
+						request?: (options: Record<string, unknown>) => Promise<unknown>;
+					};
+				}
+			)._client?.request;
+			if (!request) return false;
+			try {
+				const res = await request({
+					method: "PATCH",
+					url: PART_URL,
+					path: {
+						sessionID: childId,
+						messageID,
+						partID: transcriptID,
+					},
+					...(query ? { query } : {}),
+					body: {
+						id: transcriptID,
+						messageID,
+						sessionID: childId,
+						type: "text",
+						text,
+					},
+				});
+				// hey-api's runtime `request` RESOLVES `{ error }` on a 4xx instead
+				// of rejecting, so a rejected payload looks like success unless checked.
+				if (
+					typeof res === "object" &&
+					res !== null &&
+					"error" in res &&
+					(res as { error: unknown }).error != null
+				)
+					return false;
+				return true;
+			} catch {
+				return false;
+			}
+		};
+
+		// The last flush whose PATCH failed and degraded to a posted message.
+		// Cumulative flushes supersede it, so a later identical flush (or a
+		// retry while the PATCH path is broken) must not re-post the same body.
+		let postedFallback: string | undefined;
 
 		return {
 			childId,
 			messageID,
-			flush: (markdown: string) => (done ? Promise.resolve() : post(markdown)),
+			flush: (markdown: string) => {
+				if (done) return Promise.resolve();
+				return enqueue(async () => {
+					if (markdown === postedFallback) return;
+					if (await patchTranscript(markdown)) {
+						postedFallback = undefined;
+						return;
+					}
+					postedFallback = markdown;
+					// Direct call: already running inside the chain — re-enqueueing
+					// would self-await and deadlock.
+					await postNow(markdown);
+				});
+			},
 			toolPart: async (part) => {
 				if (done || !messageID) return undefined;
 				const partID = part.partID ?? createPartID();
@@ -659,6 +735,9 @@ export async function linkSubagentSessionLive(opts: {
 			finalize: async (activity?: string) => {
 				if (done) return;
 				done = true;
+				// The sink merges the activity line into its cumulative transcript;
+				// a bare finalize (no flush after) only posts when nothing was
+				// patched yet.
 				if (activity) await post(activity);
 			},
 		};

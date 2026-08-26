@@ -34,7 +34,8 @@ export function createPartID(now?: number): string {
 	return `prt_${bytes.toString("hex")}${random}`;
 }
 
-const PART_URL = "/session/{sessionID}/message/{messageID}/part/{partID}";
+export const PART_URL =
+	"/session/{sessionID}/message/{messageID}/part/{partID}";
 
 /** Arguments describing one tool call to materialise in a child session. */
 export interface ToolPartInput {

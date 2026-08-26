@@ -1612,9 +1612,15 @@ describe("subagent child-session linking (blocks)", () => {
 				},
 				prompt: async (opts: unknown) => {
 					calls.prompt.push(opts);
-					// A real noReply prompt resolves `{ info: { id } }` — the seeded user
-					// message, which child tool parts attach to.
-					return { data: { info: { id: "msg_seed" } } };
+					// A real noReply prompt resolves `{ info, parts }` — the seeded
+					// user message (which child tool parts attach to) and its text
+					// part (which the growing transcript patches in place).
+					return {
+						data: {
+							info: { id: "msg_seed" },
+							parts: [{ id: "prt_seed", type: "text", text: "pull dev" }],
+						},
+					};
 				},
 			},
 		};
@@ -1637,21 +1643,25 @@ describe("subagent child-session linking (blocks)", () => {
 		// The linked child session id makes the card clickable / ctrl+x-navigable.
 		expect(foldedMetadata(result)).toMatchObject({ sessionId: "ses_child" });
 		// Child created under the parent with the "(@agent subagent)" title, then
-		// seeded with the prompt + the subagent's final answer + the activity
-		// line (three noReply prompts on the live path).
+		// seeded with the prompt. The transcript grows the seed's text part in
+		// place (one noReply prompt + one fallback message — this stub client has
+		// no `_client.request`, so the patch degrades to posting), not a stream
+		// of fragment messages.
 		expect(calls.create[0]).toMatchObject({
 			body: { parentID: "ses_parent", title: expect.stringContaining("(@") },
 			query: { directory: "/repo" },
 		});
-		expect(calls.prompt.length).toBe(3);
-		const texts = (
-			calls.prompt as Array<{ body: { parts: Array<{ text: string }> } }>
-		)
-			.map((p) => p.body.parts[0]!.text)
-			.join("\n");
-		// The transcript carries Cursor's result + its real duration.
-		expect(texts).toContain("done");
-		expect(texts).toContain("5.0s");
+		expect(calls.prompt.length).toBe(2);
+		expect(
+			(calls.prompt[0] as { body: { parts: Array<{ text: string }> } }).body
+				.parts[0]!.text,
+		).toBe("pull dev");
+		const transcript = (
+			calls.prompt[1] as { body: { parts: Array<{ text: string }> } }
+		).body.parts[0]!.text;
+		// ONE cumulative message carries Cursor's result + its real duration.
+		expect(transcript).toContain("done");
+		expect(transcript).toContain("5.0s");
 	});
 
 	it("degrades to a non-navigable card when no bridge is published", async () => {
@@ -1790,24 +1800,32 @@ describe("subagent child-session linking (blocks)", () => {
 		expect(subagentCallChildId("t1")).toBeUndefined();
 		// Child created up-front (on the tool-call), not at the result.
 		expect(calls.create.length).toBe(1);
-		// The prompt was seeded, then the nested activity flushed as markdown.
-		const promptTexts = (
-			calls.prompt as Array<{ body: { parts: Array<{ text: string }> } }>
-		)
-			.map((p) => p.body.parts[0]!.text)
-			.join("\n");
-		expect(promptTexts).toContain("pull dev");
-		expect(promptTexts).toContain("working on it");
-		expect(promptTexts).toContain("shell");
-		expect(promptTexts).toContain("git status");
-		// The subagent's own text and final answer land in the child session.
-		expect(promptTexts).toContain("subagent text");
-		expect(promptTexts).toContain("done");
-		// The activity line is appended on finalize.
-		expect(promptTexts).toContain("5.0s");
+		// The prompt was seeded once. With `_client.request` present the
+		// transcript PATCHes the seed's text part — no extra prompt messages.
+		expect(calls.prompt.length).toBe(1);
+		expect(
+			(calls.prompt[0] as { body: { parts: Array<{ text: string }> } }).body
+				.parts[0]!.text,
+		).toBe("pull dev");
+		const bodies = partWrites.map((w) => w["body"] as Record<string, unknown>);
+		// The transcript lands as cumulative patches of the seed's text part —
+		// each one the FULL transcript so far (growing message, no fragments).
+		const textPatches = bodies.filter((b) => b["type"] === "text");
+		expect(textPatches.length).toBeGreaterThan(0);
+		const lastTranscript = textPatches.at(-1)!["text"] as string;
+		expect(lastTranscript).toContain("working on it");
+		// The subagent's own text, final answer, and activity line all merge
+		// into the single growing transcript.
+		expect(lastTranscript).toContain("subagent text");
+		expect(lastTranscript).toContain("done");
+		expect(lastTranscript).toContain("5.0s");
+		// Every patch targets the SAME seeded part id (replace, not append).
+		const textIds = new Set(textPatches.map((b) => b["id"]));
+		expect(textIds.size).toBe(1);
+		// Tool activity stays out of the transcript markdown — tool parts render it.
+		expect(lastTranscript).not.toContain("git status");
 		// The nested tool call produced a running then completed tool part, the
 		// completion reusing the running part's id (upsert, not a second part).
-		const bodies = partWrites.map((w) => w["body"] as Record<string, unknown>);
 		const toolStates = bodies
 			.filter((b) => b["type"] === "tool")
 			.map((b) => ({
