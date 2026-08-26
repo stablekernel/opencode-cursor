@@ -4,11 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [0.9.0-next.1] — 2026-08-26 (pre-release)
+## [0.9.0] — 2026-08-26
 
-Fixes the Cursor SDK's shell-parser diagnostic leaking into the opencode
-TUI prompt (#111). Still not on `latest`; install with
-`npm install @stablekernel/opencode-cursor@next` to test.
+The Cursor agent can now use installed opencode plugins (#104), their
+skills mirror into `.cursor/skills/`, and the Cursor SDK's shell-parser
+diagnostic no longer leaks into the opencode TUI prompt (#111).
+Consolidates pre-releases `0.9.0-next.0` and `0.9.0-next.1`.
 
 - **Fix: `shell-parser: tree-sitter natives are unavailable…` no longer
   appears in the TUI prompt.** `@cursor/sdk`'s bundled shell-parser emits a
@@ -23,12 +24,6 @@ TUI prompt (#111). Still not on `latest`; install with
   structured `{ev:"log", level:"warn"}` events over the JSONL protocol.
   Unrelated `console.warn` output passes through unchanged, and the message
   remains visible in opencode logs (service `opencode-cursor`).
-
-## [0.9.0-next.0] — 2026-08-26 (pre-release)
-
-The Cursor agent can now use installed opencode plugins (#104), plus
-consolidated opencode-ai dependency bumps (#107). Not yet on `latest`;
-install with `npm install @stablekernel/opencode-cursor@next` to test.
 
 - **Plugin tools bridge: other plugins' custom tools are now exposed to the
   Cursor agent.** Custom tools from installed opencode plugins (e.g.
