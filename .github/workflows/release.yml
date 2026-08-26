@@ -128,6 +128,9 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
+          # Dispatch runs carry the branch ref; GITHUB_REF_NAME isn't the tag
+          # there, so pass the resolved tag explicitly.
+          tag_name: ${{ steps.ref.outputs.RELEASE_REF_NAME }}
           name: "v${{ steps.version.outputs.VERSION }}"
           generate_release_notes: true
           prerelease: ${{ steps.version.outputs.PRERELEASE }}
