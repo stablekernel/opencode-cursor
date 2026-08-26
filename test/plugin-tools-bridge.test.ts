@@ -442,6 +442,58 @@ describe("plugin-tools bridge", () => {
 			await bridge.close();
 		}
 	});
+
+	it("tools/list fails fast against a hung control port", { timeout: 20_000 }, async () => {
+		// A control port that accepts connections but never responds (stale
+		// server) must not hang Cursor's MCP discovery — listTools aborts after
+		// its 5s budget and degrades to an empty tool list.
+		const { createServer } = await import("node:http");
+		const hung = createServer(() => {
+			// never respond
+		});
+		await new Promise<void>((resolve) =>
+			hung.listen(0, "127.0.0.1", () => resolve()),
+		);
+		const address = hung.address();
+		const port = typeof address === "object" && address ? address.port : 0;
+		try {
+			const child = spawn(
+				process.execPath,
+				["src/sidecar/plugin-tools-mcp.mjs"],
+				{
+					env: {
+						...process.env,
+						OPENCODE_PLUGIN_TOOLS_PORT: String(port),
+						OPENCODE_PLUGIN_TOOLS_TOKEN: "t",
+					},
+					stdio: ["pipe", "pipe", "pipe"],
+				},
+			);
+			const started = Date.now();
+			const reply = await new Promise<string>((resolve, reject) => {
+				let buf = "";
+				child.stdout!.on("data", (chunk: Buffer) => {
+					buf += chunk.toString();
+					const line = buf.split("\n").find((l) => l.trim());
+					if (line) resolve(line);
+				});
+				child.once("error", reject);
+				child.once("exit", () => reject(new Error("child exited")));
+				child.stdin!.write(
+					JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) + "\n",
+				);
+			});
+			const elapsed = Date.now() - started;
+			const parsed = JSON.parse(reply) as { result?: { tools?: unknown[] } };
+			expect(parsed.result?.tools).toEqual([]);
+			// 5s budget + slack — anything under 10s proves we did not hang.
+			expect(elapsed).toBeLessThan(10_000);
+			child.kill();
+		} finally {
+			await new Promise<void>((resolve) => hung.close(() => resolve()));
+			hung.closeAllConnections?.();
+		}
+	});
 });
 
 // --- full plugin wiring: config hook merges the bridge into mcpServers ---

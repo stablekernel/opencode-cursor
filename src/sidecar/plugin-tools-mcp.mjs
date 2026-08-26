@@ -36,7 +36,7 @@ function logErr(message, extra) {
   }
 }
 
-async function controlRequest(path, body) {
+async function controlRequest(path, body, timeoutMs) {
   const res = await fetch(`http://127.0.0.1:${CONTROL_PORT}${path}`, {
     method: body ? "POST" : "GET",
     headers: {
@@ -44,6 +44,10 @@ async function controlRequest(path, body) {
       authorization: `Bearer ${TOKEN}`,
     },
     body: body ? JSON.stringify(body) : undefined,
+    // A stale/hung port must not hang Cursor's MCP discovery (tools/list) or
+    // block a tool call forever. Loopback list is instant; calls get a
+    // generous ceiling because plugin tools can legitimately run for minutes.
+    signal: AbortSignal.timeout(timeoutMs),
   });
   const text = await res.text();
   let json;
@@ -61,7 +65,7 @@ async function controlRequest(path, body) {
 
 async function listTools() {
   try {
-    const data = await controlRequest("/tools");
+    const data = await controlRequest("/tools", undefined, 5_000);
     return data?.tools ?? [];
   } catch (err) {
     logErr("tools/list failed", { error: String(err) });
@@ -71,7 +75,7 @@ async function listTools() {
 
 async function callTool(name, args) {
   try {
-    const data = await controlRequest("/call", { id: name, args: args ?? {} });
+    const data = await controlRequest("/call", { id: name, args: args ?? {} }, 300_000);
     if (data?.ok === false) {
       return {
         isError: true,
