@@ -160,13 +160,30 @@ describe("SidecarClient", () => {
     const client = makeClient((level, message, meta) => {
       logs.push({ level, message, meta });
     });
-    await client.createAgent({ ...CREATE_OPTIONS, emitShellParserWarn: true });
+    await client.createAgent({
+      ...CREATE_OPTIONS,
+      emitShellParserWarn: true,
+      emitSlowCacheWarn: true,
+    });
 
     expect(logs).toEqual([
       {
         level: "warn",
         message:
           "shell-parser: tree-sitter natives are unavailable in this artifact; shell command analysis degrades to parsingFailed",
+      },
+      {
+        level: "warn",
+        message:
+          "computeGlobalCache: slow ctx-LocalRequestContextExecutor. rebuildGlobalCache/LocalRequestContextExecutor.computeGlobalCache",
+        meta: {
+          totalMs: 1312,
+          cloudRule: 0,
+          codebaseRef: 0,
+          subagents: 416,
+          cursorRules: 1311,
+          ruleCount: 701,
+        },
       },
     ]);
   });

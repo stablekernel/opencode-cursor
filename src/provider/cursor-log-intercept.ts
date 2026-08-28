@@ -37,6 +37,34 @@ function matchesKnownSdkWarning(line: string): boolean {
 	return SDK_WARNING_PREFIXES.some((prefix) => line.startsWith(prefix));
 }
 
+/**
+ * Slow-cache diagnostic the SDK `console.warn`s when global context rebuild
+ * exceeds its threshold. Observed shape (colors stripped; the leading
+ * timestamp token varies in width, e.g. `13:04:05.123` vs `113:26:23.106`):
+ *
+ *   113:26:23.106 WARN computeGlobalCache: slow ctx-LocalRequestContextExecutor. rebuildGlobalCache/LocalRequestContextExecutor.computeGlobalCache meta=/totalMs: 1312, cloudRule: 0, codebaseRef: 0, subagents: 416, cursorRules: 1311, ruleCount: 701
+ *
+ * The `/` after `meta=` is how the SDK prints its empty context object.
+ */
+const SLOW_CACHE_WARN_RE =
+	/^\d{2,3}:\d{2}:\d{2}\.\d{3}\s+WARN\s+(computeGlobalCache: slow .+?)\s+meta=\/?\s*(.+)$/;
+
+export interface ParsedSlowCacheWarn {
+	message: string;
+	meta: Record<string, number>;
+}
+
+/** Matches one line against the known slow-cache warn shape. */
+export function parseSlowCacheWarnLine(
+	line: string,
+): ParsedSlowCacheWarn | undefined {
+	const match = SLOW_CACHE_WARN_RE.exec(stripAnsi(line));
+	if (!match) return undefined;
+	const [, message, meta] = match;
+	if (!message) return undefined;
+	return { message: message.trim(), meta: parseCursorLogMeta(meta ?? "") };
+}
+
 /** Parses the `meta={key: value, ...}` tail into a plain numeric object. */
 export function parseCursorLogMeta(raw: string): Record<string, number> {
 	const out: Record<string, number> = {};
@@ -107,6 +135,11 @@ export function installCursorLogInterceptor(): void {
 			const line = stripAnsi(args[0]);
 			if (matchesKnownSdkWarning(line)) {
 				pluginLog("warn", line);
+				return;
+			}
+			const slowCache = parseSlowCacheWarnLine(line);
+			if (slowCache) {
+				pluginLog("warn", slowCache.message, slowCache.meta);
 				return;
 			}
 		}

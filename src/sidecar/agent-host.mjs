@@ -64,6 +64,12 @@ const SDK_WARNING_PREFIXES = [
   "shell-parser: tree-sitter natives are unavailable in this artifact",
 ];
 
+// Slow global-cache rebuild diagnostic (timestamp token varies in width,
+// e.g. `13:04:05.123` vs `113:26:23.106`; `/` after `meta=` is the SDK
+// printing its empty context object).
+const SLOW_CACHE_WARN_RE =
+  /^\d{2,3}:\d{2}:\d{2}\.\d{3}\s+WARN\s+(computeGlobalCache: slow .+?)\s+meta=\/?\s*(.+)$/;
+
 function parseLogMeta(raw) {
   const out = {};
   for (const part of raw.split(",")) {
@@ -99,6 +105,17 @@ console.warn = (...args) => {
     const line = args[0].replace(ANSI_PATTERN, "");
     if (SDK_WARNING_PREFIXES.some((prefix) => line.startsWith(prefix))) {
       write({ ev: "log", level: "warn", message: line });
+      return;
+    }
+    const slowCache = SLOW_CACHE_WARN_RE.exec(line);
+    if (slowCache) {
+      const [, message, meta] = slowCache;
+      write({
+        ev: "log",
+        level: "warn",
+        message: message.trim(),
+        meta: parseLogMeta(meta ?? ""),
+      });
       return;
     }
   }
