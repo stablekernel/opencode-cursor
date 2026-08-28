@@ -18,6 +18,11 @@
  * `options.emitShellParserWarn` -> Agent.create/resume writes the shell-parser
  * "tree-sitter natives unavailable" diagnostic to console.warn, as the real
  * @cursor/sdk does on first shell parse, plus one unrelated console.warn.
+ *
+ * `options.emitSlowCacheWarn` -> Agent.create/resume writes the
+ * computeGlobalCache "slow" diagnostic to console.warn, as the real
+ * @cursor/sdk does on slow global-cache rebuilds, plus one unrelated
+ * console.warn.
  */
 
 function makeAgent(agentId, options) {
@@ -35,6 +40,12 @@ function makeAgent(agentId, options) {
       "shell-parser: tree-sitter natives are unavailable in this artifact; shell command analysis degrades to parsingFailed",
     );
     console.warn("some unrelated cursor sdk warning");
+  }
+  if (options?.emitSlowCacheWarn) {
+    console.warn(
+      "113:26:23.106 WARN computeGlobalCache: slow ctx-LocalRequestContextExecutor. rebuildGlobalCache/LocalRequestContextExecutor.computeGlobalCache meta=/totalMs: 1312, cloudRule: 0, codebaseRef: 0, subagents: 416, cursorRules: 1311, ruleCount: 701",
+    );
+    console.warn("some unrelated slow-cache warning");
   }
   return {
     agentId,

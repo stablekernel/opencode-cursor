@@ -118,6 +118,44 @@ describe("installCursorLogInterceptor", () => {
     passthrough.mockRestore();
   });
 
+  it("routes the computeGlobalCache slow warn through pluginLog with parsed meta", () => {
+    const log = vi.fn().mockResolvedValue(undefined);
+    setLogBridge({ client: { app: { log } } } as never);
+
+    const passthrough = vi.spyOn(console, "warn").mockImplementation(() => {});
+    installCursorLogInterceptor();
+
+    console.warn(
+      "113:26:23.106 WARN computeGlobalCache: slow ctx-LocalRequestContextExecutor. rebuildGlobalCache/LocalRequestContextExecutor.computeGlobalCache meta=/totalMs: 1312, cloudRule: 0, codebaseRef: 0, subagents: 416, cursorRules: 1311, ruleCount: 701",
+    );
+    console.warn("unrelated warning");
+
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith({
+      body: {
+        service: "opencode-cursor",
+        level: "warn",
+        message:
+          "computeGlobalCache: slow ctx-LocalRequestContextExecutor. rebuildGlobalCache/LocalRequestContextExecutor.computeGlobalCache",
+        extra: {
+          totalMs: 1312,
+          cloudRule: 0,
+          codebaseRef: 0,
+          subagents: 416,
+          cursorRules: 1311,
+          ruleCount: 701,
+        },
+      },
+    });
+
+    resetCursorLogInterceptor();
+    // The spy is the pre-interceptor console.warn; passthrough calls must
+    // reach it, but the recognized line must not.
+    expect(passthrough).toHaveBeenCalledTimes(1);
+    expect(passthrough).toHaveBeenCalledWith("unrelated warning");
+    passthrough.mockRestore();
+  });
+
   it("is idempotent across repeated installs", () => {
     installCursorLogInterceptor();
     const first = console.log;
