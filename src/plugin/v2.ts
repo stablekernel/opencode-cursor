@@ -48,7 +48,9 @@
 import { tool } from "@opencode-ai/plugin";
 import { discoverModels } from "../model-discovery.js";
 import { defaultModelParams } from "../model-variants.js";
-import { PROVIDER_ID, providerNpm } from "./model-v2.js";
+import { NPM_PACKAGE, PROVIDER_ID, providerNpm } from "./model-v2.js";
+import { getLocalVersion } from "../version-check.js";
+import semver from "semver";
 import {
 	resolveContextLimit,
 	resolveOutputLimit,
@@ -242,6 +244,21 @@ export type CredentialValueV2 =
 type Registration = { dispose: () => Promise<void> };
 
 /**
+ * The npm specifier v2 registers for the provider package, pinned to this
+ * plugin's own version: without the pin opencode resolves the bare name to
+ * `latest`, decoupling the provider from the plugin that shipped it (a
+ * `@next` plugin would silently load the `latest` provider). Falls back to
+ * the bare name when the local version is missing or not valid semver.
+ * `OPENCODE_CURSOR_PROVIDER_NPM` still overrides everything (via
+ * `providerNpm`).
+ */
+const pinnedProviderNpm = (() => {
+	const version = getLocalVersion();
+	return version && semver.valid(version)
+		? `${NPM_PACKAGE}@${version}`
+		: NPM_PACKAGE;
+})();
+/**
  * Shape one discovered Cursor model as a v2 `Model.Info`. Carries the v1
  * variant/param channels on the settings rest so the picker and per-request
  * defaults keep working: variants are the option sets the picker merges into
@@ -288,7 +305,7 @@ function toModelInfo(
 		variants: variantList,
 		time: { released: 0 },
 		...(Object.keys(params).length > 0 ? { settings: { params } } : {}),
-		package: `aisdk:${providerNpm()}`,
+		package: `aisdk:${providerNpm(pinnedProviderNpm)}`,
 	};
 }
 
@@ -344,7 +361,7 @@ export async function cursorV2Setup(
 					id: PROVIDER_ID,
 					name: "Cursor",
 					activation: "auto",
-					package: `aisdk:${providerNpm()}`,
+					package: `aisdk:${providerNpm(pinnedProviderNpm)}`,
 					settings: { cwd: resolvedCwd },
 				},
 				models: modelInfos,

@@ -3,6 +3,7 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readFileSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
@@ -94,16 +95,26 @@ function makeCtx(directory = "/work") {
 	return ctx;
 }
 
+// package.json version, for pin assertions (single source of truth).
+const pkgVersion = JSON.parse(
+	readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+).version as string;
+
 let savedEnvKey: string | undefined;
+let savedProviderNpm: string | undefined;
 
 beforeEach(() => {
 	savedEnvKey = process.env.CURSOR_API_KEY;
 	delete process.env.CURSOR_API_KEY;
+	savedProviderNpm = process.env.OPENCODE_CURSOR_PROVIDER_NPM;
+	delete process.env.OPENCODE_CURSOR_PROVIDER_NPM;
 });
 
 afterEach(() => {
 	if (savedEnvKey === undefined) delete process.env.CURSOR_API_KEY;
 	else process.env.CURSOR_API_KEY = savedEnvKey;
+	if (savedProviderNpm === undefined) delete process.env.OPENCODE_CURSOR_PROVIDER_NPM;
+	else process.env.OPENCODE_CURSOR_PROVIDER_NPM = savedProviderNpm;
 });
 
 describe("dual default export", () => {
@@ -178,7 +189,9 @@ describe("cursorV2Setup", () => {
 		};
 		expect(info["id"]).toBe("cursor");
 		expect(info["name"]).toBe("Cursor");
-		expect(String(info["package"])).toMatch(/^aisdk:/);
+		expect(String(info["package"])).toBe(
+			`aisdk:@stablekernel/opencode-cursor@${pkgVersion}`,
+		);
 		expect(info["activation"]).toBe("auto");
 		// The provider settings carry the session directory so the v2 runner
 		// hands createCursor the right cwd (it may run from anywhere).
@@ -186,6 +199,34 @@ describe("cursorV2Setup", () => {
 		const model = models.find((m) => m.id === "test-model");
 		expect(model).toBeDefined();
 		expect(model?.providerID).toBe("cursor");
+		// Every model carries the same pinned specifier (opencode loads the
+		// provider package per model, so an unpinned one would resolve
+		// `latest` and decouple the provider from this plugin's version).
+		for (const m of models) {
+			expect(m["package"]).toBe(
+				`aisdk:@stablekernel/opencode-cursor@${pkgVersion}`,
+			);
+		}
+	});
+
+	it("honors OPENCODE_CURSOR_PROVIDER_NPM over the pinned spec", async () => {
+		process.env.OPENCODE_CURSOR_PROVIDER_NPM =
+			"file:///tmp/opencode-cursor-test-build";
+		const ctx = makeCtx();
+		await cursorV2Setup(ctx as never);
+		const cb = ctx.provider.transform.mock.calls[0]![0] as (editor: {
+			add: (input: unknown) => void;
+		}) => void;
+		const add = vi.fn();
+		cb({ add });
+		const { info, models } = add.mock.calls[0]![0] as {
+			info: Record<string, unknown>;
+			models: Array<Record<string, unknown>>;
+		};
+		expect(info["package"]).toBe("aisdk:file:///tmp/opencode-cursor-test-build");
+		for (const m of models) {
+			expect(m["package"]).toBe("aisdk:file:///tmp/opencode-cursor-test-build");
+		}
 	});
 
 	it("emits defaultModelParams as the model's settings.params", async () => {

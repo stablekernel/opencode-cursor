@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- **Fix: opencode v2 loads the provider package at the plugin's own version.**
+  v2 registered the provider with the bare package name, which opencode
+  resolves to `latest` — so a plugin installed from `@next` (or any other
+  channel) silently loaded the `latest` provider instead of the one it
+  shipped with. The v2 registration now pins the specifier to
+  `@stablekernel/opencode-cursor@<plugin version>` (falling back to the
+  bare name only when the version can't be resolved to a valid semver).
+  `OPENCODE_CURSOR_PROVIDER_NPM` still overrides everything, so local
+  `file://` builds keep working. v1 is unaffected (its provider is loaded
+  in-process, not via the package specifier).
+
 ## [0.10.0-next.0] — 2026-09-29 (pre-release)
 
 Adds opencode v2 support alongside v1 (#127). Not on `latest`; install with

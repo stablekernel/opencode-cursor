@@ -19,8 +19,8 @@ export const NPM_PACKAGE = "@stablekernel/opencode-cursor";
  * `OPENCODE_CURSOR_PROVIDER_NPM` — useful for local development and CI before
  * the package is published.
  */
-export function providerNpm(): string {
-  return process.env.OPENCODE_CURSOR_PROVIDER_NPM?.trim() || NPM_PACKAGE;
+export function providerNpm(fallback = NPM_PACKAGE): string {
+  return process.env.OPENCODE_CURSOR_PROVIDER_NPM?.trim() || fallback;
 }
 
 /**
