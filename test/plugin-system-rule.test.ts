@@ -10,7 +10,7 @@ vi.mock("../src/model-discovery.js", () => ({
 	toOpencodeModels: () => ({}),
 }));
 
-const { default: plugin } = await import("../src/plugin/index.js");
+const { CursorPlugin: plugin } = await import("../src/plugin/index.js");
 
 const dirs: string[] = [];
 function tmp(): string {

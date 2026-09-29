@@ -7,7 +7,7 @@ const runDelegate = vi.fn();
 vi.mock("../src/provider/cloud-agent.js", () => ({ runCloudAgent }));
 vi.mock("../src/provider/delegate.js", () => ({ runDelegate }));
 
-const { default: plugin } = await import("../src/plugin/index.js");
+const { CursorPlugin: plugin } = await import("../src/plugin/index.js");
 
 function ctx(ask: ReturnType<typeof vi.fn>) {
   return {

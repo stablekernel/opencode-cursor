@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import plugin from "../src/plugin/index.js";
+import { CursorPlugin as plugin } from "../src/plugin/index.js";
 import {
 	clearSubagentBridge,
 	linkSubagentSessionLive,

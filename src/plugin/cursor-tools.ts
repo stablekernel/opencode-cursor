@@ -1,7 +1,16 @@
 import { tool, type ToolContext, type ToolDefinition } from "@opencode-ai/plugin";
+import { rmSync } from "node:fs";
+import semver from "semver";
 import { runCloudAgent } from "../provider/cloud-agent.js";
 import { runDelegate } from "../provider/delegate.js";
 import { linkDelegateSession } from "../provider/subagent-bridge.js";
+import { discoverModels } from "../model-discovery.js";
+import {
+  getLocalVersion,
+  getLatestVersion,
+  clearVersionCache,
+  PLUGIN_CACHE_PATH,
+} from "../version-check.js";
 
 const s = tool.schema;
 
@@ -9,9 +18,10 @@ export interface CursorToolDeps {
   /**
    * Resolve the Cursor API key (from opencode auth, captured by the plugin's
    * auth loader, or the CURSOR_API_KEY env var). Returns undefined when no key
-   * is available so the tool can return a clear "needs auth" message.
+   * is available so the tool can return a clear "needs auth" message. Async
+   * because v2 resolves the stored connection per call.
    */
-  resolveApiKey: () => string | undefined;
+  resolveApiKey: () => string | undefined | Promise<string | undefined>;
   /** Default working directory for local delegation (the session worktree/cwd). */
   defaultCwd: () => string;
 }
@@ -88,7 +98,7 @@ export function buildCursorTools(deps: CursorToolDeps): Record<string, ToolDefin
           .describe("Operate on the current branch instead of creating a new one."),
       },
       execute: async (args, context) => {
-        const apiKey = deps.resolveApiKey();
+        const apiKey = await deps.resolveApiKey();
         if (!apiKey) return NEEDS_AUTH;
 
         const approval = await requestApproval(
@@ -168,7 +178,7 @@ export function buildCursorTools(deps: CursorToolDeps): Record<string, ToolDefin
           .describe("Resume a specific Cursor agent id instead of starting fresh."),
       },
       execute: async (args, context) => {
-        const apiKey = deps.resolveApiKey();
+        const apiKey = await deps.resolveApiKey();
         if (!apiKey) return NEEDS_AUTH;
 
         const approval = await requestApproval(context, "cursor_delegate", [args.model], {
@@ -241,5 +251,123 @@ export function buildCursorTools(deps: CursorToolDeps): Record<string, ToolDefin
         };
       },
     }),
+  };
+}
+
+/**
+ * Shared base of the `cursor_refresh_models` description. v1 appends a note
+ * pointing at `cursor_update_plugin`; v2 (which does not register that tool)
+ * appends a note pointing at `opencode plugin update` instead.
+ */
+export const REFRESH_DESCRIPTION_BASE =
+  "Refresh the live Cursor model catalog now (bypasses the cache) and report the available models. The catalog also auto-refreshes on every opencode startup; use this to pick up new models mid-session.";
+
+/**
+ * Build the maintenance tools shared by v1 and v2:
+ *  - `cursor_refresh_models`: force-refresh the model catalog.
+ *  - `cursor_update_plugin`: check for and perform a plugin update.
+ *
+ * `deps?.resolveApiKey` (v2 passes its stored-connection path) makes the
+ * refresh authenticate with the resolved key; without it (v1) the refresh
+ * stays keyless and discovery falls back to CURSOR_API_KEY / cached models,
+ * as before. The update tool never touches the key or session state.
+ */
+export function buildMaintenanceTools(
+  deps?: Pick<CursorToolDeps, "resolveApiKey">,
+): Record<string, ToolDefinition> {
+  return {
+    cursor_refresh_models: {
+      description: `${REFRESH_DESCRIPTION_BASE} Note: to update the plugin itself (not just the model list), use the cursor_update_plugin tool.`,
+      args: {},
+      execute: async () => {
+        const apiKey = deps ? await deps.resolveApiKey() : undefined;
+        const result = await discoverModels({ apiKey, forceRefresh: true });
+        const lines = result.models.map((m) => `- ${m.id} — ${m.displayName}`);
+        const header =
+          result.source === "live"
+            ? `Refreshed ${result.models.length} Cursor models (live):`
+            : `Could not fetch live models (${result.source}). ${result.warning ?? ""}`.trim();
+        return {
+          title: `Cursor models (${result.source})`,
+          output: [header, ...lines].join("\n"),
+          metadata: { source: result.source, count: result.models.length },
+        };
+      },
+    },
+    cursor_update_plugin: {
+      description:
+        "Check if the @stablekernel/opencode-cursor plugin is up to date and update it if not. Call this when the user asks to update, upgrade, or refresh the cursor plugin. Clears the cached install so opencode fetches the latest version on next launch.",
+      args: {},
+      execute: async () => {
+        if (process.env.CI || process.env.NO_UPDATE_NOTIFIER) {
+          return {
+            title: "cursor plugin (checks disabled)",
+            output: "Update checks are disabled (CI or NO_UPDATE_NOTIFIER is set).",
+            metadata: {
+              local: undefined,
+              latest: undefined,
+              status: "disabled" as const,
+            },
+          };
+        }
+
+        const local = getLocalVersion();
+        if (!local || !semver.valid(local)) {
+          return {
+            title: "cursor plugin (unknown version)",
+            output: "Could not determine the installed plugin version.",
+            metadata: { local, latest: undefined, status: "failed" as const },
+          };
+        }
+
+        const latest = await getLatestVersion();
+        if (!latest || !semver.valid(latest)) {
+          return {
+            title: "cursor plugin (registry unavailable)",
+            output:
+              "Could not fetch the latest version from npm. Check your network connection and try again.",
+            metadata: { local, latest, status: "failed" as const },
+          };
+        }
+
+        if (!semver.gt(latest, local)) {
+          return {
+            title: "cursor plugin (up to date)",
+            output: `The plugin is up to date (v${local}).`,
+            metadata: { local, latest, status: "up-to-date" as const },
+          };
+        }
+
+        // Plugin is outdated — clear the opencode plugin cache so it re-fetches on next launch.
+        const cachePath = PLUGIN_CACHE_PATH;
+        const removeCommand =
+          process.platform === "win32"
+            ? `rmdir /s /q "${cachePath}"`
+            : `rm -rf ${cachePath}`;
+
+        try {
+          rmSync(cachePath, { recursive: true, force: true });
+          clearVersionCache();
+          return {
+            title: "cursor plugin (updated)",
+            output:
+              `Plugin cache cleared (v${local} → v${latest}).\n` +
+              `Restart opencode to complete the upgrade — it will fetch v${latest} on next launch.`,
+            metadata: { local, latest, status: "updated" as const },
+          };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          return {
+            title: "cursor plugin (cache clear failed)",
+            output:
+              `Failed to clear plugin cache: ${message}\n\n` +
+              `To update manually, exit opencode and run:\n\n` +
+              `  ${removeCommand}\n\n` +
+              `then restart opencode.`,
+            metadata: { local, latest, status: "failed" as const },
+          };
+        }
+      },
+    },
   };
 }

@@ -14,7 +14,9 @@ It uses the [official Cursor SDK](https://cursor.com/docs/sdk/typescript) (`@cur
 
 ## Requirements
 
-- **opencode 1.17+**
+- **opencode v2 (2.0.19+, tested against 2.0.19)** or **opencode v1 (1.18.29+)** — the
+  plugin entrypoint is a dual object; v1 needs 1.18.29+ to load an object (with `id` +
+  `server`) as a path plugin, v2 reads the same object's `setup`.
 - **Node.js 22.13+ on your `PATH`** (optional) — opencode runs on [Bun](https://bun.sh) and the
   plugin runs the Cursor SDK in-process by default; Node is only needed for the `sidecar`
   transport fallback (see [Transport](#transport)).
@@ -70,6 +72,71 @@ Drop `@latest` (`"@stablekernel/opencode-cursor"`) or pin a version
 
 The stale-version check is skipped when the `CI` or `NO_UPDATE_NOTIFIER`
 environment variable is set.
+
+### opencode v2
+
+opencode v2 uses a `plugins` key (plural) and loads the plugin's `setup()` entrypoint
+(v1 uses `plugin` and calls `server()`):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": ["@stablekernel/opencode-cursor@latest"]
+}
+```
+
+Both generations load the same published package, so one install serves either.
+Minimum versions: v1 >= 1.18.29 (object plugin entrypoint), v2 tested against 2.0.19.
+
+On v2 the plugin registers the Cursor provider (pinned to the session directory
+via `settings.cwd`, so the agent runs in your project even when the v2 runner
+process was started elsewhere), the model catalog with real per-model cost
+(from stored auth or `CURSOR_API_KEY`), the session context mapping, the
+`cursor_refresh_models` tool, and the stored-key auth methods. The plugin
+reads no plugin-level options on v2 (a `plugins` entry with an options object
+is accepted by v2's config schema but ignored by this plugin), and it registers
+its own provider record — so the v1 `provider.cursor` block does not apply
+there. Configure v2 through the environment variables listed below.
+
+**Tools not exposed on v2** — `cursor_delegate`, `cursor_cloud_agent` (delegation)
+and `cursor_update_plugin` (self-update) are v1-only, deliberately:
+
+- **Delegation tools are fail-closed on v1** through a per-call approval gate.
+  v2's plugin API has no approval path a plugin can drive, and nothing else in
+  2.0.19 enforces one for plugin tools — so on v2 they would run Cursor agents
+  *ungated*. The plugin leaves them unregistered on v2: unavailable beats
+  silently ungated. They return when v2 grows a real approval path.
+- **`cursor_update_plugin` clears the v1 plugin cache layout**; v2 caches
+  plugins elsewhere (`<cache>/npm/<spec>/`) and ships its own updater. On v2 run
+  `opencode plugin update` instead.
+
+**Known v2 gaps** — behaviors the v1 `config`/`chat.params`/`event` hooks provide that
+v2 does not:
+
+- **Delegation tools** (`cursor_delegate`, `cursor_cloud_agent`) — unavailable
+  on v2 (fail-closed; see "Tools not exposed on v2" above). On v1 they are
+  gated by a per-call approval honored from your `permission` config.
+- **`cursor_update_plugin`** — unavailable on v2; run
+  `opencode plugin update` instead (see above).
+- **Live MCP forwarding** — v1 re-reads opencode's MCP server set every turn, so
+  mid-session enable/disable reaches the Cursor agent; v2 forwards nothing.
+- **Skill mirror / skills catalogue** — v1 mirrors opencode skills into
+  `.cursor/skills/` and injects the catalogue; unavailable on v2.
+- **Plugin-tools bridge** — v1 exposes other plugins' custom tools to the Cursor
+  agent via a local stdio MCP server; unavailable on v2.
+- **Subagent `task`-part stamping** — v1 stamps the child session id on the
+  running `task` part so the TUI card is clickable; unavailable on v2 (delegate
+  results still surface, without the child-session link).
+- **`provider.cursor.options` settings** — the v1 `provider.cursor.options`
+  block (forwarding, skills, sandbox, `autoCompaction`, ...) is not read on
+  v2; the plugin registers its own provider record there. `autoCompaction`
+  is therefore always off on v2 (models are always listed with the
+  no-auto-compaction limit — see [Compaction](#compaction)).
+- **Update toast / stale-version warning UI** — v2 has no `ctx.tui`; use
+  `cursor_refresh_models` (v2) / the maintenance tools (v1) and
+  `opencode plugin update`.
+- **`app.log` bridge** — v2 removed the client write endpoint, so plugin events
+  that v1 surfaced through `app.log` are not logged on v2.
 
 To keep the plugin up to date easily, install the `opencode-plugins-refresh` helper (offered by
 the one-line installer, or install manually — see [Keeping the plugin up to date](#keeping-the-plugin-up-to-date)).
@@ -469,6 +536,13 @@ are gated by opencode's `permission` config:
 ```json
 { "permission": { "cursor_delegate": "ask", "cursor_cloud_agent": "ask" } }
 ```
+
+> [!NOTE]
+> **opencode v1 only.** These tools are not exposed on v2 — v2 has no
+> plugin-drivable approval path, and the tools are fail-closed by design, so
+> on v2 they are simply absent (see [opencode v2](#opencode-v2)). The
+> `permission` shape above is the v1 config; for the host's behavior without
+> an entry, see opencode's own `permission` docs.
 
 ### `cursor_delegate` (local)
 

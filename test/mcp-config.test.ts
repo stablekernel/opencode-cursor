@@ -4,7 +4,7 @@ import {
 	findUnshareableOAuthServers,
 	translateMcpServers,
 } from "../src/plugin/mcp-config.js";
-import plugin from "../src/plugin/index.js";
+import { CursorPlugin as plugin } from "../src/plugin/index.js";
 
 describe("translateMcpServers", () => {
 	it("maps a local (stdio) server, splitting command/args and keeping env", () => {

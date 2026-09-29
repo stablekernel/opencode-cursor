@@ -26,6 +26,7 @@
   ],
   "files": [
     "dist",
+    "server.js",
     "README.md",
     "CHANGELOG.md"
   ],

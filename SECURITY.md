@@ -36,6 +36,12 @@ your opencode `permission` config (`allow` / `ask` / `deny`) controls them. The
 gate is **fail-closed**: if no permission mechanism is available, or approval is
 rejected, the call is blocked rather than silently allowed.
 
+On **opencode v2** these tools are **not exposed at all**: v2's plugin API has
+no approval path a plugin can drive (no `ask`/`assert`), and nothing else in
+2.0.19 enforces one for plugin tools. Rather than registering them without a
+gate, the plugin leaves them unregistered — the same fail-closed outcome, by
+absence.
+
 ### Skills mirror — instructions cross the permission boundary
 
 When `forwardSkills` is enabled (default), opencode's resolved skills are

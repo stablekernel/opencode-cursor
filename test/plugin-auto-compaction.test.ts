@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Config } from "@opencode-ai/plugin";
-import plugin from "../src/plugin/index.js";
+import { CursorPlugin as plugin } from "../src/plugin/index.js";
 import { NO_AUTO_COMPACTION_INPUT_LIMIT } from "../src/model-limits.js";
 
 /**

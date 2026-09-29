@@ -1,7 +1,6 @@
 import type { Config, Plugin, ToolContext } from "@opencode-ai/plugin";
 import type { Auth } from "@opencode-ai/sdk/v2";
 import type { McpServerConfig } from "@cursor/sdk";
-import { rmSync } from "node:fs";
 import { homedir } from "node:os";
 import semver from "semver";
 import { resolveCursorApiKey } from "../api-key.js";
@@ -13,13 +12,8 @@ import {
 	type McpStatusMap,
 	translateMcpServers,
 } from "./mcp-config.js";
-import { buildCursorTools } from "./cursor-tools.js";
-import {
-	getLocalVersion,
-	getLatestVersion,
-	clearVersionCache,
-	PLUGIN_CACHE_PATH,
-} from "../version-check.js";
+import { buildCursorTools, buildMaintenanceTools } from "./cursor-tools.js";
+import { getLocalVersion, getLatestVersion } from "../version-check.js";
 import { removeSystemRule } from "../provider/system-rule.js";
 import {
 	clearLogBridge,
@@ -52,6 +46,7 @@ import {
 	startPluginToolsBridge,
 	type PluginToolsBridge,
 } from "./plugin-tools-bridge.js";
+import { cursorV2Setup } from "./v2.js";
 
 function apiKeyFromAuth(auth: Auth | undefined): string | undefined {
 	return auth?.type === "api" ? auth.key : undefined;
@@ -771,99 +766,9 @@ export const CursorPlugin: Plugin = async (input) => {
 		},
 
 		tool: {
-			cursor_update_plugin: {
-				description:
-					"Check if the @stablekernel/opencode-cursor plugin is up to date and update it if not. Call this when the user asks to update, upgrade, or refresh the cursor plugin. Clears the cached install so opencode fetches the latest version on next launch.",
-				args: {},
-				execute: async () => {
-					if (process.env.CI || process.env.NO_UPDATE_NOTIFIER) {
-						return {
-							title: "cursor plugin (checks disabled)",
-							output: "Update checks are disabled (CI or NO_UPDATE_NOTIFIER is set).",
-							metadata: {
-								local: undefined,
-								latest: undefined,
-								status: "disabled" as const,
-							},
-						};
-					}
-
-					const local = getLocalVersion();
-					if (!local || !semver.valid(local)) {
-						return {
-							title: "cursor plugin (unknown version)",
-							output: "Could not determine the installed plugin version.",
-							metadata: { local, latest: undefined, status: "failed" as const },
-						};
-					}
-
-					const latest = await getLatestVersion();
-					if (!latest || !semver.valid(latest)) {
-						return {
-							title: "cursor plugin (registry unavailable)",
-							output:
-								"Could not fetch the latest version from npm. Check your network connection and try again.",
-							metadata: { local, latest, status: "failed" as const },
-						};
-					}
-
-					if (!semver.gt(latest, local)) {
-						return {
-							title: "cursor plugin (up to date)",
-							output: `The plugin is up to date (v${local}).`,
-							metadata: { local, latest, status: "up-to-date" as const },
-						};
-					}
-
-					// Plugin is outdated — clear the opencode plugin cache so it re-fetches on next launch.
-					const cachePath = PLUGIN_CACHE_PATH;
-					const removeCommand =
-						process.platform === "win32"
-							? `rmdir /s /q "${cachePath}"`
-							: `rm -rf ${cachePath}`;
-
-					try {
-						rmSync(cachePath, { recursive: true, force: true });
-						clearVersionCache();
-						return {
-							title: "cursor plugin (updated)",
-							output:
-								`Plugin cache cleared (v${local} → v${latest}).\n` +
-								`Restart opencode to complete the upgrade — it will fetch v${latest} on next launch.`,
-							metadata: { local, latest, status: "updated" as const },
-						};
-					} catch (err) {
-						const message = err instanceof Error ? err.message : String(err);
-						return {
-							title: "cursor plugin (cache clear failed)",
-							output:
-								`Failed to clear plugin cache: ${message}\n\n` +
-								`To update manually, exit opencode and run:\n\n` +
-								`  ${removeCommand}\n\n` +
-								`then restart opencode.`,
-							metadata: { local, latest, status: "failed" as const },
-						};
-					}
-				},
-			},
-			cursor_refresh_models: {
-				description:
-					"Refresh the live Cursor model catalog now (bypasses the cache) and report the available models. The catalog also auto-refreshes on every opencode startup; use this to pick up new models mid-session. Note: to update the plugin itself (not just the model list), use the cursor_update_plugin tool.",
-				args: {},
-				execute: async () => {
-					const result = await discoverModels({ forceRefresh: true });
-					const lines = result.models.map((m) => `- ${m.id} — ${m.displayName}`);
-					const header =
-						result.source === "live"
-							? `Refreshed ${result.models.length} Cursor models (live):`
-							: `Could not fetch live models (${result.source}). ${result.warning ?? ""}`.trim();
-					return {
-						title: `Cursor models (${result.source})`,
-						output: [header, ...lines].join("\n"),
-						metadata: { source: result.source, count: result.models.length },
-					};
-				},
-			},
+			// Maintenance tools (refresh catalog / update plugin) are shared
+			// with the v2 entrypoint via buildMaintenanceTools.
+			...buildMaintenanceTools(),
 			// Delegation tools that complement the provider: a cloud/background agent
 			// and a permission-gated local delegate. They resolve the Cursor key from
 			// the auth loader (captured above) or CURSOR_API_KEY.
@@ -888,4 +793,18 @@ export const CursorPlugin: Plugin = async (input) => {
 	};
 };
 
-export default CursorPlugin;
+/**
+ * Dual entrypoint: opencode v1 (>= 1.18.29) calls the `server()` hook; v2
+ * (>= 2.0.19) calls `setup()`. Each host ignores the other's key. `id` is
+ * required by both for `file://` path plugins. The named `CursorPlugin`
+ * export stays for direct imports.
+ * `cursorV2Setup` uses only locally-declared structural types, so the
+ * published `.d.ts` is self-contained.
+ */
+const dualExport = {
+	id: "opencode-cursor",
+	setup: cursorV2Setup,
+	server: CursorPlugin,
+};
+
+export default dualExport;

@@ -4,6 +4,51 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- **Add: opencode v2 support (dual v1/v2 plugin entrypoint).** The default
+  export is now a dual object: the v2 `{ id, setup }` shape plus the v1
+  `server()` entrypoint. opencode v1 (>= 1.18.29) calls `server()` as before;
+  opencode v2 (tested against 2.0.19) calls `setup()` and registers the Cursor
+  provider (with `settings.cwd` pinned to the session directory), the model
+  catalog seeded from stored auth or the `CURSOR_API_KEY` env with real
+  per-model cost (same table as v1), the session context mapping, the
+  dedicated title hook (marks title generation ephemeral, same race fix as
+  v1's `chat.params`), the `cursor_refresh_models` tool, and the stored-key
+  auth methods through the v2 transform/hook API. v2 config uses the
+  `plugins` key (plural) with a plain package string entry; the plugin reads
+  no plugin-level options on v2 (v2's `providers.cursor.settings` are not
+  consulted — the plugin registers its own provider record).
+  The provider package specifier honors `OPENCODE_CURSOR_PROVIDER_NPM` on
+  v2 as well, so a local `file://` build can be tested without publishing.
+  A root `server.js` entry file was added for v2's path-plugin loader, and
+  the `cursor_refresh_models` / `cursor_update_plugin` bodies moved to a
+  shared builder used by both entrypoints. On v2 the refresh tool points
+  its description at `opencode plugin update` (not the unregistered
+  `cursor_update_plugin`) and re-resolves the stored connection key on
+  every call; on v1 the refresh tool is unchanged (keyless, as before).
+  The published `.d.ts` files no longer reference the dev-only
+  `@opencode/plugin` package (v2 structural types are declared locally), so
+  TypeScript consumers resolve them without extra installs.
+
+  Tools intentionally NOT registered on v2 (fail-closed — absent, not
+  silently ungated):
+
+  - `cursor_delegate` / `cursor_cloud_agent` — v1 gates them fail-closed
+    through the per-call `ask` approval; v2's plugin ToolContext has no
+    `ask`/`assert` path a plugin can drive and nothing else in 2.0.19
+    enforces one, so on v2 they would run Cursor agents ungated. They are
+    unavailable on v2 until a real approval path exists.
+  - `cursor_update_plugin` — it clears the v1 `packages/` cache layout;
+    v2 caches plugins under `<cache>/npm/<spec>/` and updates them with
+    `opencode plugin update`, so a v1 cache-clear would report success
+    while doing nothing. Use `opencode plugin update` on v2.
+
+  Known v2 gaps (also in README): no live MCP forwarding, no skill
+  mirror/skills catalogue, no plugin-tools bridge, no subagent `task`-part
+  stamping, no update toast (v2 has no `ctx.tui`), no `app.log` bridge (v2
+  removed the write endpoint), and the `provider.cursor.options` block is
+  not read on v2 (models are always listed with the no-auto-compaction
+  limit).
+
 ## [0.9.1-next.0] — 2026-08-26 (pre-release)
 
 Fixes the subagent child-session pane fragmenting one flowing answer

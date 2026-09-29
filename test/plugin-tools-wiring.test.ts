@@ -65,7 +65,7 @@ describe("CursorPlugin plugin-tools wiring", () => {
 	}
 
 	it("adds opencode-plugin-tools to mcpServers and gates by permission", async () => {
-		const { default: plugin } = await import("../src/plugin/index.js");
+		const { CursorPlugin: plugin } = await import("../src/plugin/index.js");
 		// Lay the fake cache out exactly like opencodePackagesRoot expects:
 		// $XDG_CACHE_HOME/opencode/packages/<spec>/node_modules/<pkg>/.
 		const home = tmp();
@@ -263,7 +263,7 @@ describe("CursorPlugin plugin-tools wiring", () => {
 	});
 
 	it("keeps the plugin-tools bridge when live config.get omits plugin", async () => {
-		const { default: plugin } = await import("../src/plugin/index.js");
+		const { CursorPlugin: plugin } = await import("../src/plugin/index.js");
 		const home = tmp();
 		const cacheRoot = join(home, ".cache", "opencode", "packages");
 		await writeToolPlugin(cacheRoot);
