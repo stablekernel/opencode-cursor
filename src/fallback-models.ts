@@ -13,7 +13,7 @@ export const FALLBACK_MODELS: ModelListItem[] = [
     displayName: "Composer 2.5",
     description: "Cursor's default agent model (fallback entry).",
     parameters: [
-      { id: "thinking", displayName: "Thinking", values: [{ value: "off" }, { value: "on" }] },
+      { id: "fast", displayName: "Fast", values: [{ value: "false" }, { value: "true" }] },
     ],
   },
   { id: "claude-opus-4-8", displayName: "Claude Opus 4.8 (via Cursor)" },

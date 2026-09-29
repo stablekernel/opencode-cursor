@@ -81,11 +81,18 @@ opencode v2 uses a `plugins` key (plural) and loads the plugin's `setup()` entry
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugins": ["@stablekernel/opencode-cursor@latest"]
+  "plugins": ["@stablekernel/opencode-cursor@next"]
 }
 ```
 
-Both generations load the same published package, so one install serves either.
+> v2 support is published under the `next` dist-tag (`0.10.0-next.1` or later)
+> until it is promoted to `latest`. `@latest` currently resolves to 0.9.0, a
+> v1-only build that opencode v2 rejects with "Plugin must export a default
+> definition with an id and an effect or setup function". Switch the spec back
+> to `@latest` once 0.10.0 is stable.
+
+From 0.10.0 onward both generations load the same published package, so one
+install serves either (0.9.x `@latest` is v1-only).
 Minimum versions: v1 >= 1.18.29 (object plugin entrypoint), v2 tested against 2.0.19.
 
 **Registry mirrors:** on v2 the provider package is installed at exactly the plugin's
@@ -309,8 +316,8 @@ needed.
 Param ids are **per model** — use the id the model actually advertises, or Cursor ignores the
 param and falls back to its own default (e.g. `high` effort). `grok-4.6` uses `effort`,
 `gpt-5.5` uses `reasoning`, `claude-opus-4-8` uses `effort` (plus a boolean `thinking`), and
-`composer-2.5` has only `fast`. Run `cursor_refresh_models` to list model ids, and check the
-model picker's variant names for the values a model accepts.
+`composer-2.5` has only `fast`. Run `cursor_refresh_models` to list each model id
+with its param ids and accepted values.
 
 To set controls statically per model:
 

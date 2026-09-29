@@ -12,10 +12,31 @@ All notable changes to this project will be documented in this file.
   tool-arg descriptions, were corrected to say so (wording only — no behavior
   change).
 
+- **Fix: README v2 install snippet points at `@next` (#126).** The
+  `plugins` example used `@latest`, which resolves to 0.9.0 — a v1-only
+  build that opencode v2 rejects with "Plugin must export a default
+  definition with an id and an effect or setup function". v2 support is
+  published under the `next` dist-tag (0.10.0-next.1+) until promoted;
+  the snippet and a note now say so.
+
+- **Fix: fallback catalog's composer-2.5 param matches the live one.**
+  The keyless/fallback entry advertised a `thinking` param (off/on) that
+  the live catalog does not expose, yielding a bogus `thinking` variant;
+  it now declares only `fast` (false/true), so the fallback path yields
+  exactly the `fast` variant and `{ fast: "false" }` defaults.
+
+- **Add: `cursor_refresh_models` lists param ids and values (#119).**
+  Each model line now appends the model's advertised params as
+  `[effort=low|medium|high|xhigh, fast=false|true]` (no suffix when the
+  model has none), so accepted param ids and values are readable
+  straight from the tool output.
+
 - **Chore: dependency bumps (#122, #124, #125) and audit overrides.**
   Consolidates the three open Dependabot PRs: `@connectrpc/connect-node`
-  2.1.2 → 2.2.0 (required at runtime by `@cursor/sdk`, not imported
-  by the plugin itself; the 2.2.0 additions are server-side),
+  2.1.2 → 2.2.0 (nothing in src/, scripts/, or test/ imports it, and
+  `@cursor/sdk` declares `^1.6.1` and nests its own 1.7.0 copy, so the
+  top-level entry — added in #31 when the SDK did not declare it — no
+  longer looks needed; left in place as a removal candidate),
   `@cursor/sdk` 1.0.31 → 1.0.32, `@opencode-ai/plugin` and
   `@opencode-ai/sdk` 1.18.25/1.18.30 → 1.18.33 (kept on one version, one
   sdk copy in the tree), `@ai-sdk/provider` 3.0.15 → 3.0.18,

@@ -1,4 +1,5 @@
 import { tool, type ToolContext, type ToolDefinition } from "@opencode-ai/plugin";
+import type { ModelListItem } from "@cursor/sdk";
 import { rmSync } from "node:fs";
 import semver from "semver";
 import { runCloudAgent } from "../provider/cloud-agent.js";
@@ -263,6 +264,21 @@ export const REFRESH_DESCRIPTION_BASE =
   "Refresh the live Cursor model catalog now (bypasses the cache) and report the available models. The catalog also auto-refreshes on every opencode startup; use this to pick up new models mid-session.";
 
 /**
+ * One `cursor_refresh_models` output line, with the model's advertised
+ * params appended when it has any:
+ * `- grok-4.6 — Grok 4.6 [effort=low|medium|high|xhigh, fast=false|true]`.
+ * Models without parameters keep the plain `- id — name` line.
+ */
+function modelLine(m: Pick<ModelListItem, "id" | "displayName" | "parameters">): string {
+  const params = m.parameters ?? [];
+  if (params.length === 0) return `- ${m.id} — ${m.displayName}`;
+  const joined = params
+    .map((p) => `${p.id}=${(p.values ?? []).map((v) => v.value).join("|")}`)
+    .join(", ");
+  return `- ${m.id} — ${m.displayName} [${joined}]`;
+}
+
+/**
  * Build the maintenance tools shared by v1 and v2:
  *  - `cursor_refresh_models`: force-refresh the model catalog.
  *  - `cursor_update_plugin`: check for and perform a plugin update.
@@ -282,7 +298,7 @@ export function buildMaintenanceTools(
       execute: async () => {
         const apiKey = deps ? await deps.resolveApiKey() : undefined;
         const result = await discoverModels({ apiKey, forceRefresh: true });
-        const lines = result.models.map((m) => `- ${m.id} — ${m.displayName}`);
+        const lines = result.models.map(modelLine);
         const header =
           result.source === "live"
             ? `Refreshed ${result.models.length} Cursor models (live):`

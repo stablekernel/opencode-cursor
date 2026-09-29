@@ -3,12 +3,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const runCloudAgent = vi.fn();
 const runDelegate = vi.fn();
 const linkDelegateSession = vi.fn();
+const discoverModels = vi.fn();
 
 vi.mock("../src/provider/cloud-agent.js", () => ({ runCloudAgent }));
 vi.mock("../src/provider/delegate.js", () => ({ runDelegate }));
 vi.mock("../src/provider/subagent-bridge.js", () => ({ linkDelegateSession }));
+vi.mock("../src/model-discovery.js", () => ({ discoverModels }));
 
-const { buildCursorTools } = await import("../src/plugin/cursor-tools.js");
+const { buildCursorTools, buildMaintenanceTools } = await import("../src/plugin/cursor-tools.js");
 
 function ctx(ask: ReturnType<typeof vi.fn>) {
   return {
@@ -30,6 +32,7 @@ afterEach(() => {
   runCloudAgent.mockReset();
   runDelegate.mockReset();
   linkDelegateSession.mockReset();
+  discoverModels.mockReset();
 });
 
 describe("buildCursorTools", () => {
@@ -310,5 +313,40 @@ describe("buildCursorTools", () => {
 
     expect(String(out)).toContain("Delegation failed");
     expect(String(out)).toContain("agent crashed");
+  });
+});
+
+describe("buildMaintenanceTools — cursor_refresh_models output", () => {
+  const exec = async () => {
+    const tools = buildMaintenanceTools();
+    const out = (await tools.cursor_refresh_models!.execute({}, undefined as never)) as {
+      output: string;
+    };
+    return out.output;
+  };
+
+  it("appends [id=values] to a model with params; plain line without", async () => {
+    discoverModels.mockResolvedValue({
+      source: "live",
+      models: [
+        {
+          id: "grok-4.6",
+          displayName: "Grok 4.6",
+          parameters: [
+            {
+              id: "effort",
+              values: [{ value: "low" }, { value: "medium" }, { value: "high" }, { value: "xhigh" }],
+            },
+            { id: "fast", values: [{ value: "false" }, { value: "true" }] },
+          ],
+        },
+        { id: "plain-model", displayName: "Plain Model" },
+      ],
+    });
+    const output = await exec();
+    expect(output).toContain(
+      "- grok-4.6 — Grok 4.6 [effort=low|medium|high|xhigh, fast=false|true]",
+    );
+    expect(output.endsWith("- plain-model — Plain Model")).toBe(true);
   });
 });
