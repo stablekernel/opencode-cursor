@@ -88,6 +88,10 @@ opencode v2 uses a `plugins` key (plural) and loads the plugin's `setup()` entry
 Both generations load the same published package, so one install serves either.
 Minimum versions: v1 >= 1.18.29 (object plugin entrypoint), v2 tested against 2.0.19.
 
+**Registry mirrors:** on v2 the provider package is installed at exactly the plugin's
+version, so behind a registry mirror a fresh release can fail with `ETARGET` until the
+mirror syncs it. Retry later, or point npm at `https://registry.npmjs.org`.
+
 On v2 the plugin registers the Cursor provider (pinned to the session directory
 via `settings.cwd`, so the agent runs in your project even when the v2 runner
 process was started elsewhere), the model catalog with real per-model cost

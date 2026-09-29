@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.10.0-next.1] — 2026-09-29 (pre-release)
+
+Adds opencode v2 support alongside v1 (#127). Not on `latest`; install with
+`npm install @stablekernel/opencode-cursor@next` to test. v1 now requires
+opencode 1.18.29+ (object plugin entrypoint). `0.10.0-next.0` was tagged but
+never published (its release job failed at the npm publish step), so this is
+the first published build with v2 support.
+
+Behind a registry mirror, a fresh pre-release can fail to install with
+`ETARGET` until the mirror syncs the new version; retry later or point npm
+at `https://registry.npmjs.org`.
+
 - **Fix: opencode v2 loads the provider package at the plugin's own version.**
   v2 registered the provider with the bare package name, which opencode
   resolves to `latest` — so a plugin installed from `@next` (or any other
@@ -14,12 +26,6 @@ All notable changes to this project will be documented in this file.
   `OPENCODE_CURSOR_PROVIDER_NPM` still overrides everything, so local
   `file://` builds keep working. v1 is unaffected (its provider is loaded
   in-process, not via the package specifier).
-
-## [0.10.0-next.0] — 2026-09-29 (pre-release)
-
-Adds opencode v2 support alongside v1 (#127). Not on `latest`; install with
-`npm install @stablekernel/opencode-cursor@next` to test. v1 now requires
-opencode 1.18.29+ (object plugin entrypoint).
 
 - **Add: opencode v2 support (dual v1/v2 plugin entrypoint).** The default
   export is now a dual object: the v2 `{ id, setup }` shape plus the v1
