@@ -58,28 +58,29 @@
     "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
-    "@connectrpc/connect-node": "^2.1.2",
-    "@cursor/sdk": "^1.0.24",
-    "@opencode-ai/plugin": "^1.18.21",
+    "@connectrpc/connect-node": "^2.2.0",
+    "@cursor/sdk": "^1.0.32",
+    "@opencode-ai/plugin": "^1.18.33",
     "semver": "^7.8.4"
   },
   "overrides": {
     "@opencode-ai/sdk": "$@opencode-ai/sdk",
-    "undici": "^6.28.0",
+    "undici": "^6.28.1",
     "tar": "^7.5.11",
     "node-gyp": "^12.4.0",
-    "esbuild": "^0.28.1"
+    "esbuild": "^0.28.1",
+    "toml": "^4.2.0"
   },
   "peerDependencies": {
     "@ai-sdk/provider": "^3.0.0"
   },
   "devDependencies": {
-    "@ai-sdk/provider": "^3.0.15",
-    "@opencode-ai/sdk": "^1.18.30",
-    "@types/node": "^26.4.1",
+    "@ai-sdk/provider": "^3.0.18",
+    "@opencode-ai/sdk": "^1.18.33",
+    "@types/node": "^26.6.3",
     "@types/semver": "^7.8.0",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.2"
   }
 }

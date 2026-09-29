@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- **Docs: model param ids are per model (#119).** Cursor model param ids differ
+  per model, so a `thinking` param set on a model that doesn't advertise one
+  (e.g. grok-4.6, which takes `effort`) is ignored and Cursor falls back to its
+  own default. The README's per-request controls example, `params` row, and
+  `thinking` rows, plus the `cursor_delegate`/`cursor_cloud_agent` `thinking`
+  tool-arg descriptions, were corrected to say so (wording only — no behavior
+  change).
+
+- **Chore: dependency bumps (#122, #124, #125) and audit overrides.**
+  Consolidates the three open Dependabot PRs: `@connectrpc/connect-node`
+  2.1.2 → 2.2.0 (required at runtime by `@cursor/sdk`, not imported
+  by the plugin itself; the 2.2.0 additions are server-side),
+  `@cursor/sdk` 1.0.31 → 1.0.32, `@opencode-ai/plugin` and
+  `@opencode-ai/sdk` 1.18.25/1.18.30 → 1.18.33 (kept on one version, one
+  sdk copy in the tree), `@ai-sdk/provider` 3.0.15 → 3.0.18,
+  `@types/node` 26.5.0 → 26.6.3, `vitest` 5.0.0 → 5.0.2.
+  `@ai-sdk/provider` v4 and TypeScript 7 stay blocked (see
+  .github/dependabot.yml). Clears both `npm audit` findings via overrides:
+  `undici` `^6.28.1` (resolves 6.29.0, GHSA-3wwx-pv8p-q78v) and a new
+  `toml` `^4.2.0` (resolves 4.3.0, GHSA-82x6-q7mm-w9cf; reached through
+  `effect` under `@opencode-ai/plugin`).
+
 ## [0.10.0-next.1] — 2026-09-29 (pre-release)
 
 Adds opencode v2 support alongside v1 (#127). Not on `latest`; install with

@@ -3,7 +3,7 @@ import type { AgentModeOption, ModelSelection } from "@cursor/sdk";
 /** Per-model static control defaults (from provider/model config options). */
 export interface StaticControls {
   mode: AgentModeOption;
-  /** Default Cursor model params (id -> value), e.g. { thinking: "high" }. */
+  /** Default Cursor model params (id -> value), e.g. { effort: "high" }. */
   params?: Record<string, string>;
   /**
    * Per-model floor params, applied UNDER {@link params} and per-request options
@@ -20,7 +20,7 @@ export interface ResolvedControls {
 
 /**
  * Build a Cursor `ModelSelection` from a model id and an optional map of model
- * params (e.g. `{ thinking: "high" }`). Shared by the provider control
+ * params (e.g. `{ effort: "high" }`). Shared by the provider control
  * resolution and the cloud/delegate tools so param handling stays consistent.
  */
 export function buildModelSelection(
@@ -46,7 +46,7 @@ function isMode(value: unknown): value is AgentModeOption {
  *
  * Recognized keys in `providerOptions.cursor`:
  *  - `mode`: "agent" | "plan"
- *  - `params`: Record<string,string> of Cursor model params (e.g. { thinking: "high" })
+ *  - `params`: Record<string,string> of Cursor model params (e.g. { effort: "high" })
  *  - `thinking`: string convenience, mapped to the `thinking` param if not already set
  */
 export function resolveControls(

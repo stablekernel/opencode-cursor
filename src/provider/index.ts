@@ -32,7 +32,7 @@ export interface CursorProviderOptions {
 	cwd?: string;
 	/** Default conversation mode: "agent" (default) or "plan". Overridable per-request. */
 	mode?: AgentModeOption;
-	/** Default Cursor model params (id -> value), e.g. { thinking: "high" }. */
+	/** Default Cursor model params (id -> value), e.g. { effort: "high" }. */
 	params?: Record<string, string>;
 	/**
 	 * Per-model floor params keyed by model id, e.g. `{ "composer-2.5": { fast:

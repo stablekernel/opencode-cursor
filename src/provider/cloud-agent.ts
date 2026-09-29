@@ -23,7 +23,7 @@ export interface CloudAgentParams {
   model?: string;
   /** Conversation mode; defaults to "agent". */
   mode?: AgentModeOption;
-  /** Convenience for the Cursor `thinking` model param (e.g. "high"). */
+  /** Convenience that sets the literal Cursor `thinking` model param. */
   thinking?: string;
   /** When true, open a PR automatically once the agent finishes. */
   autoCreatePR?: boolean;

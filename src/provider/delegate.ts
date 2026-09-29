@@ -12,7 +12,7 @@ export interface DelegateParams {
 	model: string;
 	/** Conversation mode; defaults to "agent". */
 	mode?: AgentModeOption;
-	/** Convenience for the Cursor `thinking` model param (e.g. "high"). */
+	/** Convenience that sets the literal Cursor `thinking` model param. */
 	thinking?: string;
 	/**
 	 * Working directory the local agent operates in. An array supplies

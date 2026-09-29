@@ -87,7 +87,7 @@ export function buildCursorTools(deps: CursorToolDeps): Record<string, ToolDefin
           .describe("Branch or ref to start from (defaults to the repo default branch)."),
         model: s.string().optional().describe("Cursor model id (optional for cloud)."),
         mode: s.enum(["agent", "plan"]).optional().describe("Conversation mode."),
-        thinking: s.string().optional().describe("Thinking level, e.g. 'high'."),
+        thinking: s.string().optional().describe("Sets the model's `thinking` param (\"true\"/\"false\"); only for models that advertise it. Ignored otherwise."),
         autoCreatePR: s
           .boolean()
           .optional()
@@ -162,7 +162,7 @@ export function buildCursorTools(deps: CursorToolDeps): Record<string, ToolDefin
         prompt: s.string().describe("The subtask to delegate to Cursor."),
         model: s.string().describe("Cursor model id to run the delegation on."),
         mode: s.enum(["agent", "plan"]).optional().describe("Conversation mode."),
-        thinking: s.string().optional().describe("Thinking level, e.g. 'high'."),
+        thinking: s.string().optional().describe("Sets the model's `thinking` param (\"true\"/\"false\"); only for models that advertise it. Ignored otherwise."),
         cwd: s
           .string()
           .optional()

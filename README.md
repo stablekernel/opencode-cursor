@@ -246,7 +246,7 @@ See [SECURITY.md](./SECURITY.md) for the full threat model.
 | `apiKey` | `CURSOR_API_KEY` | Cursor API key |
 | `cwd` | `process.cwd()` | Directory the local agent operates in |
 | `mode` | `"agent"` | Default conversation mode (`"agent"` or `"plan"`) |
-| `params` | — | Default model params, e.g. `{ thinking: "high" }` |
+| `params` | — | Default model params, e.g. `{ effort: "high" }` (param ids are per model — see [Per-request controls](#per-request-controls-mode-thinking-level)) |
 | `settingSources` | — | Cursor settings layers to load: `["project","user","all",...]` — pulls in your Cursor skills, rules, and `.cursor/mcp.json` |
 | `sandbox` | — | Run the agent's tools in [Cursor's sandbox](https://cursor.com/docs/agent/sandbox) |
 | `autoReview` | `false` | Gate tool calls through Cursor's classifier-backed Auto review (best-effort, not a security boundary) |
@@ -306,12 +306,18 @@ variant to opt in, or set it per model under `options.params.fast` below.
 opencode's **plan agent** (`Tab`) maps to Cursor's plan mode automatically — no manual config
 needed.
 
+Param ids are **per model** — use the id the model actually advertises, or Cursor ignores the
+param and falls back to its own default (e.g. `high` effort). `grok-4.6` uses `effort`,
+`gpt-5.5` uses `reasoning`, `claude-opus-4-8` uses `effort` (plus a boolean `thinking`), and
+`composer-2.5` has only `fast`. Run `cursor_refresh_models` to list model ids, and check the
+model picker's variant names for the values a model accepts.
+
 To set controls statically per model:
 
 ```json
 { "provider": { "cursor": { "models": {
-  "composer-2.5": { "options": { "params": { "thinking": "high" } } }
-} } } }
+  "grok-4.6": { "options": { "params": { "effort": "medium" } } } }
+} } }
 ```
 
 ## System prompt
@@ -560,7 +566,7 @@ non-session cwd — see [Skills limitations](#limitations)).
 | `prompt` | ✅ | The subtask to delegate |
 | `model` | ✅ | Cursor model id |
 | `mode` | — | `"agent"` or `"plan"` |
-| `thinking` | — | Thinking level (e.g. `"high"`) |
+| `thinking` | — | Sets the model's `thinking` param (`"true"`/`"false"`) — only on models that advertise it (e.g. `claude-opus-4-8`); models using `effort`/`reasoning`/`reasoning_effort` can't be set through this arg |
 | `cwd` | — | Working directory |
 | `sandbox` | — | Run in Cursor's sandbox |
 | `agentId` | — | Resume a specific Cursor agent |
@@ -577,7 +583,7 @@ open a PR.
 | `startingRef` | — | Branch/ref to start from |
 | `model` | — | Cursor model id |
 | `mode` | — | `"agent"` or `"plan"` |
-| `thinking` | — | Thinking level |
+| `thinking` | — | Sets the model's `thinking` param (`"true"`/`"false"`) — only on models that advertise it (e.g. `claude-opus-4-8`); models using `effort`/`reasoning`/`reasoning_effort` can't be set through this arg |
 | `autoCreatePR` | — | Open a PR when finished |
 | `workOnCurrentBranch` | — | Operate on the current branch instead of a new one |
 
