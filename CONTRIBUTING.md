@@ -62,11 +62,14 @@ The release job will:
 3. Publish to npm with [provenance attestation](https://docs.npmjs.com/generating-provenance-statements).
 4. Create a GitHub Release with auto-generated release notes.
 
+npm publishing uses [trusted publishing (OIDC)](https://docs.npmjs.com/trusted-publishers)
+configured on npmjs.com for this repository (`stablekernel/opencode-cursor`, workflow
+`release.yml`), so no npm token secret is needed.
+
 **Required repository secrets** (Settings → Secrets → Actions):
 
 | Secret | Purpose |
 | --- | --- |
-| `NPM_TOKEN` | npm automation token with `publish` access |
 | `CURSOR_API_KEY` | (optional) live-path integration test during release |
 
 **Pre-publish checklist:** update `CHANGELOG.md`, confirm `version` in
