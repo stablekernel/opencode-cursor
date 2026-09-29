@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.10.0-next.0] — 2026-09-29 (pre-release)
+
+Adds opencode v2 support alongside v1 (#127). Not on `latest`; install with
+`npm install @stablekernel/opencode-cursor@next` to test. v1 now requires
+opencode 1.18.29+ (object plugin entrypoint).
+
 - **Add: opencode v2 support (dual v1/v2 plugin entrypoint).** The default
   export is now a dual object: the v2 `{ id, setup }` shape plus the v1
   `server()` entrypoint. opencode v1 (>= 1.18.29) calls `server()` as before;
