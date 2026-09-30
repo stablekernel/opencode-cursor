@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.10.0-next.2] — 2026-09-30 (pre-release)
+
+Fixes since 0.10.0-next.1: dependency updates, two audit overrides (npm
+audit clean), docs/tool-description fixes for per-model Cursor param ids
+(#119) and the opencode v2 install snippet and cache path (#126),
+`cursor_refresh_models` listing param ids, the repaired weekly model-data
+drift check, and regenerated model limits and costs. Not on `latest`;
+install with `npm install @stablekernel/opencode-cursor@next` to test.
+
+User-visible: displayed per-model cost and context now follow Cursor's
+current published data. Cost (input/output, USD per million tokens):
+grok-4.5 $0 → $2/$6 and composer-2.5 $0 → $0.5/$2.5 (both were $0
+placeholders), claude-sonnet-5 $3/$15 → $2/$10, gpt-5.6-sol $5/$30 →
+$4/$20. Models that previously fell back to another id's rate or $0:
+claude-opus-5-5 $5/$25 → $4/$20, claude-sonnet-5-5 $3/$15 → $2/$10,
+grok-4.6 and grok-4.7 $0 → $2/$6, gemini-3.7-flash and gemini-3.8-flash
+$0 → $0.75/$3.5, muse-spark-1.3 $0 → $1.25/$4.25. claude-fable-5-1 keeps
+$10/$50 but its cache-read rate drops from $1 to $0.25. Context windows:
+grok-4.6 and grok-4.7 200k → 256k, muse-spark-1.3 200k → 300k.
+
+Behind a registry mirror, a fresh pre-release can fail to install with
+`ETARGET` until the mirror syncs; v2 installs the provider at the
+plugin's exact version.
+
 - **Docs: model param ids are per model (#119).** Cursor model param ids differ
   per model, so a `thinking` param set on a model that doesn't advertise one
   (e.g. grok-4.6, which takes `effort`) is ignored and Cursor falls back to its
