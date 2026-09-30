@@ -108,22 +108,18 @@ describe("buildModelV2Map", () => {
     expect(map["composer-2.5"]!.limit.output).toBe(32_000);
   });
 
-  it("uses $0 cost for Cursor Models pool models", () => {
+  it("carries a positive docs-derived cost for priced pool models, $0 only where no docs row exists", () => {
+    // The pricing doc now publishes rates for Cursor Models pool models, so
+    // composer-2.5 and grok-4.5 must report a real cost (exact values live in
+    // the generated map — not pinned here). auto-smart has no docs row and
+    // stays $0 via the OVERRIDES entry; that invariant is pinned exactly.
     const map = buildModelV2Map([
       { id: "composer-2.5", displayName: "Composer 2.5" },
       { id: "grok-4.5", displayName: "Grok 4.5" },
       { id: "auto-smart", displayName: "Auto Smart" },
     ]);
-    expect(map["composer-2.5"]!.cost).toEqual({
-      input: 0,
-      output: 0,
-      cache: { read: 0, write: 0 },
-    });
-    expect(map["grok-4.5"]!.cost).toEqual({
-      input: 0,
-      output: 0,
-      cache: { read: 0, write: 0 },
-    });
+    expect(map["composer-2.5"]!.cost.input).toBeGreaterThan(0);
+    expect(map["grok-4.5"]!.cost.input).toBeGreaterThan(0);
     expect(map["auto-smart"]!.cost).toEqual({
       input: 0,
       output: 0,
@@ -140,8 +136,7 @@ describe("buildModelV2Map", () => {
     });
   });
 
-  it("uses longest prefix match for cost", () => {
-    // gpt-5.4 (2.50) vs gpt-5.4-mini (0.75) must pick the longer prefix
+  it("resolves longest-prefix cost: gpt-5.4 beats gpt-5.4-mini/nano pricing", () => {
     const map = buildModelV2Map([
       { id: "gpt-5.4", displayName: "GPT-5.4" },
       { id: "gpt-5.4-mini", displayName: "GPT-5.4 Mini" },

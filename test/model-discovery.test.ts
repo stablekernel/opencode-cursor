@@ -121,17 +121,6 @@ describe("toOpencodeModels config-channel limits and cost", () => {
     expect(out["claude-sonnet-4-6"]!.cost).not.toHaveProperty("cache");
   });
 
-  it("emits $0 cost for Cursor Models pool models", () => {
-    const out = toOpencodeModels([
-      { id: "composer-2.5", displayName: "Composer 2.5" },
-    ] satisfies ModelListItem[]);
-    expect(out["composer-2.5"]!.cost).toEqual({
-      input: 0,
-      output: 0,
-      cache_read: 0,
-      cache_write: 0,
-    });
-  });
 
   it("falls back to 200K/32K and $0 for unknown models", () => {
     const out = toOpencodeModels(

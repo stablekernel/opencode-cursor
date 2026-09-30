@@ -5,7 +5,7 @@
  *   context windows  https://cursor.com/docs/account/pricing/request-based-legacy.md
  *   pricing          https://cursor.com/docs/models-and-pricing.md
  *
- * Data last changed: 2026-08-03
+ * Data last changed: 2026-09-29
  * (a sync that finds no data change leaves this date alone, so it dates the
  *  last change to the generated maps — NOT the last time they were verified.
  *  Verification runs on a schedule in CI; see the model-data-drift job.)
@@ -20,8 +20,8 @@
  * Pricing is read from the structured Input / Cache write / Cache read /
  * Output columns only. The `Notes` cell is deliberately NOT parsed, even
  * though promotions are announced there in prose (Claude Sonnet 5's row
- * advertises "$2/M input and $10/M output through August 31, 2026" while its
- * price columns still read $3 / $15). Extracting money from free text is
+ * advertised "$2/M input and $10/M output through August 31, 2026" while its
+ * price columns read $3 / $15). Extracting money from free text is
  * confidently wrong by construction, promo windows expire, and Cursor's own
  * `agent.getUsage()` -> `chargedCents` is the authoritative source for
  * promotions, discounts, the Cursor Token Fee, and Max Mode multipliers. This
@@ -39,16 +39,19 @@
 const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   "auto-smart": 200_000,
   "claude-fable-5": 300_000,
+  "claude-fable-5-1": 300_000,
   "claude-haiku-4-5": 200_000,
   "claude-opus-4-5": 200_000,
   "claude-opus-4-6": 200_000,
   "claude-opus-4-7": 300_000,
   "claude-opus-4-8": 300_000,
   "claude-opus-5": 300_000,
+  "claude-opus-5-5": 300_000,
   "claude-sonnet-4": 200_000,
   "claude-sonnet-4-5": 200_000,
   "claude-sonnet-4-6": 200_000,
   "claude-sonnet-5": 200_000,
+  "claude-sonnet-5-5": 200_000,
   "composer-2": 200_000,
   "composer-2.5": 200_000,
   "default": 200_000,
@@ -57,7 +60,8 @@ const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   "gemini-3.1-pro": 200_000,
   "gemini-3.5-flash": 200_000,
   "gemini-3.6-flash": 200_000,
-  "glm-5.2": 200_000,
+  "gemini-3.7-flash": 200_000,
+  "gemini-3.8-flash": 200_000,
   "gpt-5-mini": 272_000,
   "gpt-5.1": 272_000,
   "gpt-5.2": 272_000,
@@ -70,6 +74,9 @@ const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   "gpt-5.6-sol": 272_000,
   "gpt-5.6-terra": 272_000,
   "grok-4.5": 256_000,
+  "grok-4.6": 256_000,
+  "grok-4.7": 256_000,
+  "muse-spark-1.3": 300_000,
 };
 
 const DEFAULT_CONTEXT_LIMIT = 200_000;
@@ -127,34 +134,39 @@ export function resolveContextLimit(modelId: string): number {
 
 /**
  * Per-model API pricing (USD per million tokens), keyed by model id prefix.
- * Cursor Models pool models (Grok 4.5, Composer, Auto) have $0 — they draw
- * from the Cursor Models pool, not the Other Models pool, so there is no
- * per-token API charge and they are absent from the pricing docs entirely.
+ * Read from the pricing doc's two rate tables — Cursor Models (Grok,
+ * Composer) and Other Models (third-party). Auto/default and Composer 2 have
+ * no docs row; their $0 is a placeholder rate, not a free model (Auto bills
+ * at the routed model's list price — see the script's OVERRIDES).
  *
  * Longest prefix wins: `gpt-5.4-mini` (0.75) beats `gpt-5.4` (2.50).
  */
 const MODEL_COST: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
   "auto-smart": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   "claude-fable-5": { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+  "claude-fable-5-1": { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
   "claude-haiku-4-5": { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
   "claude-opus-4-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   "claude-opus-4-6": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   "claude-opus-4-7": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   "claude-opus-4-8": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   "claude-opus-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  "claude-opus-5-5": { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
   "claude-sonnet-4": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
   "claude-sonnet-4-5": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
   "claude-sonnet-4-6": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-  "claude-sonnet-5": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  "claude-sonnet-5": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+  "claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
   "composer-2": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  "composer-2.5": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  "composer-2.5": { input: 0.5, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
   "default": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   "gemini-2.5-flash": { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 },
   "gemini-3-flash": { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 },
   "gemini-3.1-pro": { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 },
   "gemini-3.5-flash": { input: 1.5, output: 9, cacheRead: 0.15, cacheWrite: 0 },
   "gemini-3.6-flash": { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 },
-  "glm-5.2": { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
+  "gemini-3.7-flash": { input: 0.75, output: 3.5, cacheRead: 0.075, cacheWrite: 0 },
+  "gemini-3.8-flash": { input: 0.75, output: 3.5, cacheRead: 0.075, cacheWrite: 0 },
   "gpt-5-mini": { input: 0.25, output: 2, cacheRead: 0.025, cacheWrite: 0 },
   "gpt-5.1": { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
   "gpt-5.2": { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
@@ -164,9 +176,12 @@ const MODEL_COST: Record<string, { input: number; output: number; cacheRead: num
   "gpt-5.4-nano": { input: 0.2, output: 1.25, cacheRead: 0.02, cacheWrite: 0 },
   "gpt-5.5": { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
   "gpt-5.6-luna": { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 },
-  "gpt-5.6-sol": { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+  "gpt-5.6-sol": { input: 4, output: 20, cacheRead: 0.4, cacheWrite: 5 },
   "gpt-5.6-terra": { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 2.5 },
-  "grok-4.5": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  "grok-4.5": { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+  "grok-4.6": { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+  "grok-4.7": { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+  "muse-spark-1.3": { input: 1.25, output: 4.25, cacheRead: 0.15, cacheWrite: 0 },
 };
 
 const DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };

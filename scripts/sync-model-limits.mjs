@@ -41,14 +41,11 @@ const OUTPUT_PATH = join(HERE, "..", "src", "model-limits.ts");
 /**
  * The two docs pages, both in their `.md` form.
  *
- * Cursor's docs site content-negotiates. Measured against both URL shapes:
- * with the markdown-preferring Accept header `fetchDoc` sends, the `.md` and
- * extensionless forms both return the same markdown. With a default wildcard
- * Accept header, only the `.md` form does — the extensionless form returns the
- * ~110KB HTML page instead, which carries no pipe table.
- *
- * The `.md` form is therefore the more robust choice: it does not depend on the
- * Accept header staying markdown-preferring. Keep both URLs on `.md`.
+ * Cursor's docs site content-negotiates. With node's default fetch headers the
+ * `.md` form returns the markdown; a custom markdown-preferring Accept header
+ * of the form "text/plain,text/markdown,*-slash-*" is answered with HTTP 404,
+ * `fetchDoc` sends no Accept header. The extensionless form returns the ~110KB
+ * HTML page under a wildcard Accept header, so keep both URLs on `.md`.
  *
  * A non-2xx response, or a page that stops carrying the expected columns,
  * exits 2 — so if Cursor moves either page it surfaces rather than going quiet.
@@ -67,16 +64,19 @@ export const SOURCES = {
 export const MODEL_IDS = [
   "auto-smart",
   "claude-fable-5",
+  "claude-fable-5-1",
   "claude-haiku-4-5",
   "claude-opus-4-5",
   "claude-opus-4-6",
   "claude-opus-4-7",
   "claude-opus-4-8",
   "claude-opus-5",
+  "claude-opus-5-5",
   "claude-sonnet-4",
   "claude-sonnet-4-5",
   "claude-sonnet-4-6",
   "claude-sonnet-5",
+  "claude-sonnet-5-5",
   "composer-2",
   "composer-2.5",
   "default",
@@ -85,7 +85,8 @@ export const MODEL_IDS = [
   "gemini-3.1-pro",
   "gemini-3.5-flash",
   "gemini-3.6-flash",
-  "glm-5.2",
+  "gemini-3.7-flash",
+  "gemini-3.8-flash",
   "gpt-5-mini",
   "gpt-5.1",
   "gpt-5.2",
@@ -98,44 +99,40 @@ export const MODEL_IDS = [
   "gpt-5.6-sol",
   "gpt-5.6-terra",
   "grok-4.5",
+  "grok-4.6",
+  "grok-4.7",
+  "muse-spark-1.3",
 ];
 
 const POOL_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
 /**
  * Ids the docs cannot supply, with the reason. `context` and `cost` are
- * independent: a model can appear in the context table but not the pricing
- * one, because the pricing doc is the "Other Models" table and Cursor Models
- * pool models are priced by pool rather than per token.
+ * independent: a model can appear in one docs table but not the other. The
+ * pricing doc lists Cursor Models pool rates (Grok, Composer) alongside the
+ * "Other Models" table, so those ids no longer need overrides — the remaining
+ * entries are ids neither table lists.
  */
 export const OVERRIDES = {
   "auto-smart": {
     context: 200_000,
     cost: POOL_COST,
-    why: 'docs row is "Auto Cost", which lists "-" for context; Cursor Models pool, so no per-token charge',
+    why: 'no docs row; Auto bills at the list price of whichever model it routes to, unknowable per request, so $0 is a placeholder rate',
   },
   default: {
     context: 200_000,
     cost: POOL_COST,
-    why: 'the "Auto" catalog id; same docs row as auto-smart, same pool pricing',
+    why: 'the "Auto" catalog id; no docs row, same placeholder $0 rate as auto-smart',
   },
   "composer-2": {
     context: 200_000,
     cost: POOL_COST,
-    why: 'docs list "Composer 1" and "Composer 2.5", never "Composer 2"; Cursor Models pool',
+    why: 'docs list "Composer 1" and "Composer 2.5", never "Composer 2"; no published rate, $0 placeholder',
   },
   "gpt-5.1": {
     context: 272_000,
     cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
     why: "docs list only GPT-5.1 Codex / Codex Max / Codex Mini, never bare 5.1; values follow GPT-5.1 Codex",
-  },
-  "grok-4.5": {
-    cost: POOL_COST,
-    why: 'absent from models-and-pricing.md ("Other Models" table); Cursor Models pool, so no per-token charge',
-  },
-  "composer-2.5": {
-    cost: POOL_COST,
-    why: 'absent from models-and-pricing.md ("Other Models" table); Cursor Models pool, so no per-token charge',
   },
 };
 
@@ -190,15 +187,34 @@ const SEPARATOR_ROW = /^\|[\s:|-]+\|$/;
 /**
  * Parse the first GFM table in `md` that carries every column in
  * `columnNames`. Selecting by column rather than by position matters: the
- * pricing doc ships an unrelated Plan/Price table alongside the model table.
+ * pricing doc ships an unrelated Plan/Price table alongside the model tables.
+ *
+ * The pricing doc now ships TWO model tables with the same columns — the
+ * Cursor Models pool rates (Grok, Composer) before the "Other Models" table —
+ * so `generate` reads every matching table via `parseAllDocsTables` instead.
  *
  * @param {string} md
  * @param {string[]} columnNames
  * @returns {Array<Record<string, string>>}
  */
 export function parseDocsTable(md, columnNames) {
+  return parseAllDocsTables(md, columnNames)[0];
+}
+
+/**
+ * Parse every GFM table in `md` that carries every column in `columnNames`.
+ * The pricing doc's two model tables (Cursor Models pool rates, then Other
+ * Models) both carry the pricing columns; returning only the first would leave
+ * every third-party id unmatched.
+ *
+ * @param {string} md
+ * @param {string[]} columnNames
+ * @returns {Array<Array<Record<string, string>>>}
+ */
+function parseAllDocsTables(md, columnNames) {
   const lines = md.split("\n");
   const seenHeaders = [];
+  const tables = [];
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i].trim();
     if (!SEPARATOR_ROW.test(line)) continue;
@@ -233,13 +249,16 @@ export function parseDocsTable(md, columnNames) {
     if (rows.length === 0) {
       throw new Error(`table with columns [${columnNames.join(", ")}] has no data rows`);
     }
-    return rows;
+    tables.push(rows);
   }
-  throw new Error(
-    `no table carries every column [${columnNames.join(", ")}]. Tables found: ${
-      seenHeaders.length ? seenHeaders.map((h) => `<${h}>`).join("; ") : "none"
-    }`,
-  );
+  if (tables.length === 0) {
+    throw new Error(
+      `no table carries every column [${columnNames.join(", ")}]. Tables found: ${
+        seenHeaders.length ? seenHeaders.map((h) => `<${h}>`).join("; ") : "none"
+      }`,
+    );
+  }
+  return tables;
 }
 
 /**
@@ -368,10 +387,10 @@ const SYNC_DATE_PLACEHOLDER = " * Data last changed: <ignored for comparison>";
 
 /**
  * Strip the date line so `--check` reports data drift, not the passage of
- * time. Write mode uses the same normalization to leave the committed date
- * alone when nothing else moved.
+ * time.
  *
  * @param {string} text
+ * @returns {string}
  */
 export function normalizeForComparison(text) {
   return text.replace(SYNC_DATE_LINE, SYNC_DATE_PLACEHOLDER);
@@ -384,7 +403,7 @@ export function normalizeForComparison(text) {
  * `modelIds` and `overrides` are injectable so the contracts this function
  * holds — strict overrides, ambiguity, docs-over-override precedence, sorted
  * output — can be exercised against small fixtures instead of only against the
- * live 33-id catalog.
+ * live 40-id catalog.
  *
  * @param {{
  *   contextMd: string,
@@ -402,8 +421,14 @@ export function generate({
   overrides = OVERRIDES,
   date = new Date().toISOString().slice(0, 10),
 }) {
-  const contextRows = parseDocsTable(contextMd, [NAME_COLUMN, "Default context"]);
-  const priceRows = parseDocsTable(pricingMd, [NAME_COLUMN, "Input", "Cache write", "Cache read", "Output"]);
+  const contextRows = parseAllDocsTables(contextMd, [NAME_COLUMN, "Default context"]).flat();
+  const priceRows = parseAllDocsTables(pricingMd, [
+    NAME_COLUMN,
+    "Input",
+    "Cache write",
+    "Cache read",
+    "Output",
+  ]).flat();
 
   const stats = {
     context: { matched: 0, overridden: 0 },
@@ -486,8 +511,8 @@ export function generate({
  * Pricing is read from the structured Input / Cache write / Cache read /
  * Output columns only. The \`Notes\` cell is deliberately NOT parsed, even
  * though promotions are announced there in prose (Claude Sonnet 5's row
- * advertises "$2/M input and $10/M output through August 31, 2026" while its
- * price columns still read $3 / $15). Extracting money from free text is
+ * advertised "$2/M input and $10/M output through August 31, 2026" while its
+ * price columns read $3 / $15). Extracting money from free text is
  * confidently wrong by construction, promo windows expire, and Cursor's own
  * \`agent.getUsage()\` -> \`chargedCents\` is the authoritative source for
  * promotions, discounts, the Cursor Token Fee, and Max Mode multipliers. This
@@ -509,6 +534,41 @@ ${contextLimits.join("\n")}
 const DEFAULT_CONTEXT_LIMIT = 200_000;
 
 /**
+ * Sentinel \`limit.input\` that pushes opencode's auto-compaction threshold out
+ * of reach, so auto-compaction never fires. opencode computes the threshold as
+ * \`limit.input ? limit.input - reserved : limit.context - maxOutput\`, so a huge
+ * \`input\` makes it unreachable while \`limit.context\` stays honest — the TUI
+ * context gauge keeps working.
+ *
+ * Why suppress it: the Cursor agent runtime self-compacts on its own context
+ * threshold (\`@cursor/sdk\` \`dist/esm/357.js\`, \`preCompact\` hook with
+ * \`trigger: "auto"\`), so opencode-driven compaction is redundant. It is also
+ * harmful — each opencode compaction rewrites the transcript, which classifies
+ * as \`divergence\` and mints a fresh Cursor agentId, and every distinct agentId
+ * permanently adds a guarded SQLite \`store.db\`/\`-wal\`/\`-shm\` triple that
+ * \`agent.close()\` cannot release.
+ *
+ * This is NOT a real model capability. Verified against the opencode 1.18.11
+ * binary by enumerating the call sites of \`Is()\` (the threshold function) rather
+ * than textual hits on \`limit.input\`, since consumers reach it transitively:
+ *   - \`vl()\`         — the proactive auto-compaction trigger. Suppressed here.
+ *   - \`Pd()\`         — preserve-recent-tokens budget, also used by manual
+ *                      \`/compact\`. Inert: it is \`min(8000, max(2000,
+ *                      floor(Is*0.25)))\`, which saturates at 8000 for any
+ *                      \`Is >= 32000\` — true both before and after the sentinel.
+ * Everything else that touches \`limit.input\` is catalog merge/serialization.
+ *
+ * Also verified end-to-end (isolated HOME, \`opencode models cursor --verbose\`)
+ * that a config-channel \`limit.input\` survives validation and reaches
+ * \`Provider.list()\` with \`limit.context\` intact.
+ *
+ * Caveat: \`Is()\` is \`max(0, input - reserved)\`, so a user setting
+ * \`compaction.reserved >= this value\` would drive the threshold to 0 and make
+ * compaction fire every turn. Absurd but user-settable.
+ */
+export const NO_AUTO_COMPACTION_INPUT_LIMIT = 1_000_000_000;
+
+/**
  * Resolve a model's context window by longest-prefix match against
  * {@link MODEL_CONTEXT_LIMITS}. Falls back to 200K for unknown models.
  */
@@ -526,9 +586,10 @@ export function resolveContextLimit(modelId: string): number {
 
 /**
  * Per-model API pricing (USD per million tokens), keyed by model id prefix.
- * Cursor Models pool models (Grok 4.5, Composer, Auto) have $0 — they draw
- * from the Cursor Models pool, not the Other Models pool, so there is no
- * per-token API charge and they are absent from the pricing docs entirely.
+ * Read from the pricing doc's two rate tables — Cursor Models (Grok,
+ * Composer) and Other Models (third-party). Auto/default and Composer 2 have
+ * no docs row; their $0 is a placeholder rate, not a free model (Auto bills
+ * at the routed model's list price — see the script's OVERRIDES).
  *
  * Longest prefix wins: \`gpt-5.4-mini\` (0.75) beats \`gpt-5.4\` (2.50).
  */
@@ -602,7 +663,9 @@ export function resolveOutputLimit(modelId: string): number {
 }
 
 async function fetchDoc(url) {
-  const response = await fetch(url, { headers: { accept: "text/plain,text/markdown,*/*" } });
+  // No custom Accept header — cursor.com 404s "text/plain,text/markdown,*/*";
+  // fetch defaults get the .md.
+  const response = await fetch(url);
   if (!response.ok) throw new Error(`GET ${url} -> HTTP ${response.status}`);
   return await response.text();
 }

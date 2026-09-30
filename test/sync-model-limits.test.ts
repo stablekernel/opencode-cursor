@@ -279,8 +279,8 @@ describe("matchModelId", () => {
 
 describe("generate", () => {
   // `modelIds` and `overrides` are injected so these contracts run against the
-  // 8-row fixtures. Without injection the function closes over the live 33-id
-  // catalog and throws on ~25 unrelated ids before reaching the assertion.
+  // 8-row fixtures. Without injection the function closes over the live 40-id
+  // catalog and throws on ~32 unrelated ids before reaching the assertion.
   const base = { contextMd: legacy, pricingMd: pricing };
 
   it("throws when an id has no docs row and no override", () => {
@@ -291,11 +291,57 @@ describe("generate", () => {
   });
 
   it("throws when an id has a context row but no pricing row and no override", () => {
-    // Grok 4.5 is in the context table and absent from the pricing table, so
-    // context and cost must be satisfiable independently — and an unsatisfied
-    // cost must still stop the run.
+    // Grok 4.5 is in the context table and absent from the PRICING FIXTURE —
+    // true of this fixture only; the live pricing doc now lists a Grok 4.5
+    // rate row — so context and cost must be satisfiable independently, and
+    // an unsatisfied cost must still stop the run.
     expect(() => generate({ ...base, modelIds: ["grok-4.5"], overrides: {} })).toThrow(
       /grok-4\.5: no pricing row .* and no OVERRIDES entry/,
+    );
+  });
+
+  it("reads every matching pricing table, not just the first", () => {
+    // The live pricing doc ships two same-column model tables separated by
+    // prose — Cursor Models pool rates, then Other Models. A first-table-only
+    // parser leaves every second-table id with no pricing row (exit 2).
+    const twoTables = [
+      table(
+        ["Model", "Provider", "Input", "Cache write", "Cache read", "Output"],
+        [["Grok 4.5", "Cursor", "$2", "-", "$0.5", "$6"]],
+      ),
+      "",
+      "Prose between the tables.",
+      "",
+      table(
+        ["Model", "Provider", "Input", "Cache write", "Cache read", "Output"],
+        [["GPT-5.5", "OpenAI", "$5", "-", "$0.5", "$30"]],
+      ),
+    ].join("\n");
+
+    const { text, stats } = generate({
+      ...base,
+      pricingMd: twoTables,
+      modelIds: ["gpt-5.5"],
+      overrides: {},
+    });
+    expect(text).toContain(`"gpt-5.5": { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },`);
+    expect(stats.cost.matched).toBe(1);
+
+    // An id with a row in BOTH tables is ambiguous — the matcher must not
+    // silently prefer whichever table it scanned first.
+    const duplicated = [
+      table(
+        ["Model", "Provider", "Input", "Cache write", "Cache read", "Output"],
+        [["Grok 4.5", "Cursor", "$2", "-", "$0.5", "$6"]],
+      ),
+      "",
+      table(
+        ["Model", "Provider", "Input", "Cache write", "Cache read", "Output"],
+        [["Grok 4.5", "Cursor", "$4", "-", "$1", "$12"]],
+      ),
+    ].join("\n");
+    expect(() => generate({ ...base, pricingMd: duplicated, modelIds: ["grok-4.5"], overrides: {} })).toThrow(
+      /grok-4\.5: ambiguous pricing match against \[Grok 4\.5, Grok 4\.5\]/,
     );
   });
 

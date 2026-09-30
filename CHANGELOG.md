@@ -49,6 +49,37 @@ All notable changes to this project will be documented in this file.
   `toml` `^4.2.0` (resolves 4.3.0, GHSA-82x6-q7mm-w9cf; reached through
   `effect` under `@opencode-ai/plugin`).
 
+- **Fix: the scheduled model-data drift job failed on every run (HTTP 404).**
+  `fetchDoc` sent a markdown-preferring `Accept` header
+  (`text/plain,text/markdown,*/*`), which cursor.com began answering with
+  404, so the weekly drift check never verified anything. The fetch now uses
+  node's default headers, which get the `.md` pages. The pricing doc also
+  moved Cursor Models pool rates (Grok, Composer) into a second model table
+  ahead of the "Other Models" table; the sync script now reads every
+  matching table, and the `NO_AUTO_COMPACTION_INPUT_LIMIT` sentinel block
+  is now emitted from the generator template (it was hand-inserted into
+  the generated file in #92, so the next sync would have deleted it).
+
+- **Model limits and costs regenerated from the 2026-09-29 Cursor docs.**
+  Added claude-fable-5-1, claude-opus-5-5, claude-sonnet-5-5, gemini-3.7-flash,
+  gemini-3.8-flash, grok-4.6, grok-4.7, and muse-spark-1.3; dropped glm-5.2
+  (absent from the live catalog). Cursor now publishes per-token rates for
+  Cursor Models pool models, so the obsolete $0 overrides for grok-4.5 and
+  composer-2.5 are gone: grok-4.5 is now $2/$6 (was $0) and composer-2.5
+  $0.5/$2.5 (was $0). Grok 4.7 resolves to its plain base row ($2/$6) — the
+  Fast and 500k variants are priced higher and left to per-request params.
+  Also picked up docs price changes: claude-sonnet-5 $3/$15 → $2/$10,
+  gpt-5.6-sol $5/$30 → $4/$20 (promo columns). auto-smart/default/composer-2
+  keep $0 as placeholder rates (no docs row; Auto bills at the list price of
+  whichever model it routes to, which is unknowable per request).
+
+- **`npm test` no longer collects `.cursor/`.** The plugin mirrors skills
+  into `<cwd>/.cursor/skills/` while dogfooding this repo, and default
+  vitest discovery then collected the mirrored skills' own test files —
+  94 load failures for anyone running `npm test` locally. A root
+  `vitest.config.ts` now excludes `.cursor/**` from test discovery. The
+  e2e config is untouched.
+
 ## [0.10.0-next.1] — 2026-09-29 (pre-release)
 
 Adds opencode v2 support alongside v1 (#127). Not on `latest`; install with
