@@ -17,7 +17,9 @@ All notable changes to this project will be documented in this file.
   build that opencode v2 rejects with "Plugin must export a default
   definition with an id and an effect or setup function". v2 support is
   published under the `next` dist-tag (0.10.0-next.1+) until promoted;
-  the snippet and a note now say so.
+  the snippet and a note now say so, and the troubleshooting entry now
+  gives the v2 cache path (`~/.cache/opencode/npm/<spec>/`, or
+  `opencode plugin update`) instead of only the v1 `packages/` path.
 
 - **Fix: fallback catalog's composer-2.5 param matches the live one.**
   The keyless/fallback entry advertised a `thinking` param (off/on) that

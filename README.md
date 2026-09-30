@@ -65,7 +65,8 @@ rm -rf ~/.cache/opencode/packages/@stablekernel/opencode-cursor@latest
 rmdir /s /q "%LocalAppData%\opencode\cache\packages\@stablekernel\opencode-cursor@latest"
 ```
 
-Then restart opencode.
+Then restart opencode. (This cache layout is opencode v1's; on v2 run
+`opencode plugin update` — see [opencode v2](#opencode-v2).)
 
 Drop `@latest` (`"@stablekernel/opencode-cursor"`) or pin a version
 (`"@stablekernel/opencode-cursor@1.2.3"`) if you prefer deterministic installs.
@@ -712,8 +713,13 @@ watchdog (an empty string also disables, for backward compatibility).
   `PATH`).
 - **Plugin enabled but no `cursor` provider/models appear, or you see a stale-version warning.**
   opencode caches the `@latest` plugin install on first use and never refreshes it.
-  Exit opencode, delete `~/.cache/opencode/packages/@stablekernel/opencode-cursor@latest`
-  (or the pinned version directory), and restart.
+  On v1: exit opencode, delete `~/.cache/opencode/packages/@stablekernel/opencode-cursor@latest`
+  (or the pinned version directory), and restart. On v2: run `opencode plugin update`, or
+  exit opencode and delete `~/.cache/opencode/npm/@stablekernel/opencode-cursor@<spec>`
+  (e.g. `@next`), then restart. On v2 the spec must also resolve to a build with the v2
+  entrypoint (0.10.0-next.1 or later — see [opencode v2](#opencode-v2)): an `@latest`
+  install of 0.9.x makes opencode 2 report "Plugin must export a default definition
+  with an id and an effect or setup function".
 - **Only the four fallback models appear.** The live catalog loads after the first authenticated
   use. Restart opencode once after login, or run `cursor_refresh_models`.
 - **Invalid or expired key.** Validated on first use — that's where the error surfaces.
