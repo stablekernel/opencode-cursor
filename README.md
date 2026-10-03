@@ -82,15 +82,9 @@ opencode v2 uses a `plugins` key (plural) and loads the plugin's `setup()` entry
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugins": ["@stablekernel/opencode-cursor@next"]
+  "plugins": ["@stablekernel/opencode-cursor@latest"]
 }
 ```
-
-> v2 support is published under the `next` dist-tag (`0.10.0-next.1` or later)
-> until it is promoted to `latest`. `@latest` currently resolves to 0.9.0, a
-> v1-only build that opencode v2 rejects with "Plugin must export a default
-> definition with an id and an effect or setup function". Switch the spec back
-> to `@latest` once 0.10.0 is stable.
 
 From 0.10.0 onward both generations load the same published package, so one
 install serves either (0.9.x `@latest` is v1-only).
@@ -716,7 +710,7 @@ watchdog (an empty string also disables, for backward compatibility).
   On v1: exit opencode, delete `~/.cache/opencode/packages/@stablekernel/opencode-cursor@latest`
   (or the pinned version directory), and restart. On v2: run `opencode plugin update`, or
   exit opencode and delete `~/.cache/opencode/npm/@stablekernel/opencode-cursor@<spec>`
-  (e.g. `@next`), then restart. On v2 the spec must also resolve to a build with the v2
+  (e.g. `@latest`), then restart. On v2 the spec must also resolve to a build with the v2
   entrypoint (0.10.0-next.1 or later — see [opencode v2](#opencode-v2)): an `@latest`
   install of 0.9.x makes opencode 2 report "Plugin must export a default definition
   with an id and an effect or setup function".

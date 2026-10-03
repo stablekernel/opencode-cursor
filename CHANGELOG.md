@@ -4,14 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [0.10.0-next.2] — 2026-09-30 (pre-release)
+## [0.10.0] — 2026-10-03
 
-Fixes since 0.10.0-next.1: dependency updates, two audit overrides (npm
-audit clean), docs/tool-description fixes for per-model Cursor param ids
-(#119) and the opencode v2 install snippet and cache path (#126),
-`cursor_refresh_models` listing param ids, the repaired weekly model-data
-drift check, and regenerated model limits and costs. Not on `latest`;
-install with `npm install @stablekernel/opencode-cursor@next` to test.
+Adds opencode v2 support alongside v1 (#127), regenerates the model
+catalog and costs from Cursor's 2026-09-29 published data, and fixes the
+subagent child-session pane. Consolidates pre-releases `0.9.1-next.0`,
+`0.10.0-next.1`, and `0.10.0-next.2` (`0.10.0-next.0` was tagged but never
+published — its release job failed at the npm publish step). This is the
+first `latest` release with v2 support; the README's v2 install example
+switches back to `@latest`. From 0.10.0 onward both generations load the
+same published package, so one install serves either (0.9.x `@latest` is
+v1-only). Minimum versions: v1 >= 1.18.29 (object plugin entrypoint),
+v2 tested against 2.0.19.
+
+Behind a registry mirror, a fresh release can fail to install with
+`ETARGET` until the mirror syncs the new version; retry later or point
+npm at `https://registry.npmjs.org`.
 
 User-visible: displayed per-model cost and context now follow Cursor's
 current published data. Cost (input/output, USD per million tokens):
@@ -23,109 +31,6 @@ grok-4.6 and grok-4.7 $0 → $2/$6, gemini-3.7-flash and gemini-3.8-flash
 $0 → $0.75/$3.5, muse-spark-1.3 $0 → $1.25/$4.25. claude-fable-5-1 keeps
 $10/$50 but its cache-read rate drops from $1 to $0.25. Context windows:
 grok-4.6 and grok-4.7 200k → 256k, muse-spark-1.3 200k → 300k.
-
-Behind a registry mirror, a fresh pre-release can fail to install with
-`ETARGET` until the mirror syncs; v2 installs the provider at the
-plugin's exact version.
-
-- **Docs: model param ids are per model (#119).** Cursor model param ids differ
-  per model, so a `thinking` param set on a model that doesn't advertise one
-  (e.g. grok-4.6, which takes `effort`) is ignored and Cursor falls back to its
-  own default. The README's per-request controls example, `params` row, and
-  `thinking` rows, plus the `cursor_delegate`/`cursor_cloud_agent` `thinking`
-  tool-arg descriptions, were corrected to say so (wording only — no behavior
-  change).
-
-- **Fix: README v2 install snippet points at `@next` (#126).** The
-  `plugins` example used `@latest`, which resolves to 0.9.0 — a v1-only
-  build that opencode v2 rejects with "Plugin must export a default
-  definition with an id and an effect or setup function". v2 support is
-  published under the `next` dist-tag (0.10.0-next.1+) until promoted;
-  the snippet and a note now say so, and the troubleshooting entry now
-  gives the v2 cache path (`~/.cache/opencode/npm/<spec>/`, or
-  `opencode plugin update`) instead of only the v1 `packages/` path.
-
-- **Fix: fallback catalog's composer-2.5 param matches the live one.**
-  The keyless/fallback entry advertised a `thinking` param (off/on) that
-  the live catalog does not expose, yielding a bogus `thinking` variant;
-  it now declares only `fast` (false/true), so the fallback path yields
-  exactly the `fast` variant and `{ fast: "false" }` defaults.
-
-- **Add: `cursor_refresh_models` lists param ids and values (#119).**
-  Each model line now appends the model's advertised params as
-  `[effort=low|medium|high|xhigh, fast=false|true]` (no suffix when the
-  model has none), so accepted param ids and values are readable
-  straight from the tool output.
-
-- **Chore: dependency bumps (#122, #124, #125) and audit overrides.**
-  Consolidates the three open Dependabot PRs: `@connectrpc/connect-node`
-  2.1.2 → 2.2.0 (nothing in src/, scripts/, or test/ imports it, and
-  `@cursor/sdk` declares `^1.6.1` and nests its own 1.7.0 copy, so the
-  top-level entry — added in #31 when the SDK did not declare it — no
-  longer looks needed; left in place as a removal candidate),
-  `@cursor/sdk` 1.0.31 → 1.0.32, `@opencode-ai/plugin` and
-  `@opencode-ai/sdk` 1.18.25/1.18.30 → 1.18.33 (kept on one version, one
-  sdk copy in the tree), `@ai-sdk/provider` 3.0.15 → 3.0.18,
-  `@types/node` 26.5.0 → 26.6.3, `vitest` 5.0.0 → 5.0.2.
-  `@ai-sdk/provider` v4 and TypeScript 7 stay blocked (see
-  .github/dependabot.yml). Clears both `npm audit` findings via overrides:
-  `undici` `^6.28.1` (resolves 6.29.0, GHSA-3wwx-pv8p-q78v) and a new
-  `toml` `^4.2.0` (resolves 4.3.0, GHSA-82x6-q7mm-w9cf; reached through
-  `effect` under `@opencode-ai/plugin`).
-
-- **Fix: the scheduled model-data drift job failed on every run (HTTP 404).**
-  `fetchDoc` sent a markdown-preferring `Accept` header
-  (`text/plain,text/markdown,*/*`), which cursor.com began answering with
-  404, so the weekly drift check never verified anything. The fetch now uses
-  node's default headers, which get the `.md` pages. The pricing doc also
-  moved Cursor Models pool rates (Grok, Composer) into a second model table
-  ahead of the "Other Models" table; the sync script now reads every
-  matching table, and the `NO_AUTO_COMPACTION_INPUT_LIMIT` sentinel block
-  is now emitted from the generator template (it was hand-inserted into
-  the generated file in #92, so the next sync would have deleted it).
-
-- **Model limits and costs regenerated from the 2026-09-29 Cursor docs.**
-  Added claude-fable-5-1, claude-opus-5-5, claude-sonnet-5-5, gemini-3.7-flash,
-  gemini-3.8-flash, grok-4.6, grok-4.7, and muse-spark-1.3; dropped glm-5.2
-  (absent from the live catalog). Cursor now publishes per-token rates for
-  Cursor Models pool models, so the obsolete $0 overrides for grok-4.5 and
-  composer-2.5 are gone: grok-4.5 is now $2/$6 (was $0) and composer-2.5
-  $0.5/$2.5 (was $0). Grok 4.7 resolves to its plain base row ($2/$6) — the
-  Fast and 500k variants are priced higher and left to per-request params.
-  Also picked up docs price changes: claude-sonnet-5 $3/$15 → $2/$10,
-  gpt-5.6-sol $5/$30 → $4/$20 (promo columns). auto-smart/default/composer-2
-  keep $0 as placeholder rates (no docs row; Auto bills at the list price of
-  whichever model it routes to, which is unknowable per request).
-
-- **`npm test` no longer collects `.cursor/`.** The plugin mirrors skills
-  into `<cwd>/.cursor/skills/` while dogfooding this repo, and default
-  vitest discovery then collected the mirrored skills' own test files —
-  94 load failures for anyone running `npm test` locally. A root
-  `vitest.config.ts` now excludes `.cursor/**` from test discovery. The
-  e2e config is untouched.
-
-## [0.10.0-next.1] — 2026-09-29 (pre-release)
-
-Adds opencode v2 support alongside v1 (#127). Not on `latest`; install with
-`npm install @stablekernel/opencode-cursor@next` to test. v1 now requires
-opencode 1.18.29+ (object plugin entrypoint). `0.10.0-next.0` was tagged but
-never published (its release job failed at the npm publish step), so this is
-the first published build with v2 support.
-
-Behind a registry mirror, a fresh pre-release can fail to install with
-`ETARGET` until the mirror syncs the new version; retry later or point npm
-at `https://registry.npmjs.org`.
-
-- **Fix: opencode v2 loads the provider package at the plugin's own version.**
-  v2 registered the provider with the bare package name, which opencode
-  resolves to `latest` — so a plugin installed from `@next` (or any other
-  channel) silently loaded the `latest` provider instead of the one it
-  shipped with. The v2 registration now pins the specifier to
-  `@stablekernel/opencode-cursor@<plugin version>` (falling back to the
-  bare name only when the version can't be resolved to a valid semver).
-  `OPENCODE_CURSOR_PROVIDER_NPM` still overrides everything, so local
-  `file://` builds keep working. v1 is unaffected (its provider is loaded
-  in-process, not via the package specifier).
 
 - **Add: opencode v2 support (dual v1/v2 plugin entrypoint).** The default
   export is now a dual object: the v2 `{ id, setup }` shape plus the v1
@@ -172,17 +77,22 @@ at `https://registry.npmjs.org`.
   not read on v2 (models are always listed with the no-auto-compaction
   limit).
 
-## [0.9.1-next.0] — 2026-08-26 (pre-release)
-
-Fixes the subagent child-session pane fragmenting one flowing answer
-into many small messages. Not on `latest`; install with
-`npm install @stablekernel/opencode-cursor@next` to test.
+- **Fix: opencode v2 loads the provider package at the plugin's own version.**
+  v2 registered the provider with the bare package name, which opencode
+  resolves to `latest` — so a plugin installed from `@next` (or any other
+  channel) silently loaded the `latest` provider instead of the one it
+  shipped with. The v2 registration now pins the specifier to
+  `@stablekernel/opencode-cursor@<plugin version>` (falling back to the
+  bare name only when the version can't be resolved to a valid semver).
+  `OPENCODE_CURSOR_PROVIDER_NPM` still overrides everything, so local
+  `file://` builds keep working. v1 is unaffected (its provider is loaded
+  in-process, not via the package specifier).
 
 - **Fix: subagent pane shows one growing transcript instead of fragment
   messages.** Live activity snapshots were posted as a NEW message on
   every flush (the 1.5s timer, every tool result, plus up to four more
-  on finalize), so a single subagent turn rendered as 5–20 fragments —
-  a paragraph split mid-sentence across messages. The seeded prompt
+  on finalize), so a single subagent turn rendered as 5–20 fragments — a
+  paragraph split mid-sentence across messages. The seeded prompt
   message's text part now grows in place: each flush PATCHes it via
   `part.update` with the FULL cumulative transcript (the endpoint the
   child session's tool parts already use; opencode publishes
@@ -193,6 +103,84 @@ into many small messages. Not on `latest`; install with
   the subagent card — and `resultSuffix` + `conversationSteps` + the
   activity line merge into the single final transcript instead of three
   extra messages.
+
+- **Fix: the scheduled model-data drift job failed on every run (HTTP 404).**
+  `fetchDoc` sent a markdown-preferring `Accept` header
+  (`text/plain,text/markdown,*/*`), which cursor.com began answering with
+  404, so the weekly drift check never verified anything. The fetch now uses
+  node's default headers, which get the `.md` pages. The pricing doc also
+  moved Cursor Models pool rates (Grok, Composer) into a second model table
+  ahead of the "Other Models" table; the sync script now reads every
+  matching table, and the `NO_AUTO_COMPACTION_INPUT_LIMIT` sentinel block
+  is now emitted from the generator template (it was hand-inserted into
+  the generated file in #92, so the next sync would have deleted it).
+
+- **Model limits and costs regenerated from the 2026-09-29 Cursor docs.**
+  Added claude-fable-5-1, claude-opus-5-5, claude-sonnet-5-5, gemini-3.7-flash,
+  gemini-3.8-flash, grok-4.6, grok-4.7, and muse-spark-1.3; dropped glm-5.2
+  (absent from the live catalog). Cursor now publishes per-token rates for
+  Cursor Models pool models, so the obsolete $0 overrides for grok-4.5 and
+  composer-2.5 are gone: grok-4.5 is now $2/$6 (was $0) and composer-2.5
+  $0.5/$2.5 (was $0). Grok 4.7 resolves to its plain base row ($2/$6) — the
+  Fast and 500k variants are priced higher and left to per-request params.
+  Also picked up docs price changes: claude-sonnet-5 $3/$15 → $2/$10,
+  gpt-5.6-sol $5/$30 → $4/$20 (promo columns). auto-smart/default/composer-2
+  keep $0 as placeholder rates (no docs row; Auto bills at the list price of
+  whichever model it routes to, which is unknowable per request).
+
+- **Fix: fallback catalog's composer-2.5 param matches the live one.**
+  The keyless/fallback entry advertised a `thinking` param (off/on) that
+  the live catalog does not expose, yielding a bogus `thinking` variant;
+  it now declares only `fast` (false/true), so the fallback path yields
+  exactly the `fast` variant and `{ fast: "false" }` defaults.
+
+- **Add: `cursor_refresh_models` lists param ids and values (#119).**
+  Each model line now appends the model's advertised params as
+  `[effort=low|medium|high|xhigh, fast=false|true]` (no suffix when the
+  model has none), so accepted param ids and values are readable
+  straight from the tool output.
+
+- **Docs: model param ids are per model (#119).** Cursor model param ids differ
+  per model, so a `thinking` param set on a model that doesn't advertise one
+  (e.g. grok-4.6, which takes `effort`) is ignored and Cursor falls back to its
+  own default. The README's per-request controls example, `params` row, and
+  `thinking` rows, plus the `cursor_delegate`/`cursor_cloud_agent` `thinking`
+  tool-arg descriptions, were corrected to say so (wording only — no behavior
+  change).
+
+- **Fix: README v2 install snippet points at `@next` (#126).** The
+  `plugins` example used `@latest`, which resolves to 0.9.0 — a v1-only
+  build that opencode v2 rejects with "Plugin must export a default
+  definition with an id and an effect or setup function". v2 support is
+  published under the `next` dist-tag (0.10.0-next.1+) until promoted;
+  the snippet and a note now say so, and the troubleshooting entry now
+  gives the v2 cache path (`~/.cache/opencode/npm/<spec>/`, or
+  `opencode plugin update`) instead of only the v1 `packages/` path.
+  This 0.10.0 promotion makes `@latest` a v2-capable build, so the
+  example switches back to `@latest`.
+
+- **Chore: dependency bumps (#122, #124, #125) and audit overrides.**
+  Consolidates the three open Dependabot PRs: `@connectrpc/connect-node`
+  2.1.2 → 2.2.0 (nothing in src/, scripts/, or test/ imports it, and
+  `@cursor/sdk` declares `^1.6.1` and nests its own 1.7.0 copy, so the
+  top-level entry — added in #31 when the SDK did not declare it — no
+  longer looks needed; left in place as a removal candidate),
+  `@cursor/sdk` 1.0.31 → 1.0.32, `@opencode-ai/plugin` and
+  `@opencode-ai/sdk` 1.18.25/1.18.30 → 1.18.33 (kept on one version, one
+  sdk copy in the tree), `@ai-sdk/provider` 3.0.15 → 3.0.18,
+  `@types/node` 26.5.0 → 26.6.3, `vitest` 5.0.0 → 5.0.2.
+  `@ai-sdk/provider` v4 and TypeScript 7 stay blocked (see
+  .github/dependabot.yml). Clears both `npm audit` findings via overrides:
+  `undici` `^6.28.1` (resolves 6.29.0, GHSA-3wwx-pv8p-q78v) and a new
+  `toml` `^4.2.0` (resolves 4.3.0, GHSA-82x6-q7mm-w9cf; reached through
+  `effect` under `@opencode-ai/plugin`).
+
+- **`npm test` no longer collects `.cursor/`.** The plugin mirrors skills
+  into `<cwd>/.cursor/skills/` while dogfooding this repo, and default
+  vitest discovery then collected the mirrored skills' own test files —
+  94 load failures for anyone running `npm test` locally. A root
+  `vitest.config.ts` now excludes `.cursor/**` from test discovery. The
+  e2e config is untouched.
 
 ## [0.9.0] — 2026-08-26
 
