@@ -1,10 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Config } from "@opencode-ai/plugin";
 import {
 	findUnshareableOAuthServers,
 	translateMcpServers,
 } from "../src/plugin/mcp-config.js";
-import { CursorPlugin as plugin } from "../src/plugin/index.js";
+
+// Mock homedir so the config hook's skill mirror doesn't pick up real skills.
+const fakeHome = mkdtempSync(join(tmpdir(), "cursor-mcp-config-home-"));
+vi.mock("node:os", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:os")>();
+	return { ...actual, homedir: () => fakeHome };
+});
+
+// Dynamic so the plugin loads after the homedir mock (same as plugin-skill-mirror.test.ts).
+const { CursorPlugin: plugin } = await import("../src/plugin/index.js");
 
 describe("translateMcpServers", () => {
 	it("maps a local (stdio) server, splitting command/args and keeping env", () => {
