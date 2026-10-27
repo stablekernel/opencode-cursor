@@ -9,6 +9,8 @@ export interface CursorUsage {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  /** Subset of outputTokens; absent when the model reported none. */
+  reasoningTokens?: number;
 }
 
 /**
@@ -67,6 +69,9 @@ export function addUsage(a?: CursorUsage, b?: CursorUsage): CursorUsage | undefi
     outputTokens: a.outputTokens + b.outputTokens,
     cacheReadTokens: a.cacheReadTokens + b.cacheReadTokens,
     cacheWriteTokens: a.cacheWriteTokens + b.cacheWriteTokens,
+    ...(a.reasoningTokens !== undefined || b.reasoningTokens !== undefined
+      ? { reasoningTokens: (a.reasoningTokens ?? 0) + (b.reasoningTokens ?? 0) }
+      : {}),
   };
 }
 

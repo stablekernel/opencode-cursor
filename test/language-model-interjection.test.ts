@@ -180,13 +180,14 @@ describe("multi-message interjection (continuation-multi)", () => {
 
 		const finish = parts.find((p) => p.type === "finish") as unknown as {
 			usage: {
-				inputTokens: { total: number; cacheRead: number; cacheWrite: number };
+				inputTokens: { total: number; noCache: number; cacheRead: number; cacheWrite: number };
 				outputTokens: { total: number };
 			};
 		};
 		expect(finish).toBeDefined();
 		// b (silent) + c (streamed): 10+10, 5+5, 1+1 cacheRead, 2+2 cacheWrite.
 		expect(finish.usage.inputTokens.total).toBe(20);
+		expect(finish.usage.inputTokens.noCache).toBe(14);
 		expect(finish.usage.outputTokens.total).toBe(10);
 		expect(finish.usage.inputTokens.cacheRead).toBe(2);
 		expect(finish.usage.inputTokens.cacheWrite).toBe(4);
