@@ -1511,7 +1511,9 @@ describe("tool-input streaming (partial-tool-call)", () => {
 });
 
 describe("mapUsage", () => {
-	it("maps Cursor usage into the V3 nested shape", () => {
+	// Cursor's inputTokens already includes cache reads/writes; opencode reads
+	// noCache directly and shows 0 input when it is absent (#146).
+	it("derives noCache from Cursor's cache-inclusive inputTokens", () => {
 		expect(
 			mapUsage({
 				inputTokens: 100,
@@ -1522,12 +1524,35 @@ describe("mapUsage", () => {
 		).toEqual({
 			inputTokens: {
 				total: 100,
-				noCache: undefined,
+				noCache: 15,
 				cacheRead: 80,
 				cacheWrite: 5,
 			},
 			outputTokens: { total: 20, text: undefined, reasoning: undefined },
 		});
+	});
+
+	it("clamps noCache at zero when cache counts exceed inputTokens", () => {
+		expect(
+			mapUsage({
+				inputTokens: 10,
+				outputTokens: 1,
+				cacheReadTokens: 8,
+				cacheWriteTokens: 5,
+			}).inputTokens.noCache,
+		).toBe(0);
+	});
+
+	it("passes Cursor's reasoningTokens through as outputTokens.reasoning", () => {
+		expect(
+			mapUsage({
+				inputTokens: 10,
+				outputTokens: 40,
+				cacheReadTokens: 0,
+				cacheWriteTokens: 0,
+				reasoningTokens: 30,
+			}).outputTokens,
+		).toEqual({ total: 40, text: undefined, reasoning: 30 });
 	});
 });
 

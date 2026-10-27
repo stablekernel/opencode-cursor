@@ -1047,18 +1047,19 @@ export const EMPTY_USAGE: LanguageModelV3Usage = {
 	outputTokens: { total: undefined, text: undefined, reasoning: undefined },
 };
 
+// Cursor's inputTokens already includes cache reads/writes (V3 `total` semantics).
 export function mapUsage(usage: CursorUsage): LanguageModelV3Usage {
 	return {
 		inputTokens: {
 			total: usage.inputTokens,
-			noCache: undefined,
+			noCache: Math.max(0, usage.inputTokens - usage.cacheReadTokens - usage.cacheWriteTokens),
 			cacheRead: usage.cacheReadTokens,
 			cacheWrite: usage.cacheWriteTokens,
 		},
 		outputTokens: {
 			total: usage.outputTokens,
 			text: undefined,
-			reasoning: undefined,
+			reasoning: usage.reasoningTokens,
 		},
 	};
 }

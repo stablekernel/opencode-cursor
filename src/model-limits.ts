@@ -5,7 +5,7 @@
  *   context windows  https://cursor.com/docs/account/pricing/request-based-legacy.md
  *   pricing          https://cursor.com/docs/models-and-pricing.md
  *
- * Data last changed: 2026-09-29
+ * Data last changed: 2026-10-27
  * (a sync that finds no data change leaves this date alone, so it dates the
  *  last change to the generated maps — NOT the last time they were verified.
  *  Verification runs on a schedule in CI; see the model-data-drift job.)
@@ -156,7 +156,7 @@ const MODEL_COST: Record<string, { input: number; output: number; cacheRead: num
   "claude-sonnet-4-5": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
   "claude-sonnet-4-6": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
   "claude-sonnet-5": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
-  "claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+  "claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
   "composer-2": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   "composer-2.5": { input: 0.5, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
   "default": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -165,8 +165,8 @@ const MODEL_COST: Record<string, { input: number; output: number; cacheRead: num
   "gemini-3.1-pro": { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 },
   "gemini-3.5-flash": { input: 1.5, output: 9, cacheRead: 0.15, cacheWrite: 0 },
   "gemini-3.6-flash": { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 },
-  "gemini-3.7-flash": { input: 0.75, output: 3.5, cacheRead: 0.075, cacheWrite: 0 },
-  "gemini-3.8-flash": { input: 0.75, output: 3.5, cacheRead: 0.075, cacheWrite: 0 },
+  "gemini-3.7-flash": { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0 },
+  "gemini-3.8-flash": { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0 },
   "gpt-5-mini": { input: 0.25, output: 2, cacheRead: 0.025, cacheWrite: 0 },
   "gpt-5.1": { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
   "gpt-5.2": { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
