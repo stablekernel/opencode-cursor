@@ -12,6 +12,10 @@ All notable changes to this project will be documented in this file.
   (`inputTokens − cacheRead − cacheWrite`, clamped at 0) and passes
   `reasoningTokens` through as `outputTokens.reasoning`. opencode 2.x reads
   `noCache` directly, so input showed as 0 and was never priced.
+- **Model costs follow Cursor's 2026-10-27 published data.** Regenerated
+  with `npm run sync:model-limits` (the weekly drift check was failing):
+  claude-sonnet-5-5 cache read $0.2 → $0.1; gemini-3.7-flash and
+  gemini-3.8-flash output $3.5 → $3.75 per million tokens.
 
 ### Security
 
