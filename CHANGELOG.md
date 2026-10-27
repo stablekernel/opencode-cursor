@@ -19,15 +19,16 @@ All notable changes to this project will be documented in this file.
 
 ### Security
 
-- Bumped `@cursor/sdk` to ^1.1.0, `@opencode-ai/plugin`/`sdk` to ^1.19.4
-  and `vitest` to ^5.0.5 (vite 8.3.5, `@vitest/mocker` 5.0.5,
-  `source-map-js` 1.2.2). New overrides: `zod` ^4.6.6 under
-  `@opencode-ai/plugin` (GHSA-mrhx-c7xc-m3w5) and `toml` ^5.0.1
-  (GHSA-4qx8-w7c3-pj3p, GHSA-9j65-hcg3-gc64, GHSA-9qmh-m7c6-f92p). The
-  `undici` override is gone: nothing in the tree depends on it any more.
+- Bumped `@cursor/sdk` to ^1.1.0, `@connectrpc/connect-node` to ^2.3.0,
+  `@opencode-ai/plugin`/`sdk` to ^1.19.4 and `vitest` to ^5.0.5 (vite
+  8.3.5, `@vitest/mocker` 5.0.5, `source-map-js` 1.2.2). New overrides:
+  `zod` ^4.6.6 under `@opencode-ai/plugin` (GHSA-mrhx-c7xc-m3w5) and `toml`
+  ^5.0.1 (GHSA-4qx8-w7c3-pj3p, GHSA-9j65-hcg3-gc64, GHSA-9qmh-m7c6-f92p).
+  The `undici` override is gone: nothing in the tree depends on it any more.
   `npm audit` on this repo reports 0 vulnerabilities. npm does not publish
-  overrides, so installs of this package still get the `zod` 4.1.8 and
-  `toml` ^4 that `@opencode-ai/plugin` 1.19.4 pins until upstream bumps them.
+  overrides, so installs of this package still get `zod` 4.1.8 (pinned by
+  `@opencode-ai/plugin` 1.19.4) and `toml` 4.x (via its pinned `effect`
+  4.0.0-beta.83, which wants `^4.1.1`) until upstream bumps them.
 
 ## [0.10.0] — 2026-10-03
 
