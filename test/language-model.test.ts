@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -445,6 +445,8 @@ describe("CursorLanguageModel doStream — resume-aware retry", () => {
 				providerOptions: { cursor: { sessionID: "s1", params: { thinking: "medium", fast: "false" } } },
 			} as never),
 		);
+		// Don't leak this catalog into later tests' fallback lookups.
+		rmSync(join(dir, "models-latest.json"));
 
 		const acquireArgs = create.mock.calls[0]?.[0] as {
 			model: { id: string; params?: Array<{ id: string; value: string }> };
