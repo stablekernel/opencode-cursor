@@ -10,11 +10,14 @@ import { LoadAPIKeyError } from "@ai-sdk/provider";
 import type {
 	AgentDefinition,
 	McpServerConfig,
+	ModelListItem,
 	SettingSource,
 	AgentModeOption,
 	SDKUserMessage,
 } from "@cursor/sdk";
 import { resolveCursorApiKey } from "../api-key.js";
+import { FALLBACK_MODELS } from "../fallback-models.js";
+import { readLatestModelCache } from "../model-cache.js";
 import {
 	latestUserMessage,
 	promptToCursorMessage,
@@ -138,6 +141,17 @@ export class CursorLanguageModel implements LanguageModelV3 {
 		pluginLog("warn", message, { provider: this.provider });
 	}
 
+	/** This model's advertised params from the last discovered catalog; read once per instance. */
+	private parameters: ModelListItem["parameters"] | null | undefined;
+
+	private modelParameters(): ModelListItem["parameters"] {
+		if (this.parameters === undefined) {
+			const catalog = readLatestModelCache() ?? FALLBACK_MODELS;
+			this.parameters = catalog.find((m) => m.id === this.modelId)?.parameters ?? null;
+		}
+		return this.parameters ?? undefined;
+	}
+
 	private requireApiKey(): string {
 		const apiKey = resolveCursorApiKey(this.config.apiKey);
 		if (!apiKey) {
@@ -158,15 +172,17 @@ export class CursorLanguageModel implements LanguageModelV3 {
 		const providerOptions = options.providerOptions?.[this.provider] as
 			| Record<string, unknown>
 			| undefined;
-		const { mode, modelSelection } = resolveControls(
+		const { mode, modelSelection, warnings } = resolveControls(
 			this.modelId,
 			{
 				mode: this.config.mode,
 				params: this.config.params,
 				defaults: this.config.modelParamDefaults?.[this.modelId],
+				parameters: this.modelParameters(),
 			},
 			providerOptions,
 		);
+		for (const warning of warnings) this.warnOnce(warning);
 		if (process.env["OPENCODE_CURSOR_DEBUG"] === "1") {
 			pluginLog("debug", "model call", {
 				model: this.modelId,
