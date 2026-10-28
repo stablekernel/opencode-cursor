@@ -98,13 +98,15 @@ function reconcileThinking(
   const why = thinking
     ? `${modelId}'s \`thinking\` param only accepts ${paramValues(thinking).join("|")}`
     : `${modelId} has no \`thinking\` param`;
-  const level = parameters.find(
+  const levels = parameters.filter(
     (p) => p.id !== "thinking" && REASONING_PARAM.test(p.id) && paramValues(p).length > 0 && !isBooleanParam(paramValues(p)),
   );
+  const level = levels[0];
   if (!level) return [`${why}; Cursor will ignore \`thinking: ${value}\`.`];
-  if (params[level.id] !== undefined) {
+  const explicit = levels.find((p) => params[p.id] !== undefined);
+  if (explicit) {
     delete params["thinking"];
-    return [`${why}; ignored \`thinking: ${value}\` because \`${level.id}: ${params[level.id]}\` is set.`];
+    return [`${why}; ignored \`thinking: ${value}\` because \`${explicit.id}: ${params[explicit.id]}\` is set.`];
   }
   const accepted = paramValues(level);
   // opencode's standard top tier is "xhigh"; some Cursor models spell it "extra-high".

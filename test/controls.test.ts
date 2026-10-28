@@ -126,6 +126,12 @@ describe("resolveControls `thinking` on models without a matching thinking param
     expect(r.warnings).toEqual([expect.stringContaining("ignored `thinking: medium`")]);
   });
 
+  it("treats an explicit value on any reasoning param as the user's choice", () => {
+    const both: Params = [param("reasoning", ["low", "high"]), param("effort", ["low", "medium"])];
+    const r = resolveControls("m", { mode: "agent", parameters: both }, { params: { thinking: "low", effort: "medium" } });
+    expect(r.modelSelection.params).toEqual([{ id: "effort", value: "medium" }]);
+  });
+
   it("maps xhigh to Cursor's extra-high wire value", () => {
     const r = resolveControls("gpt", { mode: "agent", parameters: GPT }, { params: { thinking: "xhigh" } });
     expect(r.modelSelection.params).toEqual([{ id: "reasoning", value: "extra-high" }]);
