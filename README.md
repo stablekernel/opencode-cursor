@@ -314,6 +314,11 @@ param and falls back to its own default (e.g. `high` effort). `grok-4.6` uses `e
 `composer-2.5` has only `fast`. Run `cursor_refresh_models` to list each model id
 with its param ids and accepted values.
 
+A `thinking` level the model can't take (e.g. `"thinking": "medium"` on `grok-4.6`) is moved to
+the model's reasoning param (`effort: medium`) when that param accepts the value, and the plugin
+logs a one-time warning. This needs the model's params from a discovered catalog; an explicit
+`effort`/`reasoning` value always wins.
+
 To set controls statically per model:
 
 ```json

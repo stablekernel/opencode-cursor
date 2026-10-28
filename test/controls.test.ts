@@ -71,4 +71,83 @@ describe("resolveControls", () => {
   });
 });
 
+type Params = NonNullable<ModelListItem["parameters"]>;
+const param = (id: string, values: string[]) => ({
+  id,
+  displayName: id,
+  values: values.map((value) => ({ value })),
+});
+const GROK_4_6: Params = [
+  param("effort", ["low", "medium", "high", "xhigh"]),
+  param("fast", ["false", "true"]),
+];
+const CLAUDE: Params = [param("thinking", ["false", "true"]), param("effort", ["low", "medium", "high", "max"])];
+const GPT: Params = [param("reasoning", ["low", "medium", "high", "extra-high"])];
+
+describe("resolveControls `thinking` on models without a matching thinking param (#119)", () => {
+  it("moves a configured params.thinking level to the model's effort param", () => {
+    const r = resolveControls(
+      "grok-4.6",
+      { mode: "agent", parameters: GROK_4_6 },
+      { params: { thinking: "medium", fast: "false" } },
+    );
+    expect(r.modelSelection.params).toEqual([
+      { id: "fast", value: "false" },
+      { id: "effort", value: "medium" },
+    ]);
+    expect(r.warnings).toEqual([
+      expect.stringContaining("grok-4.6 has no `thinking` param; sent `effort: medium` instead"),
+    ]);
+  });
+
+  it("moves the `thinking` convenience key too", () => {
+    const r = resolveControls("grok-4.6", { mode: "agent", parameters: GROK_4_6 }, { thinking: "high" });
+    expect(r.modelSelection.params).toEqual([{ id: "effort", value: "high" }]);
+  });
+
+  it("keeps a valid boolean thinking value on a model that has the param", () => {
+    const r = resolveControls("claude", { mode: "agent", parameters: CLAUDE }, { params: { thinking: "true" } });
+    expect(r.modelSelection.params).toEqual([{ id: "thinking", value: "true" }]);
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("moves a level value off a boolean thinking param onto the effort enum", () => {
+    const r = resolveControls("claude", { mode: "agent", parameters: CLAUDE }, { params: { thinking: "max" } });
+    expect(r.modelSelection.params).toEqual([{ id: "effort", value: "max" }]);
+  });
+
+  it("lets an explicit effort win and drops the unusable thinking key", () => {
+    const r = resolveControls(
+      "grok-4.6",
+      { mode: "agent", parameters: GROK_4_6 },
+      { params: { thinking: "medium", effort: "low" } },
+    );
+    expect(r.modelSelection.params).toEqual([{ id: "effort", value: "low" }]);
+    expect(r.warnings).toEqual([expect.stringContaining("ignored `thinking: medium`")]);
+  });
+
+  it("treats an explicit value on any reasoning param as the user's choice", () => {
+    const both: Params = [param("reasoning", ["low", "high"]), param("effort", ["low", "medium"])];
+    const r = resolveControls("m", { mode: "agent", parameters: both }, { params: { thinking: "low", effort: "medium" } });
+    expect(r.modelSelection.params).toEqual([{ id: "effort", value: "medium" }]);
+  });
+
+  it("maps xhigh to Cursor's extra-high wire value", () => {
+    const r = resolveControls("gpt", { mode: "agent", parameters: GPT }, { params: { thinking: "xhigh" } });
+    expect(r.modelSelection.params).toEqual([{ id: "reasoning", value: "extra-high" }]);
+  });
+
+  it("leaves an unmappable value in place and warns with the accepted values", () => {
+    const r = resolveControls("grok-4.6", { mode: "agent", parameters: GROK_4_6 }, { params: { thinking: "max" } });
+    expect(r.modelSelection.params).toEqual([{ id: "thinking", value: "max" }]);
+    expect(r.warnings).toEqual([expect.stringContaining("effort=low|medium|high|xhigh")]);
+  });
+
+  it("changes nothing when the model's parameters are unknown", () => {
+    const r = resolveControls("grok-4.6", { mode: "agent" }, { params: { thinking: "medium" } });
+    expect(r.modelSelection.params).toEqual([{ id: "thinking", value: "medium" }]);
+    expect(r.warnings).toEqual([]);
+  });
+});
+
 // buildModelVariants behavior is covered in test/model-variants.test.ts.

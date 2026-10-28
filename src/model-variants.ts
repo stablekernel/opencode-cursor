@@ -10,14 +10,14 @@ export interface CursorVariant {
   mode?: "agent" | "plan";
 }
 
-const REASONING_PARAM = /think|reason|effort/i;
+export const REASONING_PARAM = /think|reason|effort/i;
 const BOOLEAN_VALUES = new Set(["true", "false"]);
 
-function paramValues(param: NonNullable<ModelListItem["parameters"]>[number]): string[] {
+export function paramValues(param: NonNullable<ModelListItem["parameters"]>[number]): string[] {
   return (param.values ?? []).map((v) => v.value);
 }
 
-function isBooleanParam(values: string[]): boolean {
+export function isBooleanParam(values: string[]): boolean {
   return values.length > 0 && values.every((v) => BOOLEAN_VALUES.has(v));
 }
 

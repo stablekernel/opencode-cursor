@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -416,6 +416,47 @@ describe("CursorLanguageModel doStream — resume-aware retry", () => {
 		expect(acquireArgs.model).toEqual({
 			id: "composer-2.5",
 			params: [{ id: "fast", value: "false" }],
+		});
+	});
+
+	it("sends a configured thinking level as the cataloged model's effort param (#119)", async () => {
+		const dir = join(process.env.XDG_CACHE_HOME!, "opencode-cursor");
+		mkdirSync(dir, { recursive: true });
+		const param = (id: string, values: string[]) => ({ id, displayName: id, values: values.map((value) => ({ value })) });
+		writeFileSync(
+			join(dir, "models-latest.json"),
+			JSON.stringify({
+				savedAt: Date.now(),
+				models: [
+					{
+						id: "grok-4.6",
+						displayName: "Grok 4.6",
+						parameters: [param("effort", ["low", "medium", "high", "xhigh"]), param("fast", ["false", "true"])],
+					},
+				],
+			}),
+		);
+		const model = new CursorLanguageModel("grok-4.6", { providerName: "cursor", cwd: "/tmp", mode: "agent" });
+		create.mockResolvedValueOnce(fakeAgent({ agentId: "a1" }));
+
+		await collectStream(
+			streamCall(model, {
+				prompt: [sys("S"), user("hi")],
+				providerOptions: { cursor: { sessionID: "s1", params: { thinking: "medium", fast: "false" } } },
+			} as never),
+		);
+		// Don't leak this catalog into later tests' fallback lookups.
+		rmSync(join(dir, "models-latest.json"));
+
+		const acquireArgs = create.mock.calls[0]?.[0] as {
+			model: { id: string; params?: Array<{ id: string; value: string }> };
+		};
+		expect(acquireArgs.model).toEqual({
+			id: "grok-4.6",
+			params: [
+				{ id: "fast", value: "false" },
+				{ id: "effort", value: "medium" },
+			],
 		});
 	});
 

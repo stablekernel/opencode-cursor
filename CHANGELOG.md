@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A `thinking` level now reaches models that read `effort`/`reasoning`
+  (#119).** Cursor ignores params a model doesn't advertise, so
+  `"thinking": "medium"` on `grok-4.6` silently ran at Cursor's default
+  (`high`). When the model's discovered params show `thinking` can't carry
+  the value, the provider sends it as the model's reasoning param instead
+  (`effort: medium`; `xhigh` maps to `extra-high` where Cursor spells it that
+  way) and logs a one-time warning. An explicit `effort`/`reasoning` value
+  still wins.
+
 ## [0.10.1] — 2026-10-28
 
 Patch release: opencode now counts and prices non-cached input tokens for
