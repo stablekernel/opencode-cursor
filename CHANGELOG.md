@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-10-28
+
+Patch release: opencode now counts and prices non-cached input tokens for
+Cursor models (#146), dependencies move past the open security advisories,
+and per-model costs follow Cursor's 2026-10-27 published data.
+
 ### Fixed
 
 - **Non-cached input tokens now reach opencode (#146).** Cursor's
