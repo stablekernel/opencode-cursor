@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.10.2] — 2026-10-28
+
+Patch release: a configured `thinking` level now reaches models that read
+`effort`/`reasoning` instead of being silently ignored by Cursor (#119).
+
 ### Fixed
 
 - **A `thinking` level now reaches models that read `effort`/`reasoning`
