@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Deduplicate tool call events after watchdog force resends to prevent
+  OpenCode v2 "Duplicate tool call" errors.** When the stream watchdog
+  detects a stall and forces a resend with `local: { force: true }`, the
+  Cursor SDK may replay `tool-call-started` events with the same `callId`.
+  OpenCode v2 tracks which tool call IDs have been received and rejects
+  duplicates (`Error: Duplicate tool call: {id}`). The plugin now tracks
+  emitted tool call IDs per turn and skips replayed duplicates while still
+  allowing their corresponding tool-result events. This fixes long agentic
+  sessions being interrupted after bash/shell tool calls when the watchdog
+  triggers a force resend.
+
 ## [0.10.2] — 2026-10-28
 
 Patch release: a configured `thinking` level now reaches models that read
