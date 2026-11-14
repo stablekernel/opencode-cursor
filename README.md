@@ -104,6 +104,11 @@ is accepted by v2's config schema but ignored by this plugin), and it registers
 its own provider record — so the v1 `provider.cursor` block does not apply
 there. Configure v2 through the environment variables listed below.
 
+If the background service started before you logged in, the plugin checks for a
+stored key every 15 seconds and loads the full model list once it finds one, with
+no `opencode reload` needed. Until then the fallback models' names end in
+"(log in to Cursor for all models)".
+
 **Tools not exposed on v2** — `cursor_delegate`, `cursor_cloud_agent` (delegation)
 and `cursor_update_plugin` (self-update) are v1-only, deliberately:
 
@@ -273,6 +278,7 @@ See [SECURITY.md](./SECURITY.md) for the full threat model.
 | `OPENCODE_CURSOR_TOOL_STALL_MS` | `600000` | Stream-watchdog timeout in ms while a tool call is in flight (e.g. a long build or test suite). `0` disables the bound during tool execution only — see [Reliability](#reliability) |
 | `OPENCODE_CURSOR_SIDECAR` | — | Legacy: `1` maps to `sidecar`, `0` maps to `http2-direct` (superseded by `OPENCODE_CURSOR_TRANSPORT`) |
 | `OPENCODE_CURSOR_TOOL_INPUT_STREAM` | on | Set to `0` to disable live tool-input streaming (`tool-input-start`/`-delta`/`-end` parts) |
+| `OPENCODE_CURSOR_KEY_POLL_MS` | `15000` | v2 only: how often to check for a newly stored key while the model list is a fallback. `0` disables |
 
 ### Session reuse (`session`)
 
