@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Model list no longer stuck on 4 fallback models when the key is in
+  `provider.cursor.options.apiKey` (#152).** Chat used that key, but model
+  discovery (the `config` hook and the `provider.models` route) only read
+  `opencode auth login` and `CURSOR_API_KEY`, so the picker showed the
+  static fallback (Composer 2.5, Claude Opus 4.8, Claude Sonnet 4.6, GPT-5.5)
+  instead of your full catalog.
+- **A fallback model list now says why.** When discovery falls back (no key,
+  invalid key, network error), opencode shows one toast with the cause. If
+  the stored key loads the catalog after startup, the toast says to restart
+  opencode to see all models instead.
+
 ## [0.10.3] — 2026-11-14
 
 Patch release: dependency updates only. No plugin code changes.
