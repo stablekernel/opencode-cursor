@@ -278,7 +278,7 @@ See [SECURITY.md](./SECURITY.md) for the full threat model.
 | `OPENCODE_CURSOR_TOOL_STALL_MS` | `600000` | Stream-watchdog timeout in ms while a tool call is in flight (e.g. a long build or test suite). `0` disables the bound during tool execution only — see [Reliability](#reliability) |
 | `OPENCODE_CURSOR_SIDECAR` | — | Legacy: `1` maps to `sidecar`, `0` maps to `http2-direct` (superseded by `OPENCODE_CURSOR_TRANSPORT`) |
 | `OPENCODE_CURSOR_TOOL_INPUT_STREAM` | on | Set to `0` to disable live tool-input streaming (`tool-input-start`/`-delta`/`-end` parts) |
-| `OPENCODE_CURSOR_KEY_POLL_MS` | `15000` | v2 only: how often to check for a newly stored key while the model list is a fallback. `0` disables |
+| `OPENCODE_CURSOR_KEY_POLL_MS` | `15000` | v2 only: how often to check for a newly stored key while the model list is a fallback. `0` or empty disables; an invalid value uses the default |
 
 ### Session reuse (`session`)
 

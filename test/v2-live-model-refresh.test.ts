@@ -74,6 +74,8 @@ function makeCtx(options: { reload?: boolean } = {}) {
 
 // Fake timers: advancing also flushes the async discovery chain each tick.
 const advance = () => vi.advanceTimersByTimeAsync(30);
+/** Advance exactly `n` poll intervals (OPENCODE_CURSOR_KEY_POLL_MS=5). */
+const ticks = (n: number) => vi.advanceTimersByTimeAsync(5 * n);
 
 let savedPoll: string | undefined;
 let savedEnvKey: string | undefined;
@@ -142,18 +144,64 @@ describe("v2 live model refresh (G-013)", () => {
 		expect(second.dispose).toHaveBeenCalled();
 	});
 
-	it("keeps the fallback for a bad key and tries it only once", async () => {
+	it("retries a key that fell back only every 5th check", async () => {
 		const h = makeCtx();
 		await setup(h);
+		const badCalls = () => discover.mock.calls.filter(([o]) => o.apiKey === "bad-key").length;
 		h.storeKey("bad-key");
-		await advance();
-		expect(discover).toHaveBeenCalledWith({ apiKey: "bad-key" });
-		await advance();
-		expect(discover.mock.calls.filter(([o]) => o.apiKey === "bad-key")).toHaveLength(1);
+		await ticks(1);
+		expect(badCalls()).toBe(1);
+		await ticks(4);
+		expect(badCalls()).toBe(1);
+		await ticks(1);
+		expect(badCalls()).toBe(2);
 		expect(h.provider.reload).not.toHaveBeenCalled();
-		// A later good key still gets picked up.
+		// A different key is tried on the next check, not after the backoff.
 		h.storeKey("good-key");
-		await advance();
+		await ticks(1);
+		expect(h.provider.reload).toHaveBeenCalledTimes(1);
+	});
+
+	it("recovers a good key whose first discovery failed transiently", async () => {
+		discover.mockImplementationOnce(async () => FALLBACK); // setup, no key
+		discover.mockImplementationOnce(async () => FALLBACK); // good key, network blip
+		const h = makeCtx();
+		await setup(h);
+		h.storeKey("good-key");
+		await ticks(1);
+		expect(h.provider.reload).not.toHaveBeenCalled();
+		await ticks(5);
+		expect(h.provider.reload).toHaveBeenCalledTimes(1);
+		expect(h.currentModelNames()).toEqual(["Composer 2.5", "GPT-5.5"]);
+	});
+
+	it("disposes a registration that finishes after teardown (no-reload host)", async () => {
+		const h = makeCtx({ reload: false });
+		const dispose = await setup(h);
+		const first = (await h.provider.transform.mock.results[0]!.value) as { dispose: Mock };
+		const late = { dispose: vi.fn(async () => undefined) };
+		let finishRegistration!: () => void;
+		h.provider.transform.mockImplementationOnce(
+			() => new Promise((resolve) => (finishRegistration = () => resolve(late))),
+		);
+		h.storeKey("good-key");
+		await ticks(1);
+		expect(h.provider.transform).toHaveBeenCalledTimes(2);
+		await dispose();
+		finishRegistration();
+		await ticks(1);
+		expect(late.dispose).toHaveBeenCalledTimes(1);
+		expect(first.dispose).toHaveBeenCalledTimes(1);
+	});
+
+	it("treats an invalid OPENCODE_CURSOR_KEY_POLL_MS as the 15s default", async () => {
+		process.env.OPENCODE_CURSOR_KEY_POLL_MS = "abc";
+		const h = makeCtx();
+		await setup(h);
+		h.storeKey("good-key");
+		await vi.advanceTimersByTimeAsync(14_999);
+		expect(h.provider.reload).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(1);
 		expect(h.provider.reload).toHaveBeenCalledTimes(1);
 	});
 

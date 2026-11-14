@@ -326,14 +326,23 @@ function toModelInfos(discovery: DiscoveryResult): ModelInfoV2[] {
 
 /**
  * How often to look for a newly stored key while the list is a fallback.
- * `OPENCODE_CURSOR_KEY_POLL_MS`: unset = 15s, `0`/empty = off.
+ * `OPENCODE_CURSOR_KEY_POLL_MS`: unset or invalid = 15s, `0`/empty = off.
  */
 function keyPollMs(): number {
 	const raw = process.env["OPENCODE_CURSOR_KEY_POLL_MS"];
 	if (raw === undefined) return 15_000;
+	if (raw.trim() === "") return 0;
 	const n = Number(raw);
-	return Number.isFinite(n) && n > 0 ? Math.min(n, 2_147_483_647) : 0;
+	if (!Number.isFinite(n) || n < 0) return 15_000;
+	return Math.min(n, 2_147_483_647);
 }
+
+/**
+ * A key whose discovery fell back is retried only every Nth check: often
+ * enough to recover from a transient Cursor error, rare enough not to hammer
+ * the API with a bad key (~75s at the default interval).
+ */
+const SAME_KEY_RETRY_TICKS = 5;
 
 export async function cursorV2Setup(
 	context: PluginContextV2,
@@ -406,35 +415,46 @@ export async function cursorV2Setup(
 	let discoveryKey = resolveCursorApiKey(setupStoredKey);
 	let keyWatch: NodeJS.Timeout | undefined;
 	let checking = false;
+	let disposed = false;
+	let ticksSinceAttempt = 0;
 	const stopKeyWatch = () => {
 		clearInterval(keyWatch);
 		keyWatch = undefined;
 	};
 	const checkForNewKey = async () => {
-		if (checking) return;
+		if (checking || disposed) return;
 		checking = true;
 		try {
 			const key = resolveCursorApiKey(await storedKey());
-			if (!key || key === discoveryKey) return;
+			if (disposed || !key) return;
+			// Same key that already fell back (bad key or transient error):
+			// retry only every SAME_KEY_RETRY_TICKS checks.
+			if (key === discoveryKey && ++ticksSinceAttempt < SAME_KEY_RETRY_TICKS) return;
 			discoveryKey = key;
+			ticksSinceAttempt = 0;
 			const next = await discoverModels({ apiKey: key });
-			// A bad new key still falls back: keep polling for the next change.
-			// No watch left means setup was disposed while discovery ran.
-			if (next.source === "fallback" || !keyWatch) return;
+			if (disposed || next.source === "fallback") return;
 			stopKeyWatch();
 			discovery = next;
 			modelInfos = toModelInfos(discovery);
 			if (ctx.provider.reload) {
 				await ctx.provider.reload();
-			} else {
-				// Hosts without reload: a fresh registration rebuilds the catalog.
-				const old = providerRegistration;
-				providerRegistration = await registerProvider();
-				const index = registrations.indexOf(old);
-				if (index >= 0) registrations[index] = providerRegistration;
-				else registrations.push(providerRegistration);
-				await old.dispose().catch(() => undefined);
+				return;
 			}
+			// Hosts without reload: a fresh registration rebuilds the catalog.
+			const fresh = await registerProvider();
+			if (disposed) {
+				// Teardown ran while registering: it already disposed the old
+				// registration and will never see this one.
+				await fresh.dispose().catch(() => undefined);
+				return;
+			}
+			const old = providerRegistration;
+			providerRegistration = fresh;
+			const index = registrations.indexOf(old);
+			if (index >= 0) registrations[index] = fresh;
+			else registrations.push(fresh);
+			await old.dispose().catch(() => undefined);
 		} catch {
 			// Best-effort: the next tick retries; the list stays as it was.
 		} finally {
@@ -517,6 +537,7 @@ export async function cursorV2Setup(
 	);
 
 	return async () => {
+		disposed = true;
 		stopKeyWatch();
 		for (const registration of registrations.splice(0)) {
 			try {

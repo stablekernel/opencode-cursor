@@ -11,8 +11,9 @@ All notable changes to this project will be documented in this file.
   against an already-running background service left the 4 fallback models
   until `opencode reload`. While the list is a fallback, the plugin now checks
   for a new stored key every 15s (`OPENCODE_CURSOR_KEY_POLL_MS`, `0` disables),
-  re-runs discovery when one appears, and reloads the provider. A bad key is
-  tried once, not on every check. Fallback model names now end in "(log in to
+  re-runs discovery when one appears, and reloads the provider. A key whose
+  discovery fails (bad key or a transient Cursor error) is retried every 5th
+  check (about 75s), not on every check. Fallback model names now end in "(log in to
   Cursor for all models)", since v2 has no popup.
 
 ## [0.10.3] — 2026-11-14
