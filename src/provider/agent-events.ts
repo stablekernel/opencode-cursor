@@ -206,6 +206,12 @@ export async function* streamAgentTurn(
   // culprit and lets armWatchdog pick the larger budget while a tool runs.
   const openTools = new Map<string, string>();
 
+  // Track which tool-call IDs have been emitted to deduplicate replayed events.
+  // When the watchdog cancels and restarts a run with force, the SDK may replay
+  // tool-call-started events with the same callId. OpenCode v2 rejects duplicate
+  // tool-call events (throws "Duplicate tool call: {id}"), so we filter them here.
+  const emittedToolCalls = new Set<string>();
+
   const push = (event: CursorEvent) => {
     anyEvent = true;
     queue.push(event);
@@ -253,17 +259,27 @@ export async function* streamAgentTurn(
           input: update.toolCall?.args ?? {},
         });
         break;
-      case "tool-call-started":
+      case "tool-call-started": {
+        // Deduplicate: skip tool-call events we've already emitted. When the
+        // watchdog cancels and restarts a run with force, the SDK may replay
+        // tool-call-started with the same callId. OpenCode v2 rejects duplicates.
+        const callId = String(update.callId);
+        if (emittedToolCalls.has(callId)) {
+          if (debug) pluginLog("debug", "skipping duplicate tool-call", { callId });
+          break;
+        }
+        emittedToolCalls.add(callId);
         // Track the open call BEFORE push() re-arms the watchdog with the
         // larger tool budget.
-        openTools.set(String(update.callId), toolDisplayName(update.toolCall));
+        openTools.set(callId, toolDisplayName(update.toolCall));
         push({
           type: "tool-call",
-          id: String(update.callId),
+          id: callId,
           name: toolDisplayName(update.toolCall),
           input: update.toolCall?.args ?? {},
         });
         break;
+      }
       case "tool-call-completed": {
         openTools.delete(String(update.callId));
         const tool = update.toolCall ?? {};
