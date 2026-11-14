@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.10.3] — 2026-11-14
+
+Patch release: dependency updates only. No plugin code changes.
+
+### Changed
+
+- Bumped `@cursor/sdk` 1.1.0 → 1.3.1 (#158), `@opencode-ai/plugin`
+  1.19.4 → 1.19.5 (#153) and `semver` 7.8.5 → 7.8.6 (#157). The published
+  ranges now start at the tested versions (`^1.3.1`, `^1.19.5`, `^7.8.6`).
+- Dev-only: `tsup` 8.5.1 → 9.0.0, `vitest` 5.0.5 → 5.1.0, `@types/node`
+  26.6.5 → 26.6.6 and `@opencode-ai/sdk` 1.19.4 → 1.19.5 (#159). Building
+  from source now needs Node `^22.18.0 || ^24.11.0 || >=26.0.0` (tsup 9);
+  the runtime requirement is unchanged (`>=22.13.0`).
+
 ## [0.10.2] — 2026-10-28
 
 Patch release: a configured `thinking` level now reaches models that read
