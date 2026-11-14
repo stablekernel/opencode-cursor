@@ -99,6 +99,12 @@ const TUI_READY_MS = 2000;
 /** How long a config-time fallback waits for the auth loader before reporting. */
 const LOADER_WAIT_MS = 10_000;
 
+/** A config-hook discovery that fell back, plus the key it tried (if any). */
+interface ConfigFallback {
+	result: DiscoveryResult;
+	key: string | undefined;
+}
+
 /**
  * opencode plugin that adds a "Cursor" provider backed by the official Cursor
  * SDK (`@cursor/sdk`).
@@ -144,11 +150,13 @@ export const CursorPlugin: Plugin = async (input) => {
 	// delegation tools (which don't receive auth directly) can reuse it. Falls
 	// back to the CURSOR_API_KEY env var when the loader hasn't run.
 	let capturedApiKey: string | undefined;
-	// The auth loader's background catalog refresh, kept so the fallback notice
-	// can tell "no/invalid key" apart from "key found, restart to see models".
+	// The auth loader's background catalog refresh and the key it used, kept so
+	// the fallback notice can tell "no/invalid key" apart from "key found,
+	// restart to see models".
 	let loaderDiscovery: Promise<DiscoveryResult> | undefined;
+	let loaderKey: string | undefined;
 	// A config-time fallback still waiting for the auth loader's verdict.
-	let pendingFallback: DiscoveryResult | undefined;
+	let pendingFallback: ConfigFallback | undefined;
 	let fallbackNoticeShown = false;
 
 	// opencode client + MCP-forwarding settings captured at config time so the
@@ -181,22 +189,29 @@ export const CursorPlugin: Plugin = async (input) => {
 
 	// Discovery degrades to a 4-model static snapshot on any failure (no key,
 	// invalid key, network). Without a notice that looks like "most of my models
-	// are missing" (#152), so say why, once per plugin instance. `result` is the
-	// final verdict: the auth loader's keyed refresh when it ran, else the
-	// config-time fallback.
-	const showFallbackNotice = async (result: DiscoveryResult): Promise<void> => {
+	// are missing" (#152), so say why, once per plugin instance. `keyed` is the
+	// auth loader's refresh when it ran with a stored key.
+	const showFallbackNotice = async (
+		config: ConfigFallback,
+		keyed?: DiscoveryResult,
+	): Promise<void> => {
 		if (fallbackNoticeShown || !client) return;
 		fallbackNoticeShown = true;
-		await sleep(TUI_READY_MS);
-		const loaded = result.source === "live";
-		const message = loaded
-			? `Loaded ${result.models.length} Cursor models. Restart opencode to show them all in the model picker.`
-			: `${result.warning ?? "Showing fallback models."} Run the cursor_refresh_models tool for details.`;
+		await sleep(TUI_READY_MS, undefined, { ref: false });
+		const loaded = keyed?.source === "live";
+		// The config hook will use its own (failing) key again next launch, so
+		// "restart" would not help: point at the config key instead.
+		const configKeyFailed = loaded && config.key !== undefined && config.key !== loaderKey;
+		const message = configKeyFailed
+			? `The key in provider.cursor.options.apiKey or CURSOR_API_KEY failed (${config.result.warning ?? "no models"}), but your opencode auth login key works. Fix or remove that key to see all models.`
+			: loaded
+				? `Loaded ${keyed.models.length} Cursor models. Restart opencode to show them all in the model picker.`
+				: `${(keyed ?? config.result).warning ?? "Showing fallback models."} Run the cursor_refresh_models tool for details.`;
 		await client.tui.showToast({
 			body: {
-				title: loaded ? "Cursor models updated" : "Cursor models unavailable",
+				title: loaded && !configKeyFailed ? "Cursor models updated" : "Cursor models unavailable",
 				message,
-				variant: loaded ? "info" : "warning",
+				variant: loaded && !configKeyFailed ? "info" : "warning",
 				duration: 15000,
 			},
 		});
@@ -204,26 +219,34 @@ export const CursorPlugin: Plugin = async (input) => {
 
 	// Called by the config hook on a fallback. The auth loader (which has the
 	// stored key) usually runs after the config hook, so wait for its verdict;
-	// if it never runs (nothing stored), report the config-time result.
-	const notifyFallback = (configResult: DiscoveryResult): void => {
-		if (fallbackNoticeShown || !client) return;
+	// if it never runs (nothing stored), report the config-time result. Timers
+	// are unref'd so a headless `opencode run` never waits on them.
+	const notifyFallback = (config: ConfigFallback): void => {
+		if (fallbackNoticeShown || !client || process.env.CI) return;
 		if (loaderDiscovery) {
-			void loaderDiscovery.then(showFallbackNotice).catch(() => {});
+			void loaderDiscovery.then((keyed) => showFallbackNotice(config, keyed)).catch(() => {});
 			return;
 		}
-		pendingFallback = configResult;
-		void sleep(LOADER_WAIT_MS)
-			.then(() => (pendingFallback ? showFallbackNotice(pendingFallback) : undefined))
+		pendingFallback = config;
+		void sleep(LOADER_WAIT_MS, undefined, { ref: false })
+			.then(() => {
+				const pending = pendingFallback;
+				pendingFallback = undefined;
+				return pending ? showFallbackNotice(pending) : undefined;
+			})
 			.catch(() => {});
 	};
 
 	// Called by the auth loader: settle a pending config-time fallback with the
-	// loader's own result (a keyed refresh, or the original no-key fallback).
+	// loader's keyed refresh, or with the original fallback when it had no key.
 	const settleFallback = (): void => {
 		const pending = pendingFallback;
 		if (!pending) return;
 		pendingFallback = undefined;
-		void (loaderDiscovery ?? Promise.resolve(pending)).then(showFallbackNotice).catch(() => {});
+		const verdict = loaderDiscovery
+			? loaderDiscovery.then((keyed) => showFallbackNotice(pending, keyed))
+			: showFallbackNotice(pending);
+		void verdict.catch(() => {});
 	};
 
 	const directory = input?.directory;
@@ -514,6 +537,7 @@ export const CursorPlugin: Plugin = async (input) => {
 					// up to 24h for the cache to expire. Not awaited: discovery never
 					// throws and must not block auth/provider load. The promise is kept
 					// only so the fallback notice can read its verdict.
+					loaderKey = apiKey;
 					loaderDiscovery = discoverModels({ apiKey, forceRefresh: true });
 				}
 				settleFallback();
@@ -544,7 +568,7 @@ export const CursorPlugin: Plugin = async (input) => {
 			if (configKey) capturedApiKey ??= configKey;
 			const discovery = await discoverModels({ apiKey: configKey });
 			const { models } = discovery;
-			if (discovery.source === "fallback") notifyFallback(discovery);
+			if (discovery.source === "fallback") notifyFallback({ result: discovery, key: configKey });
 
 			// Forward opencode's configured MCP servers to the Cursor
 			// agent so it can use the same servers. Opt out via

@@ -36,19 +36,24 @@ function loaderTimeout(): void {
 const FALLBACK = ["claude-opus-4-8", "claude-sonnet-4-6", "composer-2.5", "gpt-5.5"];
 const client = { tui: { showToast: toast }, app: { log: vi.fn(async () => ({})) } };
 
-let savedEnv: string | undefined;
+const ENV_KEYS = ["CURSOR_API_KEY", "CI", "NO_UPDATE_NOTIFIER", "XDG_CACHE_HOME"] as const;
+let savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string>> = {};
 beforeEach(() => {
-	savedEnv = process.env["CURSOR_API_KEY"];
-	process.env["NO_UPDATE_NOTIFIER"] = "1"; // no version-check toast or network
+	savedEnv = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
 	delete process.env["CURSOR_API_KEY"];
+	delete process.env["CI"]; // the fallback notice is skipped under CI
+	process.env["NO_UPDATE_NOTIFIER"] = "1"; // no version-check toast or network
 	process.env["XDG_CACHE_HOME"] = mkdtempSync(join(tmpdir(), "oc-cursor-152-")); // empty cache
 	list.mockClear();
 	toast.mockClear();
 	loaderWaits.length = 0;
 });
 afterEach(() => {
-	if (savedEnv === undefined) delete process.env["CURSOR_API_KEY"];
-	else process.env["CURSOR_API_KEY"] = savedEnv;
+	for (const k of ENV_KEYS) {
+		const v = savedEnv[k];
+		if (v === undefined) delete process.env[k];
+		else process.env[k] = v;
+	}
 });
 
 async function configModels(config: Config): Promise<string[]> {
@@ -138,6 +143,47 @@ describe("issue #152: fallback is explained, once", () => {
 	it("live catalog -> no toast", async () => {
 		const hooks = await plugin({ client } as never);
 		await hooks.config!({ provider: { cursor: { options: { apiKey: "key_from_config" } } } });
+		await settle();
+		expect(toast).not.toHaveBeenCalled();
+	});
+
+	it("bad options key, good stored key -> warn about the config key, not 'restart'", async () => {
+		list.mockRejectedValueOnce(new Error("Invalid User API Key")); // config hook's bad_key; loader's call succeeds
+		const hooks = await plugin({ client } as never);
+		await hooks.config!({ provider: { cursor: { options: { apiKey: "bad_key" } } } });
+		await hooks.auth!.loader!(async () => ({ type: "api", key: "good_key" }) as never, {} as never);
+		await settle();
+		expect(toast).toHaveBeenCalledTimes(1);
+		const body = toast.mock.calls[0]![0].body;
+		expect(body.variant).toBe("warning");
+		expect(body.message).toContain("provider.cursor.options.apiKey");
+		expect(body.message).toContain("Invalid User API Key");
+		expect(body.message).not.toContain("Restart");
+	});
+
+	it("auth loader runs before the config hook -> its verdict is used", async () => {
+		// Hold the loader's refresh open so the config hook still sees no cache.
+		const held: Array<() => void> = [];
+		list.mockImplementationOnce(async () => {
+			await new Promise<void>((resolve) => held.push(resolve)); // executor form: ES2023 lib
+			return Array.from({ length: 10 }, (_, i) => ({ id: `live-model-${i}`, displayName: `Live ${i}` }));
+		});
+		const hooks = await plugin({ client } as never);
+		await hooks.auth!.loader!(async () => ({ type: "api", key: "key_from_auth" }) as never, {} as never);
+		await hooks.config!({});
+		await settle();
+		expect(toast).not.toHaveBeenCalled();
+		for (const release of held) release();
+		await settle();
+		expect(toast).toHaveBeenCalledTimes(1);
+		expect(toast.mock.calls[0]![0].body.message).toContain("Loaded 10 Cursor models");
+	});
+
+	it("CI -> no toast", async () => {
+		process.env["CI"] = "true";
+		const hooks = await plugin({ client } as never);
+		await hooks.config!({});
+		loaderTimeout();
 		await settle();
 		expect(toast).not.toHaveBeenCalled();
 	});
