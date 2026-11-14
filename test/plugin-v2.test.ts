@@ -102,11 +102,16 @@ const pkgVersion = JSON.parse(
 
 let savedEnvKey: string | undefined;
 let savedProviderNpm: string | undefined;
+let savedKeyPoll: string | undefined;
 
 beforeEach(() => {
 	savedEnvKey = process.env.CURSOR_API_KEY;
 	delete process.env.CURSOR_API_KEY;
 	savedProviderNpm = process.env.OPENCODE_CURSOR_PROVIDER_NPM;
+	// Live key polling (G-013) is covered in v2-live-model-refresh.test.ts;
+	// off here so setups that are never disposed leave no intervals behind.
+	savedKeyPoll = process.env.OPENCODE_CURSOR_KEY_POLL_MS;
+	process.env.OPENCODE_CURSOR_KEY_POLL_MS = "0";
 	delete process.env.OPENCODE_CURSOR_PROVIDER_NPM;
 });
 
@@ -115,6 +120,8 @@ afterEach(() => {
 	else process.env.CURSOR_API_KEY = savedEnvKey;
 	if (savedProviderNpm === undefined) delete process.env.OPENCODE_CURSOR_PROVIDER_NPM;
 	else process.env.OPENCODE_CURSOR_PROVIDER_NPM = savedProviderNpm;
+	if (savedKeyPoll === undefined) delete process.env.OPENCODE_CURSOR_KEY_POLL_MS;
+	else process.env.OPENCODE_CURSOR_KEY_POLL_MS = savedKeyPoll;
 });
 
 describe("dual default export", () => {
