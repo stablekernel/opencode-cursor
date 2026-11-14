@@ -155,11 +155,47 @@ describe("v2 live model refresh (G-013)", () => {
 		expect(badCalls()).toBe(1);
 		await ticks(1);
 		expect(badCalls()).toBe(2);
+		// The backoff restarts after each retry, not just the first.
+		await ticks(4);
+		expect(badCalls()).toBe(2);
+		await ticks(1);
+		expect(badCalls()).toBe(3);
 		expect(h.provider.reload).not.toHaveBeenCalled();
 		// A different key is tried on the next check, not after the backoff.
 		h.storeKey("good-key");
 		await ticks(1);
 		expect(h.provider.reload).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not reload after teardown during discovery", async () => {
+		const h = makeCtx();
+		const dispose = await setup(h);
+		let finishDiscovery!: () => void;
+		discover.mockImplementationOnce(
+			() => new Promise((resolve) => (finishDiscovery = () => resolve(LIVE))),
+		);
+		h.storeKey("good-key");
+		await ticks(1);
+		expect(discover).toHaveBeenLastCalledWith({ apiKey: "good-key" });
+		await dispose();
+		finishDiscovery();
+		await ticks(1);
+		expect(h.provider.reload).not.toHaveBeenCalled();
+	});
+
+	it("keeps polling when reload throws, and retries it", async () => {
+		const h = makeCtx();
+		await setup(h);
+		h.provider.reload!.mockRejectedValueOnce(new Error("catalog busy"));
+		h.storeKey("good-key");
+		await ticks(1);
+		expect(h.provider.reload).toHaveBeenCalledTimes(1);
+		await ticks(5);
+		expect(h.provider.reload).toHaveBeenCalledTimes(2);
+		// Success stops the watch.
+		const calls = discover.mock.calls.length;
+		await ticks(10);
+		expect(discover.mock.calls.length).toBe(calls);
 	});
 
 	it("recovers a good key whose first discovery failed transiently", async () => {

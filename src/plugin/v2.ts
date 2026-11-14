@@ -434,11 +434,13 @@ export async function cursorV2Setup(
 			ticksSinceAttempt = 0;
 			const next = await discoverModels({ apiKey: key });
 			if (disposed || next.source === "fallback") return;
-			stopKeyWatch();
 			discovery = next;
 			modelInfos = toModelInfos(discovery);
 			if (ctx.provider.reload) {
 				await ctx.provider.reload();
+				// Stop only once the catalog took the new list: a throwing reload
+				// leaves the watch on, and the same-key backoff retries it.
+				stopKeyWatch();
 				return;
 			}
 			// Hosts without reload: a fresh registration rebuilds the catalog.
@@ -454,9 +456,10 @@ export async function cursorV2Setup(
 			const index = registrations.indexOf(old);
 			if (index >= 0) registrations[index] = fresh;
 			else registrations.push(fresh);
+			stopKeyWatch();
 			await old.dispose().catch(() => undefined);
 		} catch {
-			// Best-effort: the next tick retries; the list stays as it was.
+			// Best-effort: the list stays as it was; the same-key backoff retries.
 		} finally {
 			checking = false;
 		}
