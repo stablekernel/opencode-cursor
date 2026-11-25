@@ -10,6 +10,7 @@ import {
   getLocalVersion,
   getLatestVersion,
   clearVersionCache,
+  isLocalInstall,
   PLUGIN_CACHE_PATH,
 } from "../version-check.js";
 
@@ -333,6 +334,19 @@ export function buildMaintenanceTools(
             title: "cursor plugin (unknown version)",
             output: "Could not determine the installed plugin version.",
             metadata: { local, latest: undefined, status: "failed" as const },
+          };
+        }
+
+        // A local-path install is a checkout opencode does not update; npm's
+        // `latest` says nothing about it, so point at git instead of clearing
+        // a cache that is not in use.
+        if (isLocalInstall()) {
+          return {
+            title: "cursor plugin (local install)",
+            output:
+              `Running from a local checkout (v${local}); opencode does not update local plugins.\n` +
+              "Update with `git pull` in the checkout, then restart opencode.",
+            metadata: { local, latest: undefined, status: "local" as const },
           };
         }
 

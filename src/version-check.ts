@@ -1,8 +1,9 @@
 import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, sep } from "node:path";
+import { pathToFileURL, fileURLToPath } from "node:url";
 import { get } from "node:https";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import semver from "semver";
 
 /**
@@ -19,22 +20,50 @@ const PACKAGE_NAME = "@stablekernel/opencode-cursor";
 const REGISTRY_URL = `https://registry.npmjs.org/${encodeURIComponent(PACKAGE_NAME)}/latest`;
 
 /**
+ * The directory opencode caches npm/git plugin installs under. v1 used
+ * `cache/packages`; v2 uses `cache/npm` and nests a content-hash directory
+ * below each `<spec>`, so callers remove the spec dir, not a hash dir.
+ */
+const PLUGINS_CACHE_ROOT =
+	process.platform === "win32"
+		? join(process.env.LocalAppData ?? join(homedir(), "AppData", "Local"), "opencode", "cache", "npm")
+		: join(process.env.XDG_CACHE_HOME?.trim() || join(homedir(), ".cache"), "opencode", "npm");
+
+/**
  * The path where opencode caches the installed plugin package.
  * Used by `warnIfStale` (to build the removal command) and by the
  * `cursor_update_plugin` tool (to actually clear the cache) — single source
  * of truth so both stay in sync.
  */
-export const PLUGIN_CACHE_PATH =
-	process.platform === "win32"
-		? join(
-				process.env.LocalAppData ?? join(homedir(), "AppData", "Local"),
-				"opencode",
-				"cache",
-				"packages",
-				"@stablekernel",
-				"opencode-cursor@latest",
-		  )
-		: join(homedir(), ".cache", "opencode", "packages", `${PACKAGE_NAME}@latest`);
+export const PLUGIN_CACHE_PATH = join(PLUGINS_CACHE_ROOT, `${PACKAGE_NAME}@latest`);
+
+/**
+ * True when this copy runs from a checkout instead of opencode's cache (a
+ * local-path plugin entry). opencode excludes local plugins from
+ * `opencode plugin update`, so update checks must not offer a cache clear.
+ */
+export function isLocalInstall(): boolean {
+	// Tests and CI run from source; `OPENCODE_CURSOR_CACHE_INSTALL=1` simulates
+	// a cache install so the npm-only paths stay exercised.
+	if (process.env["OPENCODE_CURSOR_CACHE_INSTALL"] === "1") return false;
+	return !fileURLToPath(import.meta.url).startsWith(PLUGINS_CACHE_ROOT + sep);
+}
+
+/**
+ * A `file://` specifier for this checkout's provider entry, for opencode to
+ * load instead of the published package. Undefined for cache installs.
+ */
+export function localProviderSpec(): string | undefined {
+	if (!isLocalInstall()) return undefined;
+	let dir = dirname(fileURLToPath(import.meta.url));
+	for (let depth = 0; depth < 4; depth++) {
+		if (existsSync(join(dir, "package.json"))) {
+			return pathToFileURL(join(dir, "dist", "provider", "index.js")).href;
+		}
+		dir = dirname(dir);
+	}
+	return undefined;
+}
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 // Failed fetches are retried sooner than successful ones so a transient
 // network error doesn't suppress the check for a full day.
@@ -165,6 +194,9 @@ export async function getLatestVersion(): Promise<string | undefined> {
  */
 export async function warnIfStale(prefetchedLatest?: string): Promise<void> {
 	if (process.env.CI || process.env.NO_UPDATE_NOTIFIER) return;
+	// A local checkout is not the thing npm's `latest` describes; updating it
+	// is a `git pull`, and the update tool says so.
+	if (isLocalInstall()) return;
 
 	const local = getLocalVersion();
 	if (!local || !semver.valid(local)) return;

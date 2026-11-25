@@ -59,14 +59,33 @@ auto-update it. If you see a stale-version warning from the plugin, or a version
 mismatch, exit opencode and clear the cached package:
 
 ```bash
-# macOS / Linux
+# opencode v2
+rm -rf ~/.cache/opencode/npm/@stablekernel/opencode-cursor@latest
+rmdir /s /q "%LocalAppData%\opencode\cache\npm\@stablekernel\opencode-cursor@latest"
+# opencode v1
 rm -rf ~/.cache/opencode/packages/@stablekernel/opencode-cursor@latest
-# Windows
 rmdir /s /q "%LocalAppData%\opencode\cache\packages\@stablekernel\opencode-cursor@latest"
 ```
 
-Then restart opencode. (This cache layout is opencode v1's; on v2 run
-`opencode plugin update` — see [opencode v2](#opencode-v2).)
+Then restart opencode. (On v2 you can also run `opencode plugin update` — see
+[opencode v2](#opencode-v2).)
+
+### Local checkout
+
+A checkout works as a plugin directory on v2; build it once (`npm ci && npm run
+build`) and the provider is loaded from the same checkout, so both halves run
+your code:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": ["/absolute/path/to/opencode-cursor"]
+}
+```
+
+opencode skips local plugins in `opencode plugin update`, so update with
+`git pull` in the checkout, then restart. `cursor_update_plugin` reports the
+same.
 
 Drop `@latest` (`"@stablekernel/opencode-cursor"`) or pin a version
 (`"@stablekernel/opencode-cursor@1.2.3"`) if you prefer deterministic installs.
@@ -103,6 +122,11 @@ reads no plugin-level options on v2 (a `plugins` entry with an options object
 is accepted by v2's config schema but ignored by this plugin), and it registers
 its own provider record — so the v1 `provider.cursor` block does not apply
 there. Configure v2 through the environment variables listed below.
+
+If the background service started before you logged in, the plugin checks for a
+stored key every 15 seconds and loads the full model list once it finds one, with
+no `opencode reload` needed. Until then the fallback models' names end in
+"(log in to Cursor for all models)".
 
 **Tools not exposed on v2** — `cursor_delegate`, `cursor_cloud_agent` (delegation)
 and `cursor_update_plugin` (self-update) are v1-only, deliberately:
@@ -273,6 +297,7 @@ See [SECURITY.md](./SECURITY.md) for the full threat model.
 | `OPENCODE_CURSOR_TOOL_STALL_MS` | `600000` | Stream-watchdog timeout in ms while a tool call is in flight (e.g. a long build or test suite). `0` disables the bound during tool execution only — see [Reliability](#reliability) |
 | `OPENCODE_CURSOR_SIDECAR` | — | Legacy: `1` maps to `sidecar`, `0` maps to `http2-direct` (superseded by `OPENCODE_CURSOR_TRANSPORT`) |
 | `OPENCODE_CURSOR_TOOL_INPUT_STREAM` | on | Set to `0` to disable live tool-input streaming (`tool-input-start`/`-delta`/`-end` parts) |
+| `OPENCODE_CURSOR_KEY_POLL_MS` | `15000` | v2 only: how often to check for a newly stored key while the model list is a fallback. `0` or empty disables; an invalid value uses the default |
 
 ### Session reuse (`session`)
 
@@ -391,8 +416,8 @@ The mirror includes:
   win on duplicate ids). `~/` prefixes are expanded to your home directory; relative
   paths are resolved against the project directory.
 - **Plugin-bundled skills** — skills that ship inside installed opencode plugins,
-  scanned from the opencode plugin cache (`~/.cache/opencode/packages/` on
-  macOS/Linux; `%LocalAppData%\opencode\cache\packages\` on Windows) and from
+  scanned from the opencode plugin cache (`~/.cache/opencode/npm/` on
+  macOS/Linux; `%LocalAppData%\opencode\cache\npm\` on Windows) and from
   `skills/`/`skill/` dirs alongside file-based plugins
   (`~/.config/opencode/plugin/`, `~/.config/opencode/plugins/`, and the project's
   `.opencode/plugin/`). Handles npm specs (`pkg@latest`, `@scope/pkg@latest`) and
@@ -631,6 +656,11 @@ second, opencode-driven pass is redundant — and it is actively harmful here:
 The suppression works by emitting a very large `limit.input`, which is what opencode uses as its
 compaction threshold. The real `limit.context` is left untouched, so the TUI's context-window gauge
 and cost reporting keep working.
+
+On opencode v2 the cap is `min(limit.input, limit.context)` at 85%, so `limit.input` alone cannot
+push the trigger away. Published windows carry 25% headroom instead, which puts the 85% point past
+the ~96% where Cursor compacts — the trade is a gauge that reads about 80% when the window is
+genuinely full.
 
 > [!IMPORTANT]
 > This suppresses the **proactive** threshold trigger only, and opencode has no reactive

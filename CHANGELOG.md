@@ -4,29 +4,35 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [0.10.4] — 2026-11-25
-
-Patch release: fixes the model list falling back to 4 models when the key
-lives in `provider.cursor.options.apiKey` (#152), plus a security override
-and dependency updates.
-
-### Security
-
-- Overrode transitive `effect` (via `@opencode-ai/plugin`) to
-  `^4.0.0-beta.103`, resolving to 4.1.5 (was 4.0.0-beta.83), to close
-  Dependabot security alert #32 (#167). The lockfile also drops packages
-  that only the old `effect` pulled in. npm does not publish overrides, so
-  installs of this package still get `effect` 4.0.0-beta.83 (pinned by
-  `@opencode-ai/plugin` 1.19.6) until upstream bumps it.
-
 ### Fixed
 
+- **v2: the context gauge no longer reads past 100%, and turns no longer trip
+  compaction mid-conversation.** Two separate causes. Replayed turns were
+  summed into the visible turn's token counts, and opencode reads those as
+  context *used*; they are no longer folded in, so replayed turns under-report
+  cost. Separately, v2's auto-compaction cap is 85% of
+  `min(limit.input, limit.context)`, so the v1 `limit.input` sentinel is inert
+  there; Cursor windows are now published with 25% headroom so that 85% point
+  lands past the ~96% where the Cursor agent compacts. The gauge therefore
+  reads about 80% when the window is genuinely full.
+- **opencode v2: the model list updates after you log in to a running
+  service.** Discovery ran once at plugin setup, so `opencode auth login`
+  against an already-running background service left the 4 fallback models
+  until `opencode reload`. While the list is a fallback, the plugin now checks
+  for a new stored key every 15s (`OPENCODE_CURSOR_KEY_POLL_MS`, `0` disables),
+  re-runs discovery when one appears, and reloads the provider. A key whose
+  discovery fails (bad key or a transient Cursor error) is retried every 5th
+  check (about 75s), not on every check. Fallback model names now end in "(log in to
+  Cursor for all models)", since v2 has no popup.
 - **Model list no longer stuck on 4 fallback models when the key is in
   `provider.cursor.options.apiKey` (#152).** Chat used that key, but model
   discovery (the `config` hook and the `provider.models` route) only read
   `opencode auth login` and `CURSOR_API_KEY`, so the picker showed the
   static fallback (Composer 2.5, Claude Opus 4.8, Claude Sonnet 4.6, GPT-5.5)
-  instead of your full catalog.
+  instead of your full catalog. Discovery and the refresh tool use that key
+  now (a stored `auth login` key still wins).
+- **The Cursor integration is capitalised.** "Connect an integration" listed
+  the lowercase integration id (`cursor`); it now shows "Cursor".
 - **First launch after `opencode auth login` shows the full model list.** The
   `config` hook cannot see the stored key (only the auth loader gets it, after
   the picker is seeded), so discovery now also reads the Cursor key from
@@ -39,13 +45,13 @@ and dependency updates.
   invalid key, network error), opencode shows one toast with the cause. If
   the stored key loads the catalog after startup, the toast says to restart
   opencode to see all models instead.
-
-### Changed
-
-- Lockfile bumps: `@cursor/sdk` 1.3.1 → 1.4.2 (#166) and
-  `@opencode-ai/plugin` 1.19.5 → 1.19.6 (#164). Dev-only: `@opencode-ai/sdk`
-  1.19.5 → 1.19.6 and `vitest` 5.1.0 → 5.1.1 (#165). The published ranges
-  are unchanged.
+- **Updates point at the right place, including for a local checkout.**
+  `cursor_update_plugin` and `scripts/opencode-plugins-refresh` cleared
+  `cache/packages`, which opencode v2 no longer uses (v2 installs under
+  `cache/npm`), so both were silent no-ops. Both use the v2 path now. A
+  plugin running from a local path reports "run `git pull`" instead of
+  clearing an unrelated cache, its stale-version toast is suppressed, and the
+  provider half loads from the same checkout rather than from npm.
 
 ## [0.10.3] — 2026-11-14
 

@@ -65,7 +65,9 @@ export const MODEL_IDS = [
   "auto-smart",
   "claude-fable-5",
   "claude-fable-5-1",
+  "claude-fable-5-2",
   "claude-haiku-4-5",
+  "claude-haiku-5-5",
   "claude-opus-4-5",
   "claude-opus-4-6",
   "claude-opus-4-7",
@@ -80,6 +82,7 @@ export const MODEL_IDS = [
   "composer-2",
   "composer-2.5",
   "default",
+  "deepseek-v41-flash-1017",
   "gemini-2.5-flash",
   "gemini-3-flash",
   "gemini-3.1-pro",
@@ -87,6 +90,13 @@ export const MODEL_IDS = [
   "gemini-3.6-flash",
   "gemini-3.7-flash",
   "gemini-3.8-flash",
+  "gemini-4-argon",
+  "gemini-4-carbon",
+  "gemini-4-hydrogen",
+  "gemini-4-neon",
+  "glm-5.2",
+  "glm-5p3",
+  "glm-5p3-flash",
   "gpt-5-mini",
   "gpt-5.1",
   "gpt-5.2",
@@ -101,7 +111,10 @@ export const MODEL_IDS = [
   "grok-4.5",
   "grok-4.6",
   "grok-4.7",
+  "kimi-k2.7-code",
+  "kimi-k3",
   "muse-spark-1.3",
+  "muse-wonder-1.0",
 ];
 
 const POOL_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -133,6 +146,26 @@ export const OVERRIDES = {
     context: 272_000,
     cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
     why: "docs list only GPT-5.1 Codex / Codex Max / Codex Mini, never bare 5.1; values follow GPT-5.1 Codex",
+  },
+  "deepseek-v41-flash-1017": {
+    context: 1_000_000,
+    cost: { input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0 },
+    why: 'catalog id spells "v41", docs name "V4.1", so the token sets never match',
+  },
+  "glm-5p3": {
+    context: 1_000_000,
+    cost: { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
+    why: 'catalog id spells "glm-5p3", docs name "GLM 5.3", so the token sets never match',
+  },
+  "glm-5p3-flash": {
+    context: 1_000_000,
+    cost: { input: 0.15, output: 0.5, cacheRead: 0.029, cacheWrite: 0 },
+    why: 'catalog id spells "glm-5p3-flash", docs name "GLM 5.3 Flash", so the token sets never match',
+  },
+  "muse-wonder-1.0": {
+    context: 300_000,
+    cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 0 },
+    why: 'catalog id carries a "1.0" suffix the docs name "Muse Wonder" omits',
   },
 };
 
@@ -562,11 +595,33 @@ const DEFAULT_CONTEXT_LIMIT = 200_000;
  * that a config-channel \`limit.input\` survives validation and reaches
  * \`Provider.list()\` with \`limit.context\` intact.
  *
+ * v1 only: opencode v2 caps at \`min(input, context)\`, where this sentinel is
+ * inert — see \`CONTEXT_HEADROOM\`, which is what keeps compaction off on v2.
+ *
  * Caveat: \`Is()\` is \`max(0, input - reserved)\`, so a user setting
  * \`compaction.reserved >= this value\` would drive the threshold to 0 and make
  * compaction fire every turn. Absurd but user-settable.
  */
 export const NO_AUTO_COMPACTION_INPUT_LIMIT = 1_000_000_000;
+
+/**
+ * Extra headroom published on top of a real context window.
+ *
+ * \`limit.input\` alone is not enough on opencode v2: its cap is 85% of
+ * \`min(limit.input, limit.context)\` (\`wA\`/\`wm\` in the 2.4.1 binary), so a huge
+ * \`input\` just collapses back to \`context\` and the trigger still fires at 85%.
+ * Publishing the window 25% larger puts that 85% point past the ~96% where the
+ * Cursor agent compacts, so Cursor still wins. The trade is the TUI gauge,
+ * which reads ~80% when the window is actually full.
+ *
+ * v1 caps at \`limit.input - reserved\` and is unaffected either way.
+ */
+export const CONTEXT_HEADROOM = 1.25;
+
+/** Apply {@link CONTEXT_HEADROOM} to a real window before publishing it. */
+export function reportContextLimit(tokens: number): number {
+  return Math.ceil(tokens * CONTEXT_HEADROOM);
+}
 
 /**
  * Resolve a model's context window by longest-prefix match against

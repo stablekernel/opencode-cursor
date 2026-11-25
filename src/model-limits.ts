@@ -5,7 +5,7 @@
  *   context windows  https://cursor.com/docs/account/pricing/request-based-legacy.md
  *   pricing          https://cursor.com/docs/models-and-pricing.md
  *
- * Data last changed: 2026-10-27
+ * Data last changed: 2026-11-25
  * (a sync that finds no data change leaves this date alone, so it dates the
  *  last change to the generated maps — NOT the last time they were verified.
  *  Verification runs on a schedule in CI; see the model-data-drift job.)
@@ -40,7 +40,9 @@ const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   "auto-smart": 200_000,
   "claude-fable-5": 300_000,
   "claude-fable-5-1": 300_000,
+  "claude-fable-5-2": 300_000,
   "claude-haiku-4-5": 200_000,
+  "claude-haiku-5-5": 300_000,
   "claude-opus-4-5": 200_000,
   "claude-opus-4-6": 200_000,
   "claude-opus-4-7": 300_000,
@@ -54,6 +56,7 @@ const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   "claude-sonnet-5-5": 200_000,
   "composer-2": 200_000,
   "composer-2.5": 200_000,
+  "deepseek-v41-flash-1017": 1_000_000,
   "default": 200_000,
   "gemini-2.5-flash": 200_000,
   "gemini-3-flash": 200_000,
@@ -62,6 +65,13 @@ const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   "gemini-3.6-flash": 200_000,
   "gemini-3.7-flash": 200_000,
   "gemini-3.8-flash": 200_000,
+  "gemini-4-argon": 200_000,
+  "gemini-4-carbon": 200_000,
+  "gemini-4-hydrogen": 200_000,
+  "gemini-4-neon": 200_000,
+  "glm-5.2": 200_000,
+  "glm-5p3": 1_000_000,
+  "glm-5p3-flash": 1_000_000,
   "gpt-5-mini": 272_000,
   "gpt-5.1": 272_000,
   "gpt-5.2": 272_000,
@@ -76,7 +86,10 @@ const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   "grok-4.5": 256_000,
   "grok-4.6": 256_000,
   "grok-4.7": 256_000,
+  "kimi-k2.7-code": 262_000,
+  "kimi-k3": 200_000,
   "muse-spark-1.3": 300_000,
+  "muse-wonder-1.0": 300_000,
 };
 
 const DEFAULT_CONTEXT_LIMIT = 200_000;
@@ -110,11 +123,33 @@ const DEFAULT_CONTEXT_LIMIT = 200_000;
  * that a config-channel `limit.input` survives validation and reaches
  * `Provider.list()` with `limit.context` intact.
  *
+ * v1 only: opencode v2 caps at `min(input, context)`, where this sentinel is
+ * inert — see `CONTEXT_HEADROOM`, which is what keeps compaction off on v2.
+ *
  * Caveat: `Is()` is `max(0, input - reserved)`, so a user setting
  * `compaction.reserved >= this value` would drive the threshold to 0 and make
  * compaction fire every turn. Absurd but user-settable.
  */
 export const NO_AUTO_COMPACTION_INPUT_LIMIT = 1_000_000_000;
+
+/**
+ * Extra headroom published on top of a real context window.
+ *
+ * `limit.input` alone is not enough on opencode v2: its cap is 85% of
+ * `min(limit.input, limit.context)` (`wA`/`wm` in the 2.4.1 binary), so a huge
+ * `input` just collapses back to `context` and the trigger still fires at 85%.
+ * Publishing the window 25% larger puts that 85% point past the ~96% where the
+ * Cursor agent compacts, so Cursor still wins. The trade is the TUI gauge,
+ * which reads ~80% when the window is actually full.
+ *
+ * v1 caps at `limit.input - reserved` and is unaffected either way.
+ */
+export const CONTEXT_HEADROOM = 1.25;
+
+/** Apply {@link CONTEXT_HEADROOM} to a real window before publishing it. */
+export function reportContextLimit(tokens: number): number {
+  return Math.ceil(tokens * CONTEXT_HEADROOM);
+}
 
 /**
  * Resolve a model's context window by longest-prefix match against
@@ -145,7 +180,9 @@ const MODEL_COST: Record<string, { input: number; output: number; cacheRead: num
   "auto-smart": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   "claude-fable-5": { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
   "claude-fable-5-1": { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
+  "claude-fable-5-2": { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10 },
   "claude-haiku-4-5": { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+  "claude-haiku-5-5": { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
   "claude-opus-4-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   "claude-opus-4-6": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   "claude-opus-4-7": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
@@ -159,6 +196,7 @@ const MODEL_COST: Record<string, { input: number; output: number; cacheRead: num
   "claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
   "composer-2": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   "composer-2.5": { input: 0.5, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
+  "deepseek-v41-flash-1017": { input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0 },
   "default": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   "gemini-2.5-flash": { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 },
   "gemini-3-flash": { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 },
@@ -167,6 +205,13 @@ const MODEL_COST: Record<string, { input: number; output: number; cacheRead: num
   "gemini-3.6-flash": { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 },
   "gemini-3.7-flash": { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0 },
   "gemini-3.8-flash": { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0 },
+  "gemini-4-argon": { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 0 },
+  "gemini-4-carbon": { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 0 },
+  "gemini-4-hydrogen": { input: 1.5, output: 7.5, cacheRead: 0.075, cacheWrite: 0 },
+  "gemini-4-neon": { input: 3, output: 15, cacheRead: 0.15, cacheWrite: 0 },
+  "glm-5.2": { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
+  "glm-5p3": { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
+  "glm-5p3-flash": { input: 0.15, output: 0.5, cacheRead: 0.029, cacheWrite: 0 },
   "gpt-5-mini": { input: 0.25, output: 2, cacheRead: 0.025, cacheWrite: 0 },
   "gpt-5.1": { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
   "gpt-5.2": { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
@@ -181,7 +226,10 @@ const MODEL_COST: Record<string, { input: number; output: number; cacheRead: num
   "grok-4.5": { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
   "grok-4.6": { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
   "grok-4.7": { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+  "kimi-k2.7-code": { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 },
+  "kimi-k3": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
   "muse-spark-1.3": { input: 1.25, output: 4.25, cacheRead: 0.15, cacheWrite: 0 },
+  "muse-wonder-1.0": { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 0 },
 };
 
 const DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };

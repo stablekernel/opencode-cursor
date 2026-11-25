@@ -1,8 +1,9 @@
 import type { Model as ModelV2 } from "@opencode-ai/sdk/v2";
 import type { ModelListItem } from "@cursor/sdk";
-import { modelSupportsReasoning } from "../model-discovery.js";
+import { modelSupportsReasoning, resolveAdvertisedContextLimit } from "../model-discovery.js";
 import {
   NO_AUTO_COMPACTION_INPUT_LIMIT,
+  reportContextLimit,
   resolveContextLimit,
   resolveCost,
   resolveOutputLimit,
@@ -12,22 +13,24 @@ import { buildModelVariants, defaultModelParams } from "../model-variants.js";
 export const PROVIDER_ID = "cursor";
 export const NPM_PACKAGE = "@stablekernel/opencode-cursor";
 
+import { localProviderSpec } from "../version-check.js";
+
 /**
- * The npm specifier opencode uses to load the provider SDK. Defaults to the
- * published package name; can be overridden with a `file://...` URL (which
- * opencode imports directly, skipping a registry install) via
- * `OPENCODE_CURSOR_PROVIDER_NPM` — useful for local development and CI before
- * the package is published.
+ * The npm (or `file://`) specifier opencode uses to load the provider SDK.
+ * Defaults to the published package, or to this checkout's provider when the
+ * plugin itself is a local path (so both halves always run the same code);
+ * `OPENCODE_CURSOR_PROVIDER_NPM` overrides either.
  */
 export function providerNpm(fallback = NPM_PACKAGE): string {
-  return process.env.OPENCODE_CURSOR_PROVIDER_NPM?.trim() || fallback;
+  return process.env.OPENCODE_CURSOR_PROVIDER_NPM?.trim() || localProviderSpec() || fallback;
 }
 
 /**
  * Build opencode's rich runtime `Model` objects from discovered Cursor models.
- * Used by the auth-aware `provider.models()` hook. Cost and context/output
- * limits are resolved per model from the shared maps in `../model-limits.js`,
- * falling back to $0 / 200K context / 32K output for models absent from them.
+ * Used by the auth-aware `provider.models()` hook. Context comes from the
+ * model's own `context` preset when it advertises one, else the shared map;
+ * cost/output come per model from the shared maps in `../model-limits.js`,
+ * falling back to $0 / 32K output for models absent from them.
  */
 export function buildModelV2Map(
   items: ModelListItem[],
@@ -55,7 +58,9 @@ export function buildModelV2Map(
         return { input: c.input, output: c.output, cache: { read: c.cacheRead, write: c.cacheWrite } };
       })(),
       limit: {
-        context: resolveContextLimit(item.id),
+        context: reportContextLimit(
+          resolveAdvertisedContextLimit(item) ?? resolveContextLimit(item.id),
+        ),
         ...(opts.autoCompaction
           ? {}
           : { input: NO_AUTO_COMPACTION_INPUT_LIMIT }),
