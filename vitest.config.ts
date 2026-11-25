@@ -7,5 +7,6 @@ export default defineConfig({
     // skills' own test files (94 load failures for anyone running `npm test`
     // locally). .cursor/ is gitignored; exclude it from test discovery.
     exclude: [...configDefaults.exclude, ".cursor/**"],
+    setupFiles: ["./test/setup-env.ts"],
   },
 });

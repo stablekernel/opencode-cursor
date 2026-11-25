@@ -73,7 +73,7 @@ export async function discoverModels(options: DiscoverOptions = {}): Promise<Dis
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     // A stale cache is better than nothing on a transient failure.
-    const stale = readModelCache(fingerprint);
+    const stale = readModelCache(fingerprint) ?? readLatestModelCache();
     if (stale && stale.length > 0) {
       return { models: stale, source: "cache", warning: `Live discovery failed (${detail}); using cached models.` };
     }
