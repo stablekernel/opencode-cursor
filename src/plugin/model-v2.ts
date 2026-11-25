@@ -1,8 +1,9 @@
 import type { Model as ModelV2 } from "@opencode-ai/sdk/v2";
 import type { ModelListItem } from "@cursor/sdk";
-import { modelSupportsReasoning } from "../model-discovery.js";
+import { modelSupportsReasoning, resolveAdvertisedContextLimit } from "../model-discovery.js";
 import {
   NO_AUTO_COMPACTION_INPUT_LIMIT,
+  reportContextLimit,
   resolveContextLimit,
   resolveCost,
   resolveOutputLimit,
@@ -25,9 +26,10 @@ export function providerNpm(fallback = NPM_PACKAGE): string {
 
 /**
  * Build opencode's rich runtime `Model` objects from discovered Cursor models.
- * Used by the auth-aware `provider.models()` hook. Cost and context/output
- * limits are resolved per model from the shared maps in `../model-limits.js`,
- * falling back to $0 / 200K context / 32K output for models absent from them.
+ * Used by the auth-aware `provider.models()` hook. Context comes from the
+ * model's own `context` preset when it advertises one, else the shared map;
+ * cost/output come per model from the shared maps in `../model-limits.js`,
+ * falling back to $0 / 32K output for models absent from them.
  */
 export function buildModelV2Map(
   items: ModelListItem[],
@@ -55,7 +57,9 @@ export function buildModelV2Map(
         return { input: c.input, output: c.output, cache: { read: c.cacheRead, write: c.cacheWrite } };
       })(),
       limit: {
-        context: resolveContextLimit(item.id),
+        context: reportContextLimit(
+          resolveAdvertisedContextLimit(item) ?? resolveContextLimit(item.id),
+        ),
         ...(opts.autoCompaction
           ? {}
           : { input: NO_AUTO_COMPACTION_INPUT_LIMIT }),

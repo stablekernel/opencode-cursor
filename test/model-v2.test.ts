@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ModelListItem } from "@cursor/sdk";
 import { buildModelV2Map } from "../src/plugin/model-v2.js";
-import { NO_AUTO_COMPACTION_INPUT_LIMIT } from "../src/model-limits.js";
+import { NO_AUTO_COMPACTION_INPUT_LIMIT, reportContextLimit } from "../src/model-limits.js";
 
 describe("buildModelV2Map", () => {
   it("seeds the fast-off default into options and exposes a fast opt-in variant", () => {
@@ -28,15 +28,15 @@ describe("buildModelV2Map", () => {
       { id: "gpt-5.5", displayName: "GPT-5.5" },
       { id: "grok-4.5", displayName: "Grok 4.5" },
     ]);
-    expect(map["claude-sonnet-4-6"]!.limit.context).toBe(200_000);
-    expect(map["claude-opus-4-8"]!.limit.context).toBe(300_000);
-    expect(map["gpt-5.5"]!.limit.context).toBe(272_000);
-    expect(map["grok-4.5"]!.limit.context).toBe(256_000);
+    expect(map["claude-sonnet-4-6"]!.limit.context).toBe(250_000);
+    expect(map["claude-opus-4-8"]!.limit.context).toBe(375_000);
+    expect(map["gpt-5.5"]!.limit.context).toBe(340_000);
+    expect(map["grok-4.5"]!.limit.context).toBe(320_000);
   });
 
   it("falls back to 200K context for unknown models", () => {
     const map = buildModelV2Map([{ id: "some-unknown-model", displayName: "Unknown" }]);
-    expect(map["some-unknown-model"]!.limit.context).toBe(200_000);
+    expect(map["some-unknown-model"]!.limit.context).toBe(250_000);
   });
 
   it("uses longest prefix match for context limit", () => {
@@ -44,8 +44,8 @@ describe("buildModelV2Map", () => {
       { id: "claude-opus-4-5", displayName: "Opus 4.5" },
       { id: "claude-opus-4-8", displayName: "Opus 4.8" },
     ]);
-    expect(map["claude-opus-4-5"]!.limit.context).toBe(200_000);
-    expect(map["claude-opus-4-8"]!.limit.context).toBe(300_000);
+    expect(map["claude-opus-4-5"]!.limit.context).toBe(250_000);
+    expect(map["claude-opus-4-8"]!.limit.context).toBe(375_000);
   });
 
   it("emits the no-auto-compaction input sentinel by default, keeping context honest", () => {
@@ -53,9 +53,14 @@ describe("buildModelV2Map", () => {
     // agentId per cycle, which permanently leaks guarded SQLite descriptors.
     const map = buildModelV2Map([{ id: "claude-opus-4-8", displayName: "Opus 4.8" }]);
     expect(map["claude-opus-4-8"]!.limit.input).toBe(NO_AUTO_COMPACTION_INPUT_LIMIT);
-    // context stays real so the TUI gauge keeps working
-    expect(map["claude-opus-4-8"]!.limit.context).toBe(300_000);
+    // 300K with headroom: opencode v2 caps at 85% of min(input, context), so
+    // the published window is padded to keep that cap past Cursor's own ~96%.
+    expect(map["claude-opus-4-8"]!.limit.context).toBe(reportContextLimit(300_000));
     expect(map["claude-opus-4-8"]!.limit.output).toBe(64_000);
+  });
+
+  it("pads the published window by 25% so opencode's 85% cap clears Cursor's", () => {
+    expect(reportContextLimit(1_000_000)).toBe(1_250_000);
   });
 
   it("omits the input sentinel when autoCompaction is opted in", () => {
@@ -63,7 +68,7 @@ describe("buildModelV2Map", () => {
       autoCompaction: true,
     });
     expect(map["claude-opus-4-8"]!.limit.input).toBeUndefined();
-    expect(map["claude-opus-4-8"]!.limit.context).toBe(300_000);
+    expect(map["claude-opus-4-8"]!.limit.context).toBe(375_000);
   });
 
   it("sets cost from per-model map for known models", () => {

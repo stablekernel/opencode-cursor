@@ -157,13 +157,14 @@ describe("multi-message interjection (continuation-multi)", () => {
 		expect(streamedTexts(parts)).toEqual(["c"]);
 	});
 
-	it("folds silent-replay usage into the final visible turn's finish usage", async () => {
+	it("reports only the final visible turn's usage, not the silent replay", async () => {
 		// Turn 1: pool the agent.
 		create.mockResolvedValue(makeFakeAgent("a1", sentTurns));
 		await drain(model(), [sys, user("a")]);
 
 		// Turn 2: continuation-multi (b silent, c streamed). Each turn reports the
-		// same usage; the final finish usage must equal their sum.
+		// same usage; opencode reads the finish usage as context used, so only
+		// the streamed turn's own numbers are reported.
 		resume.mockResolvedValue(
 			makeFakeAgent("a1", sentTurns, {
 				usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 1, cacheWriteTokens: 2 },
@@ -185,12 +186,11 @@ describe("multi-message interjection (continuation-multi)", () => {
 			};
 		};
 		expect(finish).toBeDefined();
-		// b (silent) + c (streamed): 10+10, 5+5, 1+1 cacheRead, 2+2 cacheWrite.
-		expect(finish.usage.inputTokens.total).toBe(20);
-		expect(finish.usage.inputTokens.noCache).toBe(14);
-		expect(finish.usage.outputTokens.total).toBe(10);
-		expect(finish.usage.inputTokens.cacheRead).toBe(2);
-		expect(finish.usage.inputTokens.cacheWrite).toBe(4);
+		expect(finish.usage.inputTokens.total).toBe(10);
+		expect(finish.usage.inputTokens.noCache).toBe(7);
+		expect(finish.usage.outputTokens.total).toBe(5);
+		expect(finish.usage.inputTokens.cacheRead).toBe(1);
+		expect(finish.usage.inputTokens.cacheWrite).toBe(2);
 	});
 
 	it("drops the session record when a silent send fails mid-sequence, so the next turn replays fresh", async () => {

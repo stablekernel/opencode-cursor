@@ -48,31 +48,10 @@ export interface StreamAgentTurnOptions {
   abortSignal?: AbortSignal;
   /** Dedupe key forwarded to every (re)send of this turn. */
   idempotencyKey?: string;
-  /**
-   * Usage accumulated by preceding silent replay turns. When set, yielded
-   * `usage` events carry `usageBase + turn-ended` sums so the visible turn's
-   * reported usage includes everything spent replaying earlier messages.
-   */
-  usageBase?: CursorUsage;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
-}
-
-/** Sum two usage reports (either may be absent). */
-export function addUsage(a?: CursorUsage, b?: CursorUsage): CursorUsage | undefined {
-  if (!a) return b;
-  if (!b) return a;
-  return {
-    inputTokens: a.inputTokens + b.inputTokens,
-    outputTokens: a.outputTokens + b.outputTokens,
-    cacheReadTokens: a.cacheReadTokens + b.cacheReadTokens,
-    cacheWriteTokens: a.cacheWriteTokens + b.cacheWriteTokens,
-    ...(a.reasoningTokens !== undefined || b.reasoningTokens !== undefined
-      ? { reasoningTokens: (a.reasoningTokens ?? 0) + (b.reasoningTokens ?? 0) }
-      : {}),
-  };
 }
 
 /**
@@ -300,10 +279,12 @@ export async function* streamAgentTurn(
         // would otherwise leave an entry pinned here, holding the turn on the
         // 10-minute tool budget and naming a tool that already finished.
         openTools.clear();
-        if (update.usage) {
-          const summed = addUsage(options.usageBase, update.usage as CursorUsage);
-          if (summed) push({ type: "usage", usage: summed });
-        }
+        // The turn's own usage only. Replay spend is not folded in: opencode
+        // reads these tokens as context *used*, so summing them pushed the
+        // gauge past 100% and tripped auto-compaction. shortcoming: replayed
+        // turns under-report cost; fold it back if opencode grows a separate
+        // spend field.
+        if (update.usage) push({ type: "usage", usage: update.usage as CursorUsage });
         break;
     }
     // Any SDK update proves the stream is alive — including types we don't map

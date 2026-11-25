@@ -3,6 +3,7 @@ import type { Config } from "@opencode-ai/plugin";
 import { fingerprintApiKey, resolveCursorApiKey } from "./api-key.js";
 import {
   NO_AUTO_COMPACTION_INPUT_LIMIT,
+  reportContextLimit,
   resolveContextLimit,
   resolveCost,
   resolveOutputLimit,
@@ -88,6 +89,37 @@ export async function discoverModels(options: DiscoverOptions = {}): Promise<Dis
 /** True when a model exposes a thinking/reasoning parameter. */
 export function modelSupportsReasoning(item: ModelListItem): boolean {
   return (item.parameters ?? []).some((p) => /think|reason/i.test(p.id));
+}
+
+const CONTEXT_VALUE = /^(\d+(?:\.\d+)?)([km])$/i;
+
+/** `"300k"` -> 300000, `"1m"` -> 1000000; anything else -> undefined. */
+function parseContextTokens(value: string): number | undefined {
+  const match = CONTEXT_VALUE.exec(value.trim());
+  if (!match) return undefined;
+  const n = Number(match[1]);
+  return (match[2]?.toLowerCase() === "m" ? n * 1_000_000 : n * 1_000);
+}
+
+/**
+ * Context window the catalog advertises for this model, read from its `context`
+ * parameter: the default variant's value when one is marked, else the smallest.
+ *
+ * The generated docs table can only carry the published default and lags a new
+ * release by a catalog generation, so the live record wins when it has the
+ * answer. Max Mode is not assumed: only the model's own default preset counts.
+ */
+export function resolveAdvertisedContextLimit(item: ModelListItem): number | undefined {
+  const values = (item.parameters ?? [])
+    .find((p) => p.id === "context")
+    ?.values.map((v) => parseContextTokens(v.value))
+    .filter((n): n is number => n !== undefined);
+  if (!values || values.length === 0) return undefined;
+  const defaultContext = (item.variants ?? [])
+    .filter((v) => v.isDefault === true)
+    .flatMap((v) => v.params)
+    .find((p) => p.id === "context");
+  return (defaultContext ? parseContextTokens(defaultContext.value) : undefined) ?? Math.min(...values);
 }
 
 /** Shape of a single entry in opencode's `provider.<id>.models` config map. */
@@ -199,7 +231,9 @@ export function toOpencodeModels(
       variants: buildModelVariants(item),
       options: Object.keys(params).length > 0 ? { params } : {},
       limit: {
-        context: resolveContextLimit(item.id),
+        context: reportContextLimit(
+          resolveAdvertisedContextLimit(item) ?? resolveContextLimit(item.id),
+        ),
         // Suppress opencode's auto-compaction unless the user opts in: the
         // Cursor agent self-compacts, and opencode's compaction mints a
         // fresh agentId per cycle, permanently leaking guarded SQLite fds.

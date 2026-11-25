@@ -92,9 +92,9 @@ describe("toOpencodeModels config-channel limits and cost", () => {
       ] satisfies ModelListItem[],
       { autoCompaction: true },
     );
-    expect(out["claude-opus-4-8"]!.limit).toEqual({ context: 300_000, output: 64_000 });
-    expect(out["gpt-5.5"]!.limit).toEqual({ context: 272_000, output: 64_000 });
-    expect(out["grok-4.5"]!.limit).toEqual({ context: 256_000, output: 32_000 });
+    expect(out["claude-opus-4-8"]!.limit).toEqual({ context: 375_000, output: 64_000 });
+    expect(out["gpt-5.5"]!.limit).toEqual({ context: 340_000, output: 64_000 });
+    expect(out["grok-4.5"]!.limit).toEqual({ context: 320_000, output: 32_000 });
   });
 
   it("emits the no-auto-compaction input sentinel by default, keeping context honest", () => {
@@ -102,7 +102,7 @@ describe("toOpencodeModels config-channel limits and cost", () => {
       { id: "claude-opus-4-8", displayName: "Opus 4.8" },
     ] satisfies ModelListItem[]);
     expect(out["claude-opus-4-8"]!.limit).toEqual({
-      context: 300_000,
+      context: 375_000,
       input: NO_AUTO_COMPACTION_INPUT_LIMIT,
       output: 64_000,
     });
@@ -127,7 +127,7 @@ describe("toOpencodeModels config-channel limits and cost", () => {
       [{ id: "brand-new-model", displayName: "New" }] satisfies ModelListItem[],
       { autoCompaction: true },
     );
-    expect(out["brand-new-model"]!.limit).toEqual({ context: 200_000, output: 32_000 });
+    expect(out["brand-new-model"]!.limit).toEqual({ context: 250_000, output: 32_000 });
     expect(out["brand-new-model"]!.limit.input).toBeUndefined();
     expect(out["brand-new-model"]!.cost).toEqual({
       input: 0,

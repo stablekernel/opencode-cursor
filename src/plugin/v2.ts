@@ -46,7 +46,7 @@
  * not honored (models are always listed with the no-auto-compaction limit).
  */
 import { tool } from "@opencode-ai/plugin";
-import { discoverModels } from "../model-discovery.js";
+import { discoverModels, resolveAdvertisedContextLimit } from "../model-discovery.js";
 import { defaultModelParams } from "../model-variants.js";
 import { NPM_PACKAGE, PROVIDER_ID, providerNpm } from "./model-v2.js";
 import { getLocalVersion } from "../version-check.js";
@@ -55,6 +55,7 @@ import {
 	resolveContextLimit,
 	resolveOutputLimit,
 	resolveCost,
+	reportContextLimit,
 	NO_AUTO_COMPACTION_INPUT_LIMIT,
 } from "../model-limits.js";
 import { buildModelVariants } from "../model-variants.js";
@@ -82,8 +83,8 @@ export type ProviderInfoV2 = {
  * The structural contract of a v2 `Model.Info` (subset used by this setup).
  * `settings` seeds the request overrides the runner merges per request;
  * `variants` are option sets the picker merges into the provider options.
- * `limit.input` is optional: v1 uses the `NO_AUTO_COMPACTION_INPUT_LIMIT`
- * sentinel to suppress auto-compaction; v2 just omits the field.
+ * `limit.input` is optional in the schema but emitted anyway: it is the
+ * `NO_AUTO_COMPACTION_INPUT_LIMIT` sentinel that suppresses auto-compaction.
  */
 export type ModelInfoV2 = {
 	readonly id: string;
@@ -291,11 +292,13 @@ function toModelInfo(
 			output: ["text"],
 		},
 		limit: {
-			context: resolveContextLimit(id),
-			// v1 emits the NO_AUTO_COMPACTION_INPUT_LIMIT sentinel to suppress
-			// auto-compaction; v2's limit.input is optional, so omitting it has
-			// the same effect. (Honoring `autoCompaction: true` on v2 is a
-			// documented gap — see README "Known v2 gaps".)
+			context: reportContextLimit(
+				resolveAdvertisedContextLimit(item) ?? resolveContextLimit(id),
+			),
+			// The NO_AUTO_COMPACTION_INPUT_LIMIT sentinel suppresses
+			// auto-compaction; the runtime honours `limit.input` even though the
+			// v2 schema marks it optional. (Honoring `autoCompaction: true` on v2
+			// is a documented gap — see README "Known v2 gaps".)
 			input: NO_AUTO_COMPACTION_INPUT_LIMIT,
 			output: resolveOutputLimit(id),
 		},

@@ -29,6 +29,7 @@ vi.mock("../src/model-discovery.js", () => ({
 	})),
 	toOpencodeModels: () => ({}),
 	modelSupportsReasoning: () => false,
+	resolveAdvertisedContextLimit: () => undefined,
 }));
 
 import { defaultModelParams } from "../src/model-variants.js";
