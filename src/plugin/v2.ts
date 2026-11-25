@@ -47,6 +47,8 @@
  */
 import { tool } from "@opencode-ai/plugin";
 import { discoverModels } from "../model-discovery.js";
+import type { DiscoveryResult } from "../model-discovery.js";
+import { resolveCursorApiKey } from "../api-key.js";
 import { defaultModelParams } from "../model-variants.js";
 import { NPM_PACKAGE, PROVIDER_ID, providerNpm } from "./model-v2.js";
 import { getLocalVersion } from "../version-check.js";
@@ -189,6 +191,8 @@ export interface PluginContextV2 {
 				}) => void;
 			}) => void,
 		) => Promise<{ dispose: () => Promise<void> }>;
+		/** Rebuild the catalog, re-running transform callbacks (opencode 2.3.0; may be absent on older v2). */
+		readonly reload?: () => Promise<void>;
 	};
 	readonly session: {
 		readonly hook: (
@@ -309,6 +313,37 @@ function toModelInfo(
 	};
 }
 
+/** Suffix on fallback model names: v2 has no toast, so the picker says why. */
+export const FALLBACK_NAME_HINT = " (log in to Cursor for all models)";
+
+/** Catalog entries for a discovery result; fallback names carry the hint. */
+function toModelInfos(discovery: DiscoveryResult): ModelInfoV2[] {
+	const hint = discovery.source === "fallback" ? FALLBACK_NAME_HINT : "";
+	return discovery.models.map((item) =>
+		toModelInfo(item.id, `${item.displayName || item.id}${hint}`, item),
+	);
+}
+
+/**
+ * How often to look for a newly stored key while the list is a fallback.
+ * `OPENCODE_CURSOR_KEY_POLL_MS`: unset or invalid = 15s, `0`/empty = off.
+ */
+function keyPollMs(): number {
+	const raw = process.env["OPENCODE_CURSOR_KEY_POLL_MS"];
+	if (raw === undefined) return 15_000;
+	if (raw.trim() === "") return 0;
+	const n = Number(raw);
+	if (!Number.isFinite(n) || n < 0) return 15_000;
+	return Math.min(n, 2_147_483_647);
+}
+
+/**
+ * A key whose discovery fell back is retried only every Nth check: often
+ * enough to recover from a transient Cursor error, rare enough not to hammer
+ * the API with a bad key (~75s at the default interval).
+ */
+const SAME_KEY_RETRY_TICKS = 5;
+
 export async function cursorV2Setup(
 	context: PluginContextV2,
 ): Promise<() => Promise<void>> {
@@ -342,10 +377,9 @@ export async function cursorV2Setup(
 	};
 
 	// --- provider + models: one catalog built from the shared discovery helper.
-	const { models } = await discoverModels({ apiKey: await storedKey() });
-	const modelInfos = models.map((item) =>
-		toModelInfo(item.id, item.displayName || item.id, item),
-	);
+	const setupStoredKey = await storedKey();
+	let discovery = await discoverModels({ apiKey: setupStoredKey });
+	let modelInfos = toModelInfos(discovery);
 
 	// Same canonical cwd the v1 `config` hook resolves: the plugin's location
 	// directory (the session/project cwd), NOT the runner process's cwd — the
@@ -354,8 +388,11 @@ export async function cursorV2Setup(
 	// spreads into the package's `create*` options (minus its reserved keys).
 	const resolvedCwd = ctx.location.directory;
 
-	registrations.push(
-		await ctx.provider.transform((editor) => {
+	// The callback reads `modelInfos` when it runs, and v2 re-runs it on every
+	// catalog rebuild, so swapping the list and calling `provider.reload()`
+	// updates the picker in a running service (verified on opencode 2.3.0).
+	const registerProvider = () =>
+		ctx.provider.transform((editor) => {
 			editor.add({
 				info: {
 					id: PROVIDER_ID,
@@ -366,8 +403,73 @@ export async function cursorV2Setup(
 				},
 				models: modelInfos,
 			});
-		}),
-	);
+		});
+	let providerRegistration = await registerProvider();
+	registrations.push(providerRegistration);
+
+	// --- live refresh (G-013): discovery runs once at setup, and the v2 runner
+	// is a long-lived service. A user who runs `opencode auth login` after it
+	// started would otherwise keep the keyless list until `opencode reload`.
+	// While the list is not from a working key, poll for a new key and swap
+	// the list in once discovery succeeds with it.
+	let discoveryKey = resolveCursorApiKey(setupStoredKey);
+	let keyWatch: NodeJS.Timeout | undefined;
+	let checking = false;
+	let disposed = false;
+	let ticksSinceAttempt = 0;
+	const stopKeyWatch = () => {
+		clearInterval(keyWatch);
+		keyWatch = undefined;
+	};
+	const checkForNewKey = async () => {
+		if (checking || disposed) return;
+		checking = true;
+		try {
+			const key = resolveCursorApiKey(await storedKey());
+			if (disposed || !key) return;
+			// Same key that already fell back (bad key or transient error):
+			// retry only every SAME_KEY_RETRY_TICKS checks.
+			if (key === discoveryKey && ++ticksSinceAttempt < SAME_KEY_RETRY_TICKS) return;
+			discoveryKey = key;
+			ticksSinceAttempt = 0;
+			const next = await discoverModels({ apiKey: key });
+			if (disposed || next.source === "fallback") return;
+			discovery = next;
+			modelInfos = toModelInfos(discovery);
+			if (ctx.provider.reload) {
+				await ctx.provider.reload();
+				// Stop only once the catalog took the new list: a throwing reload
+				// leaves the watch on, and the same-key backoff retries it.
+				stopKeyWatch();
+				return;
+			}
+			// Hosts without reload: a fresh registration rebuilds the catalog.
+			const fresh = await registerProvider();
+			if (disposed) {
+				// Teardown ran while registering: it already disposed the old
+				// registration and will never see this one.
+				await fresh.dispose().catch(() => undefined);
+				return;
+			}
+			const old = providerRegistration;
+			providerRegistration = fresh;
+			const index = registrations.indexOf(old);
+			if (index >= 0) registrations[index] = fresh;
+			else registrations.push(fresh);
+			stopKeyWatch();
+			await old.dispose().catch(() => undefined);
+		} catch {
+			// Best-effort: the list stays as it was; the same-key backoff retries.
+		} finally {
+			checking = false;
+		}
+	};
+	const pollMs = keyPollMs();
+	if (pollMs > 0 && (discovery.source === "fallback" || !discoveryKey)) {
+		keyWatch = setInterval(() => void checkForNewKey(), pollMs);
+		// Never keep `opencode run`/`opencode models` alive just for this.
+		keyWatch.unref?.();
+	}
 
 	// --- per-turn options: the v1 chat.params equivalent, scoped to cursor.
 	registrations.push(
@@ -438,6 +540,8 @@ export async function cursorV2Setup(
 	);
 
 	return async () => {
+		disposed = true;
+		stopKeyWatch();
 		for (const registration of registrations.splice(0)) {
 			try {
 				await registration.dispose();
