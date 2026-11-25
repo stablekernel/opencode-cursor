@@ -4,7 +4,7 @@ import type { McpServerConfig } from "@cursor/sdk";
 import { homedir } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 import semver from "semver";
-import { resolveCursorApiKey } from "../api-key.js";
+import { readStoredCursorKey, resolveCursorApiKey } from "../api-key.js";
 import {
 	discoverModels,
 	toOpencodeModels,
@@ -559,11 +559,13 @@ export const CursorPlugin: Plugin = async (input) => {
 			const existingOptions = (existing.options ?? {}) as Record<string, unknown>;
 			// A key set in `provider.cursor.options.apiKey` (README-documented)
 			// reaches the provider for chat, so discovery must use it too (#152).
-			// `resolveCursorApiKey` skips `$CURSOR_API_KEY`-style placeholders and
-			// falls back to CURSOR_API_KEY.
+			// Then the key from `opencode auth login` (the auth loader that
+			// receives it runs after this hook), then CURSOR_API_KEY.
+			// `resolveCursorApiKey` skips `$CURSOR_API_KEY`-style placeholders.
 			const optionsKey = existingOptions["apiKey"];
 			const configKey = resolveCursorApiKey(
-				typeof optionsKey === "string" ? optionsKey : undefined,
+				(typeof optionsKey === "string" && optionsKey.trim() ? optionsKey : undefined) ??
+					readStoredCursorKey(),
 			);
 			if (configKey) capturedApiKey ??= configKey;
 			const discovery = await discoverModels({ apiKey: configKey });

@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { createHash } from "node:crypto";
 
 /** Environment variable the Cursor SDK itself reads as a fallback. */
@@ -38,4 +41,25 @@ export function resolveCursorApiKey(candidate?: string | null): string | undefin
  */
 export function fingerprintApiKey(apiKey: string): string {
   return createHash("sha256").update(apiKey).digest("hex").slice(0, 16);
+}
+
+/**
+ * The Cursor key saved by `opencode auth login`, read from opencode's
+ * `auth.json` (`$XDG_DATA_HOME/opencode`, default `~/.local/share/opencode`).
+ * v1 only hands the stored key to the auth `loader`, which runs after the
+ * `config` hook seeds the model picker; reading the file lets discovery use
+ * it on first launch. (v2 resolves it through `ctx.integration` instead.)
+ * Returns `undefined` for a missing/corrupt file or a non-`api` entry.
+ */
+export function readStoredCursorKey(): string | undefined {
+  const base = process.env.XDG_DATA_HOME?.trim() || join(homedir(), ".local", "share");
+  try {
+    const auth = JSON.parse(readFileSync(join(base, "opencode", "auth.json"), "utf8")) as {
+      cursor?: { type?: unknown; key?: unknown };
+    };
+    const entry = auth?.cursor;
+    return entry?.type === "api" && typeof entry.key === "string" ? entry.key : undefined;
+  } catch {
+    return undefined;
+  }
 }

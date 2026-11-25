@@ -12,6 +12,14 @@ All notable changes to this project will be documented in this file.
   `opencode auth login` and `CURSOR_API_KEY`, so the picker showed the
   static fallback (Composer 2.5, Claude Opus 4.8, Claude Sonnet 4.6, GPT-5.5)
   instead of your full catalog.
+- **First launch after `opencode auth login` shows the full model list.** The
+  `config` hook cannot see the stored key (only the auth loader gets it, after
+  the picker is seeded), so discovery now also reads the Cursor key from
+  opencode's `auth.json`. Order: `provider.cursor.options.apiKey`, stored
+  login key, `CURSOR_API_KEY`.
+- **A failing key no longer drops you to 4 models when a catalog is cached.**
+  When keyed discovery fails (bad key, offline), it falls back to the last
+  known catalog instead of the static snapshot.
 - **A fallback model list now says why.** When discovery falls back (no key,
   invalid key, network error), opencode shows one toast with the cause. If
   the stored key loads the catalog after startup, the toast says to restart

@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -36,7 +36,7 @@ function loaderTimeout(): void {
 const FALLBACK = ["claude-opus-4-8", "claude-sonnet-4-6", "composer-2.5", "gpt-5.5"];
 const client = { tui: { showToast: toast }, app: { log: vi.fn(async () => ({})) } };
 
-const ENV_KEYS = ["CURSOR_API_KEY", "CI", "NO_UPDATE_NOTIFIER", "XDG_CACHE_HOME"] as const;
+const ENV_KEYS = ["CURSOR_API_KEY", "CI", "NO_UPDATE_NOTIFIER", "XDG_CACHE_HOME", "XDG_DATA_HOME"] as const;
 let savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string>> = {};
 beforeEach(() => {
 	savedEnv = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
@@ -44,6 +44,7 @@ beforeEach(() => {
 	delete process.env["CI"]; // the fallback notice is skipped under CI
 	process.env["NO_UPDATE_NOTIFIER"] = "1"; // no version-check toast or network
 	process.env["XDG_CACHE_HOME"] = mkdtempSync(join(tmpdir(), "oc-cursor-152-")); // empty cache
+	process.env["XDG_DATA_HOME"] = mkdtempSync(join(tmpdir(), "oc-cursor-152-data-")); // no stored auth
 	list.mockClear();
 	toast.mockClear();
 	loaderWaits.length = 0;
@@ -100,6 +101,51 @@ describe("issue #152: discovery uses every configured key source", () => {
 		const map = await hooks.provider!.models!({ key: "key_on_provider", options: {} } as never, { auth: undefined } as never);
 		expect(list).toHaveBeenCalledWith({ apiKey: "key_on_provider" });
 		expect(Object.keys(map)).toHaveLength(10);
+	});
+});
+
+// `opencode auth login` stores the key in opencode's auth.json. The config hook
+// has no `getAuth`, so without reading that file a first launch seeds only the
+// 4 fallback models and shows a "restart" toast.
+function storeAuth(auth: Record<string, unknown>): void {
+	const dir = join(process.env["XDG_DATA_HOME"]!, "opencode");
+	mkdirSync(dir, { recursive: true });
+	writeFileSync(join(dir, "auth.json"), JSON.stringify(auth));
+}
+
+describe("issue #152: discovery reads the key stored by `opencode auth login`", () => {
+	it("config hook uses the stored key -> live catalog on first launch, no toast", async () => {
+		storeAuth({ cursor: { type: "api", key: "stored_key" } });
+		const hooks = await plugin({ client } as never);
+		const config: Config = {};
+		await hooks.config!(config);
+		await settle();
+		expect(list).toHaveBeenCalledWith({ apiKey: "stored_key" });
+		expect(Object.keys(config.provider!.cursor!.models ?? {})).toHaveLength(10);
+		expect(toast).not.toHaveBeenCalled();
+	});
+
+	it("provider.cursor.options.apiKey wins over the stored key", async () => {
+		storeAuth({ cursor: { type: "api", key: "stored_key" } });
+		await configModels({ provider: { cursor: { options: { apiKey: "key_from_config" } } } });
+		expect(list).toHaveBeenCalledWith({ apiKey: "key_from_config" });
+		expect(list).not.toHaveBeenCalledWith({ apiKey: "stored_key" });
+	});
+
+	it("ignores a non-api entry and other providers' keys", async () => {
+		storeAuth({ cursor: { type: "oauth", access: "x" }, other: { type: "api", key: "not_cursor" } });
+		expect(await configModels({})).toHaveLength(4);
+		expect(list).not.toHaveBeenCalled();
+	});
+});
+
+describe("issue #152: failed keyed discovery keeps the cached catalog", () => {
+	it("bad key falls back to the latest cached catalog, not the 4-model snapshot", async () => {
+		expect(await configModels({ provider: { cursor: { options: { apiKey: "good_key" } } } })).toHaveLength(10);
+		list.mockRejectedValueOnce(new Error("Invalid User API Key"));
+		const models = await configModels({ provider: { cursor: { options: { apiKey: "bad_key" } } } });
+		expect(list).toHaveBeenCalledWith({ apiKey: "bad_key" });
+		expect(models).toHaveLength(10);
 	});
 });
 
