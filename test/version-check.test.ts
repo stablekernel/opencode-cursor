@@ -47,6 +47,7 @@ const get = vi.fn((_url: string, _opts: object, cb: (res: MockResponse) => void)
 vi.mock("node:https", () => ({ get }));
 
 vi.mock("node:fs", () => ({
+  existsSync: vi.fn((path: string) => Boolean(fsState[path])),
   mkdirSync: vi.fn((_path: string, _opts?: object) => {}),
   readFileSync: vi.fn((path: string, _encoding: string) => {
     if (fsState[path]) return fsState[path];
@@ -58,7 +59,9 @@ vi.mock("node:fs", () => ({
   rmSync: vi.fn(),
 }));
 
-const { warnIfStale, PLUGIN_CACHE_PATH } = await import("../src/version-check.js");
+const { warnIfStale, PLUGIN_CACHE_PATH, isLocalInstall, localProviderSpec } = await import(
+  "../src/version-check.js"
+);
 
 function respondWithRaw(body: string | undefined, statusCode = 200) {
   const res = new MockResponse();
@@ -93,6 +96,7 @@ describe("warnIfStale", () => {
     // Neutralize real CI env so the escape hatch doesn't skip the check.
     vi.stubEnv("CI", "");
     vi.stubEnv("NO_UPDATE_NOTIFIER", "");
+    vi.stubEnv("OPENCODE_CURSOR_CACHE_INSTALL", "1");
     (globalThis as Record<string, unknown>).__PKG_VERSION__ = LOCAL_VERSION;
   });
 
@@ -258,9 +262,24 @@ describe("PLUGIN_CACHE_PATH", () => {
   });
 
   it("contains the opencode cache directory segment", () => {
-    // Both win32 and POSIX paths include an 'opencode' segment and 'packages'.
+    // Both win32 and POSIX paths include an 'opencode' segment and 'npm'.
     expect(PLUGIN_CACHE_PATH).toContain("opencode");
-    expect(PLUGIN_CACHE_PATH).toContain("packages");
+    expect(PLUGIN_CACHE_PATH).toContain("npm");
+  });
+});
+
+describe("local installs", () => {
+  it("are detected outside the cache root and resolve their own provider", () => {
+    vi.stubEnv("OPENCODE_CURSOR_CACHE_INSTALL", "");
+    fsState[join(__dirname, "..", "package.json")] = "{}";
+    expect(isLocalInstall()).toBe(true);
+    expect(localProviderSpec()).toMatch(/provider\/index\.js$/);
+  });
+
+  it("are cache installs when forced", () => {
+    vi.stubEnv("OPENCODE_CURSOR_CACHE_INSTALL", "1");
+    expect(isLocalInstall()).toBe(false);
+    expect(localProviderSpec()).toBeUndefined();
   });
 });
 
@@ -272,6 +291,7 @@ describe("warnIfStale with prefetchedLatest", () => {
     get.mockClear();
     vi.stubEnv("CI", "");
     vi.stubEnv("NO_UPDATE_NOTIFIER", "");
+    vi.stubEnv("OPENCODE_CURSOR_CACHE_INSTALL", "1");
     (globalThis as Record<string, unknown>).__PKG_VERSION__ = LOCAL_VERSION;
   });
 

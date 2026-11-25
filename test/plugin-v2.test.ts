@@ -103,12 +103,20 @@ const pkgVersion = JSON.parse(
 
 let savedEnvKey: string | undefined;
 let savedProviderNpm: string | undefined;
+let savedKeyPoll: string | undefined;
 
 beforeEach(() => {
 	savedEnvKey = process.env.CURSOR_API_KEY;
 	delete process.env.CURSOR_API_KEY;
 	savedProviderNpm = process.env.OPENCODE_CURSOR_PROVIDER_NPM;
+	// Live key polling (G-013) is covered in v2-live-model-refresh.test.ts;
+	// off here so setups that are never disposed leave no intervals behind.
+	savedKeyPoll = process.env.OPENCODE_CURSOR_KEY_POLL_MS;
+	process.env.OPENCODE_CURSOR_KEY_POLL_MS = "0";
 	delete process.env.OPENCODE_CURSOR_PROVIDER_NPM;
+	// Source runs are "local" by path; simulate a cache install so the pinned
+	// npm spec assertion stays meaningful.
+	vi.stubEnv("OPENCODE_CURSOR_CACHE_INSTALL", "1");
 });
 
 afterEach(() => {
@@ -116,6 +124,8 @@ afterEach(() => {
 	else process.env.CURSOR_API_KEY = savedEnvKey;
 	if (savedProviderNpm === undefined) delete process.env.OPENCODE_CURSOR_PROVIDER_NPM;
 	else process.env.OPENCODE_CURSOR_PROVIDER_NPM = savedProviderNpm;
+	if (savedKeyPoll === undefined) delete process.env.OPENCODE_CURSOR_KEY_POLL_MS;
+	else process.env.OPENCODE_CURSOR_KEY_POLL_MS = savedKeyPoll;
 });
 
 describe("dual default export", () => {
@@ -155,10 +165,19 @@ describe("cursorV2Setup", () => {
 		const ctx = makeCtx();
 		await cursorV2Setup(ctx as never);
 		const cb = ctx.integration.transform.mock.calls[0]![0] as (editor: {
+			update: (id: string, update: (integration: { name: string }) => void) => void;
 			method: { update: (input: unknown) => void };
 		}) => void;
 		const methodUpdate = vi.fn();
-		cb({ method: { update: methodUpdate } });
+		const integrationUpdate = vi.fn();
+		cb({
+			update: integrationUpdate,
+			method: { update: methodUpdate },
+		});
+		const integration = { name: "" };
+		(integrationUpdate.mock.calls[0]![1] as (i: { name: string }) => void)(integration);
+		expect(integrationUpdate.mock.calls[0]![0]).toBe("cursor");
+		expect(integration.name).toBe("Cursor");
 		expect(methodUpdate).toHaveBeenCalledTimes(2);
 		const calls = methodUpdate.mock.calls.map((c) => c[0]);
 		expect(calls).toEqual([
@@ -208,6 +227,23 @@ describe("cursorV2Setup", () => {
 				`aisdk:@stablekernel/opencode-cursor@${pkgVersion}`,
 			);
 		}
+	});
+
+	it("loads the provider from the checkout when the plugin itself is local", async () => {
+		vi.stubEnv("OPENCODE_CURSOR_CACHE_INSTALL", "");
+		const ctx = makeCtx();
+		await cursorV2Setup(ctx as never);
+		const cb = ctx.provider.transform.mock.calls[0]![0] as (editor: {
+			add: (input: unknown) => void;
+		}) => void;
+		const add = vi.fn();
+		cb({ add });
+		const { info, models } = add.mock.calls[0]![0] as {
+			info: Record<string, unknown>;
+			models: Array<Record<string, unknown>>;
+		};
+		expect(String(info["package"])).toMatch(/^aisdk:file:\/\/.*provider\/index\.js$/);
+		expect(String(models[0]!["package"])).toContain("file://");
 	});
 
 	it("honors OPENCODE_CURSOR_PROVIDER_NPM over the pinned spec", async () => {
@@ -296,6 +332,33 @@ describe("cursorV2Setup", () => {
 		ctx.integration.connection.active.mockResolvedValue(undefined);
 		await cursorV2Setup(ctx as never);
 		expect(discoverModels).toHaveBeenCalledWith({ apiKey: undefined });
+	});
+
+	it("uses the plugin options key when nothing is stored", async () => {
+		const ctx = makeCtx();
+		(ctx as unknown as { options: Record<string, unknown> }).options = {
+			apiKey: "config-key",
+		};
+		ctx.integration.connection.active.mockResolvedValue(undefined);
+		await cursorV2Setup(ctx as never);
+		expect(discoverModels).toHaveBeenCalledWith({ apiKey: "config-key" });
+	});
+
+	it("prefers the stored connection key over the plugin options key", async () => {
+		const ctx = makeCtx();
+		(ctx as unknown as { options: Record<string, unknown> }).options = {
+			apiKey: "config-key",
+		};
+		ctx.integration.connection.active.mockResolvedValue({
+			type: "credential",
+			id: "c1",
+		});
+		ctx.integration.connection.resolve.mockResolvedValue({
+			type: "key",
+			key: "stored-key",
+		});
+		await cursorV2Setup(ctx as never);
+		expect(discoverModels).toHaveBeenCalledWith({ apiKey: "stored-key" });
 	});
 
 	it("scopes the session context hook to providerID cursor and forwards sessionID/mode", async () => {

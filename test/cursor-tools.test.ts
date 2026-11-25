@@ -33,6 +33,7 @@ afterEach(() => {
   runDelegate.mockReset();
   linkDelegateSession.mockReset();
   discoverModels.mockReset();
+  vi.unstubAllEnvs();
 });
 
 describe("buildCursorTools", () => {
@@ -348,5 +349,14 @@ describe("buildMaintenanceTools — cursor_refresh_models output", () => {
       "- grok-4.6 — Grok 4.6 [effort=low|medium|high|xhigh, fast=false|true]",
     );
     expect(output.endsWith("- plain-model — Plain Model")).toBe(true);
+  });
+});
+
+describe("cursor_update_plugin", () => {
+  it("points a local checkout at git instead of clearing the npm cache", async () => {
+    vi.stubEnv("OPENCODE_CURSOR_CACHE_INSTALL", "");
+    const tool = buildMaintenanceTools().cursor_update_plugin!;
+    const out = (await tool.execute({}, undefined as never)) as { output: string };
+    expect(out.output).toContain("git pull");
   });
 });

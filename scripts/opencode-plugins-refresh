@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/opencode/packages"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/opencode/npm"
 MODE=""
 PACKAGE=""
 
