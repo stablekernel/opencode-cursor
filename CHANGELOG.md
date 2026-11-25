@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.10.4] — 2026-11-25
+
+Patch release: fixes the model list falling back to 4 models when the key
+lives in `provider.cursor.options.apiKey` (#152), plus a security override
+and dependency updates.
+
+### Security
+
+- Overrode transitive `effect` (via `@opencode-ai/plugin`) to
+  `^4.0.0-beta.103`, resolving to 4.1.5 (was 4.0.0-beta.83), to close
+  Dependabot security alert #32 (#167). The lockfile also drops packages
+  that only the old `effect` pulled in. npm does not publish overrides, so
+  installs of this package still get `effect` 4.0.0-beta.83 (pinned by
+  `@opencode-ai/plugin` 1.19.6) until upstream bumps it.
+
 ### Fixed
 
 - **Model list no longer stuck on 4 fallback models when the key is in
@@ -24,6 +39,13 @@ All notable changes to this project will be documented in this file.
   invalid key, network error), opencode shows one toast with the cause. If
   the stored key loads the catalog after startup, the toast says to restart
   opencode to see all models instead.
+
+### Changed
+
+- Lockfile bumps: `@cursor/sdk` 1.3.1 → 1.4.2 (#166) and
+  `@opencode-ai/plugin` 1.19.5 → 1.19.6 (#164). Dev-only: `@opencode-ai/sdk`
+  1.19.5 → 1.19.6 and `vitest` 5.1.0 → 5.1.1 (#165). The published ranges
+  are unchanged.
 
 ## [0.10.3] — 2026-11-14
 
